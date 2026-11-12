@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 72 169">
+  <defs>
+    <style>
+      .cls-1 {
+        filter: url(#drop-shadow-1);
+      }
+
+      .cls-2 {
+        fill: url(#linear-gradient);
+      }
+
+      .cls-2, .cls-3, .cls-4, .cls-5 {
+        stroke-width: 3.5px;
+      }
+
+      .cls-2, .cls-4, .cls-5 {
+        stroke: #68cbe3;
+      }
+
+      .cls-3 {
+        fill: none;
+        stroke: #cf519d;
+      }
+
+      .cls-6 {
+        fill: #cf519d;
+      }
+
+      .cls-4 {
+        fill: url(#linear-gradient-2);
+      }
+
+      .cls-5 {
+        fill: url(#linear-gradient-3);
+      }
+    </style>
+    <filter id="drop-shadow-1" x="-49.8" y="-51.74" width="171.6" height="270.72" filterUnits="userSpaceOnUse">
+      <feOffset dx="0" dy="0"/>
+      <feGaussianBlur result="blur" stdDeviation="16"/>
+      <feFlood flood-color="#62cbe7" flood-opacity="1"/>
+      <feComposite in2="blur" operator="in"/>
+      <feComposite in="SourceGraphic"/>
+    </filter>
+    <linearGradient id="linear-gradient" x1="-217.51" y1="641.75" x2="-217.51" y2="640.75" gradientTransform="translate(15697 9139.5) scale(72 -14)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#272c65"/>
+      <stop offset="1" stop-color="#0f111d"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="-215.12" y1="650" x2="-215.12" y2="649" gradientTransform="translate(8641 59214) scale(40 -91)" xlink:href="#linear-gradient"/>
+    <linearGradient id="linear-gradient-3" x1="-213.78" y1="649.15" x2="-213.78" y2="648.15" gradientTransform="translate(6877 37650.5) scale(32 -58)" xlink:href="#linear-gradient"/>
+  </defs>
+  <g id="White_Bishop" data-name="White Bishop" class="cls-1">
+    <path class="cls-2" d="M0,169h72v-8l-6-6H6l-6,6V169Z"/>
+    <path class="cls-4" d="M24,64h24l8,91H16L24,64Z"/>
+    <path class="cls-5" d="M36,0l16,28-6,24,6,6H20l6-6-6-24L36,0Z"/>
+    <line class="cls-3" x1="30" y1="20" x2="42" y2="40"/>
+    <rect class="cls-6" x="18" y="58" width="36" height="6"/>
+  </g>
+</svg>

@@ -1,0 +1,47 @@
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('board', {
+  // Send a command to the Go backend; rejects with the backend's error message.
+  backend: (cmd, args) => ipcRenderer.invoke('backend', cmd, args),
+  onEvent: (handler) => ipcRenderer.on('backend-event', (_e, event, data) => handler(event, data)),
+  engines: {
+    list: () => ipcRenderer.invoke('engines:list'),
+    add: () => ipcRenderer.invoke('engines:add'),
+    remove: (id) => ipcRenderer.invoke('engines:remove', id),
+    update: (id, patch) => ipcRenderer.invoke('engines:update', id, patch),
+    probe: (id) => ipcRenderer.invoke('engines:probe', id),
+  },
+  loadThemes: () => ipcRenderer.invoke('themes:load'),
+  openPgn: () => ipcRenderer.invoke('pgn:open'),
+  savePgn: (pgn) => ipcRenderer.invoke('pgn:save', pgn),
+  copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  tournament: {
+    defaultPgn: (a, b) => ipcRenderer.invoke('tournament:defaultPgn', a, b),
+    choosePgn: (current) => ipcRenderer.invoke('tournament:choosePgn', current),
+    chooseOpenings: () => ipcRenderer.invoke('tournament:chooseOpenings'),
+    report: (theme) => ipcRenderer.invoke('tournament:report', theme),
+    openReport: (file) => ipcRenderer.invoke('tournament:openReport', file),
+    showFile: (file) => ipcRenderer.invoke('tournament:showFile', file),
+    saveReport: (file) => ipcRenderer.invoke('tournament:saveReport', file),
+  },
+  database: {
+    settings: () => ipcRenderer.invoke('database:settings'),
+    save: (patch) => ipcRenderer.invoke('database:save', patch),
+    choose: () => ipcRenderer.invoke('database:choose'),
+  },
+  lichess: {
+    explorer: (db, fen, opts) => ipcRenderer.invoke('lichess:explorer', db, fen, opts),
+    gamePgn: (db, id) => ipcRenderer.invoke('lichess:gamePgn', db, id),
+    puzzle: (kind, opts) => ipcRenderer.invoke('lichess:puzzle', kind, opts),
+    choosePuzzleFile: () => ipcRenderer.invoke('puzzles:chooseFile'),
+    settings: () => ipcRenderer.invoke('lichess:settings'),
+    save: (patch) => ipcRenderer.invoke('lichess:save', patch),
+    connect: () => ipcRenderer.invoke('lichess:connect'),
+    configure: () => ipcRenderer.invoke('lichess:configure'),
+    signIn: () => ipcRenderer.invoke('lichess:signIn'),
+    signInCancel: () => ipcRenderer.invoke('lichess:signInCancel'),
+    signOut: () => ipcRenderer.invoke('lichess:signOut'),
+    accountConnect: () => ipcRenderer.invoke('lichess:accountConnect'),
+  },
+});

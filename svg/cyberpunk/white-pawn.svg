@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 72 144">
+  <defs>
+    <style>
+      .cls-1 {
+        filter: url(#drop-shadow-1);
+      }
+
+      .cls-2 {
+        fill: url(#linear-gradient);
+      }
+
+      .cls-2, .cls-3, .cls-4 {
+        stroke: #68cbe3;
+        stroke-width: 3.5px;
+      }
+
+      .cls-5 {
+        fill: #cf519d;
+      }
+
+      .cls-3 {
+        fill: url(#linear-gradient-2);
+      }
+
+      .cls-4 {
+        fill: url(#linear-gradient-3);
+      }
+    </style>
+    <filter id="drop-shadow-1" x="-49.8" y="-49.86" width="171.6" height="243.84" filterUnits="userSpaceOnUse">
+      <feOffset dx="0" dy="0"/>
+      <feGaussianBlur result="blur" stdDeviation="16"/>
+      <feFlood flood-color="#62cbe7" flood-opacity="1"/>
+      <feComposite in2="blur" operator="in"/>
+      <feComposite in="SourceGraphic"/>
+    </filter>
+    <linearGradient id="linear-gradient" x1="-510.98" y1="615.39" x2="-510.98" y2="614.39" gradientTransform="translate(36826.6 8745.5) scale(72 -14)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#272c65"/>
+      <stop offset="1" stop-color="#0f111d"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="-506.45" y1="624.69" x2="-506.45" y2="623.69" gradientTransform="translate(22319.8 53767.5) scale(44 -86)" xlink:href="#linear-gradient"/>
+    <linearGradient id="linear-gradient-3" x1="-506.45" y1="622.18" x2="-506.45" y2="621.18" gradientTransform="translate(22319.8 22398.5) scale(44 -36)" xlink:href="#linear-gradient"/>
+  </defs>
+  <g id="White_Pawn" data-name="White Pawn" class="cls-1">
+    <path class="cls-2" d="M0,144h72v-8l-6-6H6l-6,6V144Z"/>
+    <path class="cls-3" d="M24,44h24l10,86H14L24,44Z"/>
+    <path class="cls-4" d="M24,0h24l10,18-10,18h-24l-10-18L24,0Z"/>
+    <rect class="cls-5" x="18" y="38" width="36" height="6"/>
+    <circle class="cls-5" cx="36" cy="18" r="4"/>
+  </g>
+</svg>

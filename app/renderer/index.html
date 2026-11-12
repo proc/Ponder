@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="minimalist">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob:">
+  <title>Board</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <section class="table">
+      <div class="player" id="player-top">
+        <span class="name"></span><span class="kind"></span><span class="captured"></span>
+        <span class="game-actions">
+          <button type="button" class="act resign" title="Resign the game" hidden>⚑ Resign</button>
+          <button type="button" class="act draw" title="Agree a draw" hidden>½ Draw</button>
+          <button type="button" class="act abort" title="Abort the game: it ends without a result" hidden>✕ Abort</button>
+          <button type="button" class="act takeback" title="Take back your last move" hidden>↶ Takeback</button>
+          <span class="offer" hidden></span>
+        </span>
+        <span class="clock"></span>
+      </div>
+      <div class="board-row">
+        <div id="evalbar" hidden title="Evaluation (White's view)">
+          <div class="fill"></div>
+          <span class="label"></span>
+        </div>
+        <div class="board-wrap">
+          <div id="board"></div>
+          <svg id="arrows" viewBox="0 0 8 8" aria-hidden="true">
+            <defs>
+              <marker id="arrowhead" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.6" markerHeight="2.6" orient="auto">
+                <path d="M0,0 L10,5 L0,10 z"></path>
+              </marker>
+              <marker id="head-green" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.4" markerHeight="2.4" orient="auto"><path d="M0,0 L10,5 L0,10 z"></path></marker>
+              <marker id="head-red" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.4" markerHeight="2.4" orient="auto"><path d="M0,0 L10,5 L0,10 z"></path></marker>
+              <marker id="head-blue" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.4" markerHeight="2.4" orient="auto"><path d="M0,0 L10,5 L0,10 z"></path></marker>
+              <marker id="head-yellow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.4" markerHeight="2.4" orient="auto"><path d="M0,0 L10,5 L0,10 z"></path></marker>
+              <marker id="head-line-1" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.6" markerHeight="2.6" orient="auto"><path d="M0,0 L10,5 L0,10 z"></path></marker>
+              <marker id="head-line-2" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.6" markerHeight="2.6" orient="auto"><path d="M0,0 L10,5 L0,10 z"></path></marker>
+              <marker id="head-line-3" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.6" markerHeight="2.6" orient="auto"><path d="M0,0 L10,5 L0,10 z"></path></marker>
+              <marker id="head-line-4" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.6" markerHeight="2.6" orient="auto"><path d="M0,0 L10,5 L0,10 z"></path></marker>
+              <marker id="head-line-5" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="2.6" markerHeight="2.6" orient="auto"><path d="M0,0 L10,5 L0,10 z"></path></marker>
+            </defs>
+            <!-- The analysis lines' first moves: the best one on top. -->
+            <g id="line-arrows"></g>
+            <line id="explorer-arrow" x1="0" y1="0" x2="0" y2="0" marker-end="url(#head-blue)" visibility="hidden"></line>
+            <g id="shapes"></g>
+          </svg>
+          <div id="promotion" hidden></div>
+        </div>
+      </div>
+      <div class="player" id="player-bottom">
+        <span class="name"></span><span class="kind"></span><span class="captured"></span>
+        <span class="game-actions">
+          <button type="button" class="act resign" title="Resign the game" hidden>⚑ Resign</button>
+          <button type="button" class="act draw" title="Agree a draw" hidden>½ Draw</button>
+          <button type="button" class="act abort" title="Abort the game: it ends without a result" hidden>✕ Abort</button>
+          <button type="button" class="act takeback" title="Take back your last move" hidden>↶ Takeback</button>
+          <span class="offer" hidden></span>
+        </span>
+        <span class="clock"></span>
+      </div>
+    </section>
+
+    <aside>
+      <div class="toolbar">
+        <div class="group">
+          <button id="btn-new" class="primary">New game</button>
+          <button id="btn-open" title="Open a PGN file (Ctrl/⌘+O)">Open…</button>
+          <button id="btn-export" title="Save the game as a PGN file (Ctrl/⌘+S)">Save…</button>
+          <button id="btn-pgn" title="Copy the game to the clipboard as PGN">Copy</button>
+        </div>
+        <div class="group end">
+          <button id="btn-flip" title="Flip the board">Flip</button>
+          <button id="btn-analysis" aria-pressed="false" title="Analyse the position on the board (set the engine in Settings → Analysis)">Analysis</button>
+          <button id="btn-settings">Settings</button>
+          <button id="btn-keys" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+        </div>
+      </div>
+
+      <div class="statusbar">
+        <div id="status"></div>
+        <div id="opening" hidden title="Opening">
+          <span class="eco"></span><span class="name"></span>
+        </div>
+      </div>
+
+      <div class="workspace" data-tab="moves">
+        <div class="panel moves-panel">
+          <div class="tabs" role="tablist">
+            <button type="button" role="tab" class="tab active" id="tab-moves" aria-controls="pane-moves" aria-selected="true">Moves</button>
+            <button type="button" role="tab" class="tab" id="tab-explorer" aria-controls="pane-explorer" aria-selected="false">Explorer</button>
+            <button type="button" role="tab" class="tab" id="tab-puzzles" aria-controls="pane-puzzles" aria-selected="false">Puzzles</button>
+            <button type="button" role="tab" class="tab" id="tab-games" aria-controls="pane-games" aria-selected="false">Games <span class="count" id="games-count"></span></button>
+            <button type="button" role="tab" class="tab" id="tab-lichess" aria-controls="pane-lichess" aria-selected="false">Lichess <span class="count" id="lichess-count"></span></button>
+            <button type="button" role="tab" class="tab" id="tab-tournament" aria-controls="pane-tournament" aria-selected="false">Tournament <span class="count" id="tournament-count"></span></button>
+            <button type="button" class="tab tab-more" id="tab-more" aria-haspopup="menu" aria-expanded="false" title="More tabs" hidden>More ▾</button>
+          </div>
+          <div class="tab-menu" id="tab-menu" role="menu" hidden></div>
+          <div class="pane" id="pane-moves" role="tabpanel">
+            <div class="review" id="review" hidden></div>
+            <div id="moves"></div>
+          </div>
+          <div class="pane" id="pane-games" role="tabpanel" hidden>
+            <div class="games-empty" id="games-empty">
+              <p class="hint">No PGN file is open. Every game in the file you open is listed here.</p>
+              <button type="button" id="games-open">Open PGN…</button>
+              <button type="button" id="games-open-db" hidden>Open game database</button>
+            </div>
+            <div class="games-head" id="games-head" hidden>
+              <span class="name" id="games-file"></span>
+              <input type="search" id="games-filter" placeholder="Filter by player, event, date or result" spellcheck="false">
+              <button type="button" class="small" id="games-close" title="Close the file and clear this list">Close</button>
+            </div>
+            <div id="games-list"></div>
+            <p class="hint" id="games-note" hidden></p>
+          </div>
+          <div class="pane" id="pane-explorer" role="tabpanel" hidden>
+            <div class="ex-head">
+              <div class="seg" id="ex-db" role="radiogroup" aria-label="Database">
+                <button type="button" data-db="masters" title="Over two million games by titled players since 1952 (Lichess, needs a token)">Masters</button>
+                <button type="button" data-db="lichess" title="Games played on Lichess, filtered by speed and rating (needs a token)">Lichess</button>
+                <button type="button" data-db="book" title="The opening book built into Board: works offline">Book</button>
+              </div>
+              <span class="ex-opening" id="ex-opening"></span>
+            </div>
+            <div class="ex-filters" id="ex-filters" hidden>
+              <span class="ex-group" id="ex-speeds"></span>
+              <span class="ex-group" id="ex-ratings"></span>
+            </div>
+            <div class="ex-body" id="ex-body">
+              <table class="ex-table" id="ex-moves"></table>
+              <p class="hint ex-msg" id="ex-msg" hidden></p>
+              <p class="hint ex-msg" id="ex-locked" hidden>The explorer is off during your Lichess game: Lichess does not allow outside help. It comes back when the game ends.</p>
+              <div class="ex-games" id="ex-games"></div>
+            </div>
+          </div>
+          <div class="pane" id="pane-puzzles" role="tabpanel" hidden>
+            <div class="pz-controls">
+              <div class="seg" id="pz-source" role="radiogroup" aria-label="Puzzles from">
+                <button type="button" data-src="lichess" title="Puzzles from lichess.org">Lichess</button>
+                <button type="button" data-src="file" title="The Lichess puzzle database file (lichess_db_puzzle.csv), offline">Puzzle file</button>
+              </div>
+              <div class="pz-row" id="pz-lichess-opts">
+                <label>Theme <select id="pz-theme"></select></label>
+                <label>Difficulty <select id="pz-difficulty">
+                  <option value="easiest">Easiest</option><option value="easier">Easier</option><option value="normal" selected>Normal</option>
+                  <option value="harder">Harder</option><option value="hardest">Hardest</option></select></label>
+              </div>
+              <div class="pz-row" id="pz-file-opts" hidden>
+                <button type="button" class="small" id="pz-file-open">Open puzzle file…</button>
+                <span class="hint" id="pz-file-name">lichess_db_puzzle.csv from database.lichess.org (decompressed)</span>
+                <label>Rating <input type="number" id="pz-min" min="0" max="3500" step="50" placeholder="any"> – <input type="number" id="pz-max" min="0" max="3500" step="50" placeholder="any"></label>
+                <label>Theme <select id="pz-file-theme"></select></label>
+              </div>
+              <div class="pz-row">
+                <button type="button" class="primary small" id="pz-next">Next puzzle</button>
+                <button type="button" class="small" id="pz-daily">Daily puzzle</button>
+              </div>
+            </div>
+            <div class="pz-card" id="pz-card" hidden>
+              <div class="pz-status" id="pz-status"></div>
+              <div class="pz-info" id="pz-info"></div>
+              <div class="pz-row pz-actions">
+                <button type="button" class="small" id="pz-hint">Hint</button>
+                <button type="button" class="small" id="pz-solution">View the solution</button>
+                <button type="button" class="small" id="pz-retry" hidden>Try again</button>
+                <button type="button" class="small" id="pz-leave">Leave puzzle</button>
+              </div>
+              <div class="pz-line" id="pz-line"></div>
+            </div>
+            <div class="pz-stats" id="pz-stats"></div>
+            <p class="error" id="pz-error" hidden></p>
+          </div>
+          <div class="pane" id="pane-tournament" role="tabpanel" hidden>
+            <form class="tn-setup" id="tn-setup" autocomplete="off" novalidate>
+              <p class="hint">Play many games between two engines, in pairs from the same opening with colours reversed, several at a time. The SPRT stops as soon as it can tell whether the first engine is stronger by the Elo you set.</p>
+              <div class="tn-grid">
+                <label>Engine 1 <span class="hint">(tested)</span></label><select id="tn-e1"></select>
+                <label>Engine 2 <span class="hint">(base)</span></label><select id="tn-e2"></select>
+                <label>Time control</label>
+                <span class="tn-inline">
+                  <select id="tn-tckind"><option value="clock">Clock</option><option value="movetime">Time per move</option><option value="nodes">Nodes per move</option></select>
+                  <span id="tn-tc-clock"><input type="number" id="tn-base" min="0" step="0.5" value="10"> s + <input type="number" id="tn-inc" min="0" step="0.01" value="0.1"> s</span>
+                  <span id="tn-tc-movetime" hidden><input type="number" id="tn-movetime" min="0.01" step="0.01" value="0.1"> s</span>
+                  <span id="tn-tc-nodes" hidden><input type="number" id="tn-nodes" min="1" step="1" value="20000"></span>
+                </span>
+                <label>Games</label>
+                <span class="tn-inline"><input type="number" id="tn-games" min="0" step="2" value="1000"> <span class="hint">0: until the SPRT decides</span></span>
+                <label>Games at once</label>
+                <span class="tn-inline"><input type="number" id="tn-concurrency" min="1" max="128" step="1" value="2"> <span class="hint" id="tn-cores"></span></span>
+                <label>Openings</label>
+                <span class="tn-inline">
+                  <select id="tn-openings"><option value="book">Built-in book</option><option value="file">EPD or PGN file…</option><option value="start">Start position</option></select>
+                  <span id="tn-openings-file" class="tn-file" hidden></span>
+                  <label class="check" title="Openings in random order; otherwise in file order"><input type="checkbox" id="tn-random" checked> Random order</label>
+                  <span>up to <input type="number" id="tn-plies" min="0" step="1" value="8"> plies</span>
+                </span>
+              </div>
+              <fieldset class="tn-sprt">
+                <legend><label class="check"><input type="checkbox" id="tn-sprt" checked> SPRT</label></legend>
+                <span class="tn-inline">Elo0 <input type="number" id="tn-elo0" step="0.5" value="0"> Elo1 <input type="number" id="tn-elo1" step="0.5" value="5"> α <input type="number" id="tn-alpha" step="0.01" min="0.001" max="0.5" value="0.05"> β <input type="number" id="tn-beta" step="0.01" min="0.001" max="0.5" value="0.05"></span>
+              </fieldset>
+              <fieldset class="tn-adj">
+                <legend>Adjudication</legend>
+                <span class="tn-inline"><label class="check"><input type="checkbox" id="tn-adj-draw" checked> Draw</label> from move <input type="number" id="tn-draw-from" min="1" value="40">, <input type="number" id="tn-draw-moves" min="1" value="8"> moves each within ±<input type="number" id="tn-draw-score" min="0" value="10"> cp</span>
+                <span class="tn-inline"><label class="check"><input type="checkbox" id="tn-adj-resign" checked> Resign</label> after <input type="number" id="tn-resign-moves" min="1" value="3"> moves each, both agreeing on <input type="number" id="tn-resign-score" min="1" value="1000"> cp</span>
+                <span class="tn-inline">Draw at move <input type="number" id="tn-maxmoves" min="0" value="0"> <span class="hint">0: never</span></span>
+              </fieldset>
+              <div class="tn-grid">
+                <label class="check"><input type="checkbox" id="tn-save" checked> Save games</label>
+                <span class="tn-inline"><span class="tn-file" id="tn-pgn">a new file in Documents/Board/Tournaments</span> <button type="button" class="small" id="tn-pgn-choose">Choose…</button></span>
+              </div>
+              <p class="error" id="tn-error" hidden></p>
+              <div class="tn-actions"><button type="submit" class="primary" id="tn-start">Start tournament</button></div>
+            </form>
+            <div class="tn-run" id="tn-run" hidden>
+              <div class="tn-head">
+                <span class="tn-title" id="tn-title"></span>
+                <span class="lx-spacer"></span>
+                <label class="check" title="Show one of the games on the board as it is played"><input type="checkbox" id="tn-watch"> Show on board</label>
+                <button type="button" class="small" id="tn-report" title="A detailed report of the match, with charts of the SPRT, Elo, engines, openings and every game, saved as a web page next to the games file">Report</button>
+                <button type="button" class="small" id="tn-stop">Stop</button>
+                <button type="button" class="small" id="tn-new" hidden>New tournament</button>
+              </div>
+              <p class="tn-verdict" id="tn-verdict" hidden></p>
+              <p class="hint tn-report-line" id="tn-report-line" hidden></p>
+              <div class="tn-progress"><div id="tn-progress-bar"></div></div>
+              <div class="tn-numbers">
+                <div><span class="tn-k">Games</span><span class="tn-v" id="tn-games-v"></span></div>
+                <div><span class="tn-k">W – L – D</span><span class="tn-v" id="tn-wld"></span></div>
+                <div><span class="tn-k">Score</span><span class="tn-v" id="tn-score"></span></div>
+                <div><span class="tn-k">Elo</span><span class="tn-v" id="tn-elo"></span></div>
+                <div><span class="tn-k">LOS</span><span class="tn-v" id="tn-los"></span></div>
+                <div><span class="tn-k">Draws</span><span class="tn-v" id="tn-draws"></span></div>
+              </div>
+              <div class="tn-llr" id="tn-llr-box">
+                <div class="tn-llr-text" id="tn-llr-text"></div>
+                <div class="tn-llr-bar"><span class="tn-llr-zero"></span><span class="tn-llr-mark" id="tn-llr-mark"></span></div>
+                <div class="tn-llr-ends"><span>H0</span><span>H1</span></div>
+              </div>
+              <div class="tn-penta" id="tn-penta"></div>
+              <p class="hint" id="tn-meta"></p>
+              <h4>Playing now</h4>
+              <div class="tn-live" id="tn-live"></div>
+              <h4>Finished games <span class="hint">(click to view)</span></h4>
+              <div class="tn-recent" id="tn-recent"></div>
+            </div>
+          </div>
+          <div class="pane" id="pane-lichess" role="tabpanel" hidden>
+            <section class="lx-section lx-me" id="lx-me">
+              <h4>Play on Lichess <span class="lx-me-who" id="lx-me-who"></span></h4>
+              <div class="lx-signin" id="lx-signin">
+                <p class="hint">Play people on Lichess with your own account, moving on this board. Lichess lets apps look for rapid and slower games; challenge someone to play blitz.</p>
+                <div class="lx-signin-row">
+                  <button type="button" class="primary small" id="lx-signin-go">Sign in with Lichess</button>
+                  <button type="button" class="small" id="lx-signin-cancel" hidden>Cancel</button>
+                  <a href="#" id="lx-token-toggle">Use an API token instead</a>
+                </div>
+                <form class="lx-token-form" id="lx-token-form" hidden autocomplete="off">
+                  <input type="password" id="lx-acct-token" placeholder="lip_… (needs “Play games with the board API”)" spellcheck="false">
+                  <button type="submit" class="small">Use token</button>
+                  <a href="#" id="lx-acct-token-link">Create one ↗</a>
+                </form>
+              </div>
+              <div class="lx-me-body" id="lx-me-body" hidden>
+                <div class="lx-quick" id="lx-quick"></div>
+                <div class="lx-quick-opts">
+                  <label class="check"><input type="checkbox" id="lx-me-rated"> Rated</label>
+                  <span class="hint" id="lx-me-seek-note"></span>
+                </div>
+                <div class="lx-me-seek" id="lx-me-seek" hidden>
+                  <span class="lx-spinner"></span><span id="lx-me-seek-text"></span>
+                  <button type="button" class="small" id="lx-me-seek-stop">Cancel</button>
+                </div>
+                <form class="lx-challenge" id="lx-me-challenge" autocomplete="off">
+                  <span class="lx-user"><input type="text" id="lx-me-user" placeholder="Challenge a friend: username" spellcheck="false" required></span>
+                  <label>Time <select id="lx-me-time">
+                    <option value="60">1 min</option><option value="180">3 min</option><option value="300" selected>5 min</option>
+                    <option value="600">10 min</option><option value="900">15 min</option><option value="1800">30 min</option>
+                    <option value="3600">60 min</option>
+                  </select></label>
+                  <label>+ <select id="lx-me-inc">
+                    <option value="0">0 s</option><option value="2">2 s</option><option value="3" selected>3 s</option>
+                    <option value="5">5 s</option><option value="10">10 s</option><option value="20">20 s</option>
+                  </select></label>
+                  <label>Color <select id="lx-me-color">
+                    <option value="random">Random</option><option value="white">White</option><option value="black">Black</option>
+                  </select></label>
+                  <button type="submit" class="small" id="lx-me-send">Challenge</button>
+                </form>
+                <div id="lx-me-incoming" class="lx-list"></div>
+                <div id="lx-me-outgoing" class="lx-list"></div>
+                <div id="lx-me-games" class="lx-list"></div>
+              </div>
+              <p class="lx-message" id="lx-me-message" hidden></p>
+            </section>
+            <section class="lx-section lx-watch" id="lx-watch">
+              <h4>Watch a player</h4>
+              <form class="lx-challenge" id="lx-watch-form" autocomplete="off">
+                <span class="lx-user">
+                  <input type="text" id="lx-watch-user" placeholder="Lichess username, e.g. a bot" spellcheck="false" list="lx-bots" required>
+                  <button type="button" class="small" id="lx-watch-bots" title="List bots that are online now">Online bots</button>
+                </span>
+                <button type="submit" class="primary small" id="lx-watch-go">Watch</button>
+                <button type="button" class="small" id="lx-watch-stop" hidden>Stop</button>
+              </form>
+              <p class="hint" id="lx-watch-state">Follow any player's games live on the board, one game after another. No engine plays; analysis can run while you watch. No token needed.</p>
+            </section>
+            <h4 class="lx-bot-head">Your engine on Lichess</h4>
+            <div class="lx-head">
+              <span class="lx-dot" id="lx-dot"></span>
+              <span class="lx-account" id="lx-account">Not connected</span>
+              <span class="lx-spacer"></span>
+              <button type="button" class="small" id="lx-connect">Connect</button>
+              <button type="button" class="small" id="lx-settings" title="Lichess settings: token, engine, which challenges to accept">Settings…</button>
+            </div>
+            <p class="lx-message" id="lx-message" hidden></p>
+            <div class="lx-body" id="lx-body">
+              <section class="lx-section">
+                <h4>Challenges to you <span class="count" id="lx-incoming-count"></span>
+                  <label class="check lx-auto" title="Accept challenges that match the rules in Settings → Lichess, and decline the rest. Off whenever you connect."><input type="checkbox" id="lx-auto"> Accept automatically</label></h4>
+                <div id="lx-incoming" class="lx-list"></div>
+                <p class="hint lx-empty" id="lx-incoming-empty">None right now. <span id="lx-auto-note"></span></p>
+              </section>
+              <section class="lx-section">
+                <h4>Challenge a player</h4>
+                <form class="lx-challenge" id="lx-challenge" autocomplete="off">
+                  <span class="lx-user">
+                    <input type="text" id="lx-username" placeholder="Lichess username" spellcheck="false" list="lx-bots" required>
+                    <datalist id="lx-bots"></datalist>
+                    <button type="button" class="small" id="lx-bots-refresh" title="List bots that are online now">Online bots</button>
+                  </span>
+                  <label>Time <select id="lx-time">
+                    <option value="60">1 min</option><option value="120">2 min</option><option value="180" selected>3 min</option>
+                    <option value="300">5 min</option><option value="600">10 min</option><option value="900">15 min</option>
+                    <option value="1800">30 min</option><option value="3600">60 min</option>
+                  </select></label>
+                  <label>+ <select id="lx-inc">
+                    <option value="0">0 s</option><option value="1">1 s</option><option value="2" selected>2 s</option>
+                    <option value="3">3 s</option><option value="5">5 s</option><option value="10">10 s</option>
+                    <option value="20">20 s</option><option value="30">30 s</option>
+                  </select></label>
+                  <label>Color <select id="lx-color">
+                    <option value="random">Random</option><option value="white">White</option><option value="black">Black</option>
+                  </select></label>
+                  <label class="check"><input type="checkbox" id="lx-rated"> Rated</label>
+                  <button type="submit" class="primary small" id="lx-send">Challenge</button>
+                </form>
+                <div class="lx-seek" id="lx-seek">
+                  <span>Or a random bot online, <span id="lx-seek-speed">blitz</span> rating</span>
+                  <input type="number" id="lx-seek-min" min="0" max="4000" step="50" placeholder="any"> –
+                  <input type="number" id="lx-seek-max" min="0" max="4000" step="50" placeholder="any">
+                  <button type="button" class="small primary" id="lx-seek-go" title="Challenge a random bot in this rating range with the time control above; if it declines or does not answer, try another until one accepts">Challenge random bot</button>
+                  <button type="button" class="small" id="lx-seek-stop" hidden>Stop</button>
+                </div>
+                <p class="hint lx-seek-state" id="lx-seek-state" hidden></p>
+                <div id="lx-outgoing" class="lx-list"></div>
+              </section>
+              <section class="lx-section">
+                <h4>Games</h4>
+                <div id="lx-games" class="lx-list"></div>
+                <p class="hint lx-empty" id="lx-games-empty">No games yet. Your engine plays each game on its own; Watch shows a game on the board.</p>
+              </section>
+            </div>
+            <div class="lx-off" id="lx-off">
+              <p class="hint">To play games on Lichess with your engine, connect a Lichess <b>Bot account</b>: add its API token in Settings → Lichess, then Connect.</p>
+            </div>
+          </div>
+          <div class="nav">
+            <button id="nav-first" title="Start (↑)">⏮</button>
+            <button id="nav-prev" title="Previous move (←)">◀</button>
+            <button id="nav-next" title="Next move (→)">▶</button>
+            <button id="nav-last" title="Last move (↓)">⏭</button>
+          </div>
+        </div>
+
+        <div class="splitter v" id="split-info" title="Drag to resize · double-click to reset"></div>
+
+        <!-- Engine windows. Each resizable panel has a handle below it. -->
+        <div class="info" id="info">
+          <section class="panel card resizable" id="analysis" data-size="analysis" hidden>
+            <div class="analysis-head">
+              <h3>Analysis</h3>
+              <span class="analysis-engine" id="analysis-engine-name"></span>
+              <span class="stats" id="analysis-stats"></span>
+              <button type="button" class="small" id="analysis-pause" title="Pause the analysis: the engine stops thinking and the lines stay as they are (P)">⏸ Pause</button>
+            </div>
+            <div id="analysis-lines"></div>
+          </section>
+          <div class="splitter h" title="Drag to resize · double-click to reset"></div>
+          <section class="panel engine resizable" id="engine-white" data-size="engine-white" hidden></section>
+          <div class="splitter h" title="Drag to resize · double-click to reset"></div>
+          <section class="panel engine resizable" id="engine-black" data-size="engine-black" hidden></section>
+          <div class="splitter h" title="Drag to resize · double-click to reset"></div>
+          <section class="panel card" id="game-info">
+            <h3>Game</h3>
+            <dl id="game-details"></dl>
+          </section>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <dialog id="dlg-new">
+    <form method="dialog" id="form-new">
+      <h2>New game</h2>
+
+      <div class="segmented" id="mode">
+        <label><input type="radio" name="mode" value="hh"><span>Human vs Human</span></label>
+        <label><input type="radio" name="mode" value="hc" checked><span>Human vs Computer</span></label>
+        <label><input type="radio" name="mode" value="cc"><span>Computer vs Computer</span></label>
+      </div>
+
+      <label class="row" id="row-color">You play
+        <select id="human-color">
+          <option value="white">White</option>
+          <option value="black">Black</option>
+          <option value="random">Random</option>
+        </select>
+      </label>
+
+      <div class="sides">
+        <fieldset data-slot="0">
+          <legend>White</legend>
+          <label class="row who-human">Name <input type="text" class="human-name" placeholder="Optional" maxlength="40"></label>
+          <label class="row who-engine">Engine <select class="engine-select"></select></label>
+          <div class="tc"></div>
+        </fieldset>
+        <fieldset data-slot="1">
+          <legend>Black</legend>
+          <label class="row who-human">Name <input type="text" class="human-name" placeholder="Optional" maxlength="40"></label>
+          <label class="row who-engine">Engine <select class="engine-select"></select></label>
+          <div class="tc"></div>
+        </fieldset>
+      </div>
+
+      <fieldset id="shared-tc-box">
+        <legend>Time control</legend>
+        <div class="tc" id="shared-tc"></div>
+      </fieldset>
+      <label class="check"><input type="checkbox" id="same-tc" checked> Same time control for both sides</label>
+
+      <details>
+        <summary>Start from a position</summary>
+        <input type="text" id="start-fen" placeholder="FEN (leave empty for the normal starting position)" spellcheck="false">
+      </details>
+
+      <p class="error" id="new-error" hidden></p>
+      <div class="actions">
+        <button type="button" id="new-cancel">Cancel</button>
+        <button type="submit" class="primary">Start game</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-options">
+    <form method="dialog" id="form-options">
+      <h2 id="options-title">Engine options</h2>
+      <div id="options-body"></div>
+      <div class="actions">
+        <button type="button" id="options-reset">Reset to defaults</button>
+        <button type="button" id="options-cancel">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-settings">
+    <form method="dialog" id="form-settings">
+      <h2>Settings</h2>
+      <div class="tabs settings-tabs" role="tablist">
+        <button type="button" role="tab" class="tab active" data-pane="general">General</button>
+        <button type="button" role="tab" class="tab" data-pane="engines">Engines</button>
+        <button type="button" role="tab" class="tab" data-pane="analysis">Analysis</button>
+        <button type="button" role="tab" class="tab" data-pane="database">Database</button>
+        <button type="button" role="tab" class="tab" data-pane="lichess">Lichess</button>
+      </div>
+
+      <div class="settings-pane" data-pane="general">
+        <div>
+          <div class="setting-label">Theme</div>
+          <div class="theme-list" id="theme-list"></div>
+        </div>
+        <div>
+          <div class="setting-label">Sound</div>
+          <div class="sound-settings">
+            <label class="check"><input type="checkbox" id="sound-on"> Play sounds</label>
+            <label class="volume">Volume <input type="range" id="sound-volume" min="0" max="100" step="5"></label>
+            <button type="button" class="small" id="sound-test">Test</button>
+          </div>
+          <p class="hint">Moves, captures, castling, check, promotion, the start and end of a game, low time and illegal moves. The sounds follow the theme.</p>
+        </div>
+        <div>
+          <div class="setting-label">Moves list</div>
+          <div class="sound-settings">
+            <label class="check"><input type="checkbox" id="moves-figurines"> Piece icons before moves</label>
+            <label class="check"><input type="checkbox" id="moves-scores"> Score after each move</label>
+          </div>
+          <p class="hint">Scores come from the computer analysis once it has run; before that, from what the engine that played the move reported (shown in italics). Scores are from White's side.</p>
+        </div>
+      </div>
+
+      <div class="settings-pane" data-pane="engines" hidden>
+        <p class="hint">UCI engines for playing and analysis. Add an engine by choosing its program file; Options sets its own settings, such as threads and hash size; Command line sets options it is started with.</p>
+        <div id="engine-list"></div>
+        <p class="error" id="engine-error" hidden></p>
+        <div><button type="button" id="engine-add">Add engine…</button></div>
+      </div>
+
+      <div class="settings-pane" data-pane="analysis" hidden>
+        <label class="row">Analysis engine <select id="analysis-engine"></select></label>
+        <label class="row">Lines shown
+          <span class="range"><input type="range" id="analysis-lines-setting" min="1" max="5" step="1"> <output id="analysis-lines-setting-value"></output></span>
+        </label>
+        <label class="check"><input type="checkbox" id="analysis-evalbar"> Show the evaluation bar and best-move arrow</label>
+        <label class="check"><input type="checkbox" id="analysis-altarrows"> Show the other lines' moves as arrows too, each in its own colour</label>
+        <p class="hint">Turn analysis on with the Analysis button in the toolbar. It follows the position on the board, including when you step back through the moves or browse games from a file, and uses its own copy of the engine. It pauses while an engine is playing a game.</p>
+      </div>
+
+      <div class="settings-pane" data-pane="database" hidden>
+        <label class="check"><input type="checkbox" id="db-on"> Save finished games to a PGN database</label>
+        <div class="row db-file">File
+          <span class="db-path"><input type="text" id="db-path" readonly spellcheck="false"> <button type="button" class="small" id="db-choose">Choose…</button></span>
+        </div>
+        <fieldset class="db-kinds">
+          <legend>Games to save</legend>
+          <label class="check"><input type="checkbox" id="db-local"> Games played here: human and engine games, with a result</label>
+          <label class="check"><input type="checkbox" id="db-lichess"> Lichess games your engine plays</label>
+          <label class="check"><input type="checkbox" id="db-watched"> Lichess games you watch (followed to the end)</label>
+        </fieldset>
+        <p class="hint">Each game is added to the end of the file when it finishes, with its players, time control, opening and result; aborted games are not saved. An existing file is kept and added to. Open it in the Games list to browse, filter and replay them.</p>
+        <div><button type="button" id="db-open">Show in Games list</button></div>
+        <p class="error" id="db-error" hidden></p>
+      </div>
+
+      <div class="settings-pane" data-pane="lichess" hidden>
+        <p class="hint">Your engine plays on Lichess through a <b>Bot account</b>. Create an API token with the <i>bot:play</i>, <i>challenge:read</i> and <i>challenge:write</i> permissions while signed in to that account. <a href="#" id="ls-token-link">Create a token on Lichess</a></p>
+        <label class="row">API token
+          <span class="ls-token"><input type="password" id="ls-token" spellcheck="false" autocomplete="off" placeholder="lip_…"> <button type="button" class="small" id="ls-token-clear">Forget</button></span>
+        </label>
+        <p class="hint" id="ls-token-note"></p>
+        <label class="row">Engine <select id="ls-engine"></select></label>
+        <label class="check"><input type="checkbox" id="ls-autoconnect"> Connect when Board starts</label>
+        <div class="ls-status">
+          <span class="lx-dot" id="ls-dot"></span><span id="ls-state">Not connected</span>
+          <span class="lx-spacer"></span>
+          <button type="button" class="small" id="ls-connect">Connect</button>
+        </div>
+        <div class="ls-upgrade" id="ls-upgrade" hidden>
+          <p><b id="ls-upgrade-name"></b> is a regular Lichess account. Only Bot accounts can play through the Bot API.</p>
+          <p class="warning">Upgrading to a Bot account cannot be undone, and only works on an account that has never played a game. Use a new account made for your engine.</p>
+          <button type="button" class="small danger" id="ls-upgrade-btn">Upgrade to Bot account…</button>
+        </div>
+        <fieldset class="ls-policy">
+          <legend>Automatic accepting</legend>
+          <p class="hint">Connecting never plays by itself. When you turn on <b>Accept automatically</b> in the Lichess tab, challenges that match these rules are accepted and the rest declined; it turns off again whenever you disconnect.</p>
+          <div class="ls-grid">
+            <label class="check"><input type="checkbox" id="ls-rated"> Rated</label>
+            <label class="check"><input type="checkbox" id="ls-casual"> Casual</label>
+            <label class="check"><input type="checkbox" id="ls-humans"> From people</label>
+            <label class="check"><input type="checkbox" id="ls-bots"> From bots</label>
+            <label>Minutes from <input type="number" id="ls-min" min="0" max="180" step="0.25"> to <input type="number" id="ls-max" min="0" max="180" step="0.25"> <span class="hint">(0: any)</span></label>
+            <label>Games at once <input type="number" id="ls-games" min="1" max="8" step="1"></label>
+          </div>
+          <p class="hint">Declined challengers see the reason. Variants and correspondence games are declined while accepting automatically; otherwise every challenge waits for you.</p>
+        </fieldset>
+        <label class="row ls-server">Server <input type="url" id="ls-server" spellcheck="false" placeholder="https://lichess.org"></label>
+        <p class="error" id="ls-error" hidden></p>
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="primary">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlg-confirm">
+    <form method="dialog" id="form-confirm">
+      <p id="confirm-text"></p>
+      <div class="actions">
+        <button type="button" id="confirm-cancel">Cancel</button>
+        <button type="submit" class="primary" id="confirm-ok">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <button type="button" id="zen-exit" title="Leave zen mode (Z)">Zen · Z to leave</button>
+  <dialog id="dlg-keys">
+    <form method="dialog">
+      <h2>Keyboard shortcuts</h2>
+      <table class="keys">
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>Previous / next move</td></tr>
+        <tr><td><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>Home</kbd> <kbd>End</kbd></td><td>First / last move</td></tr>
+        <tr><td><kbd>F</kbd></td><td>Flip the board</td></tr>
+        <tr><td><kbd>Z</kbd></td><td>Zen mode: only the board and the players</td></tr>
+        <tr><td><kbd>L</kbd></td><td>Analysis on / off</td></tr>
+        <tr><td><kbd>P</kbd></td><td>Pause / resume the analysis</td></tr>
+        <tr><td><kbd>B</kbd></td><td>Takeback</td></tr>
+        <tr><td><kbd>Ctrl/⌘</kbd> <kbd>S</kbd> · <kbd>O</kbd></td><td>Save / open a PGN file</td></tr>
+        <tr><td><kbd>F11</kbd></td><td>Full screen</td></tr>
+        <tr><td><kbd>?</kbd></td><td>This list</td></tr>
+      </table>
+      <h3>On the board</h3>
+      <table class="keys">
+        <tr><td>Drag, or click then click</td><td>Move a piece; dots show where it can go</td></tr>
+        <tr><td>Move during the engine's turn</td><td>Premove: played as soon as it is your turn; right-click cancels</td></tr>
+        <tr><td>Right-drag · right-click</td><td>Draw an arrow · a circle (green)</td></tr>
+        <tr><td>with <kbd>Shift</kbd> · <kbd>Alt</kbd> · both</td><td>Red · blue · yellow</td></tr>
+        <tr><td>Left click</td><td>Clear the drawings</td></tr>
+      </table>
+      <div class="actions"><button type="submit" class="primary">Close</button></div>
+    </form>
+  </dialog>
+  <script src="sounds.js"></script>
+  <script src="timecontrol.js"></script>
+  <script src="renderer.js"></script>
+  <script src="review.js"></script>
+  <script src="explorer.js"></script>
+  <script src="puzzles.js"></script>
+  <script src="lichess.js"></script>
+  <script src="tournament.js"></script>
+</body>
+</html>

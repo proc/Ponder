@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 72 163">
+  <defs>
+    <style>
+      .cls-1 {
+        filter: url(#drop-shadow-1);
+      }
+
+      .cls-2 {
+        fill: url(#linear-gradient);
+      }
+
+      .cls-2, .cls-3 {
+        stroke: #cf519d;
+        stroke-width: 3.5px;
+      }
+
+      .cls-4 {
+        fill: #68cbe3;
+      }
+
+      .cls-3 {
+        fill: url(#linear-gradient-2);
+      }
+    </style>
+    <filter id="drop-shadow-1" x="-49.88" y="-49.82" width="171.84" height="262.8" filterUnits="userSpaceOnUse">
+      <feOffset dx="0" dy="0"/>
+      <feGaussianBlur result="blur" stdDeviation="16"/>
+      <feFlood flood-color="#cf519d" flood-opacity="1"/>
+      <feComposite in2="blur" operator="in"/>
+      <feComposite in="SourceGraphic"/>
+    </filter>
+    <linearGradient id="linear-gradient" x1="-21.87" y1="314.04" x2="-21.87" y2="313.04" gradientTransform="translate(1610.6 4545.5) scale(72 -14)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#272c65"/>
+      <stop offset="1" stop-color="#0f111d"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="-21.82" y1="342.54" x2="-21.82" y2="341.54" gradientTransform="translate(1345.4 51039) scale(60 -149)" xlink:href="#linear-gradient"/>
+  </defs>
+  <g id="Black_Rook" data-name="Black Rook" class="cls-1">
+    <path class="cls-2" d="M0,163h72v-8l-6-6H6l-6,6V163Z"/>
+    <path class="cls-3" d="M6,0h14v12h10V0h12v12h10V0h14v22l-10,8,2,103,8,16H6l8-16,2-103-10-8V0Z"/>
+    <rect class="cls-4" x="32" y="54" width="8" height="34"/>
+  </g>
+</svg>

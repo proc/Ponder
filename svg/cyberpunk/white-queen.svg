@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 72 164.5">
+  <defs>
+    <style>
+      .cls-1 {
+        filter: url(#drop-shadow-1);
+      }
+
+      .cls-2 {
+        fill: url(#linear-gradient);
+      }
+
+      .cls-2, .cls-3 {
+        stroke: #68cbe3;
+        stroke-width: 3.5px;
+      }
+
+      .cls-4 {
+        fill: #cf519d;
+      }
+
+      .cls-3 {
+        fill: url(#linear-gradient-2);
+      }
+    </style>
+    <filter id="drop-shadow-1" x="-49.96" y="-48.08" width="171.84" height="262.56" filterUnits="userSpaceOnUse">
+      <feOffset dx="0" dy="0"/>
+      <feGaussianBlur result="blur" stdDeviation="16"/>
+      <feFlood flood-color="#62cbe7" flood-opacity="1"/>
+      <feComposite in2="blur" operator="in"/>
+      <feComposite in="SourceGraphic"/>
+    </filter>
+    <linearGradient id="linear-gradient" x1="-317.31" y1="636.82" x2="-317.31" y2="635.82" gradientTransform="translate(22882.2 9066) scale(72 -14)" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#272c65"/>
+      <stop offset="1" stop-color="#0f111d"/>
+    </linearGradient>
+    <linearGradient id="linear-gradient-2" x1="-316.43" y1="646.03" x2="-316.43" y2="645.03" gradientTransform="translate(19021.8 94970) scale(60 -147)" xlink:href="#linear-gradient"/>
+  </defs>
+  <g id="White_Queen" data-name="White Queen" class="cls-1">
+    <path class="cls-2" d="M0,164.5h72v-8l-6-6H6l-6,6V164.5Z"/>
+    <path class="cls-3" d="M6,17.5l8,22,7-30,7,26L36,3.5l8,32,7-26,7,30,8-22-12,38,4,95H14l4-95L6,17.5Z"/>
+    <circle class="cls-4" cx="6" cy="15.5" r="2.5"/>
+    <circle class="cls-4" cx="21" cy="7.5" r="2.5"/>
+    <circle class="cls-4" cx="36" cy="2.5" r="2.5"/>
+    <circle class="cls-4" cx="51" cy="7.5" r="2.5"/>
+    <circle class="cls-4" cx="66" cy="15.5" r="2.5"/>
+    <rect class="cls-4" x="34" y="71.5" width="4" height="34"/>
+  </g>
+</svg>

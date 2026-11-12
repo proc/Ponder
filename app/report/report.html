@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Match report</title>
+<style>
+:root {
+  color-scheme: light;
+  --surface-0: #f3f2ee;
+  --surface-1: #fcfcfb;
+  --surface-2: #f0efec;
+  --line: #e4e3de;
+  --grid: #ebeae5;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #7a7974;
+  --e1: #2a78d6;       /* engine 1: categorical slot 1 */
+  --e1-wash: rgba(42, 120, 214, .12);
+  --e2: #eb6834;       /* engine 2: categorical slot 2 */
+  --draw: #b5b4ae;     /* draws: neutral, not a series hue */
+  --good: #0ca30c;
+  --critical: #d03b3b;
+  --sq-light: #ecebe6;
+  --sq-dark: #b9b7ae;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --surface-0: #121211;
+    --surface-1: #1a1a19;
+    --surface-2: #232321;
+    --line: #2e2e2b;
+    --grid: #2a2a28;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8f8e88;
+    --e1: #3987e5;
+    --e1-wash: rgba(57, 135, 229, .16);
+    --e2: #d95926;
+    --draw: #5d5c57;
+    --sq-light: #4a4945;
+    --sq-dark: #34332f;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface-0: #121211;
+  --surface-1: #1a1a19;
+  --surface-2: #232321;
+  --line: #2e2e2b;
+  --grid: #2a2a28;
+  --text-primary: #f0efec;
+  --text-secondary: #c3c2b7;
+  --text-muted: #8f8e88;
+  --e1: #3987e5;
+  --e1-wash: rgba(57, 135, 229, .16);
+  --e2: #d95926;
+  --draw: #5d5c57;
+  --sq-light: #4a4945;
+  --sq-dark: #34332f;
+}
+* { box-sizing: border-box; }
+html { font-size: 14px; }
+body { margin: 0; background: var(--surface-0); color: var(--text-primary);
+  font: 1rem/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { padding: 1.4rem 2rem 0; max-width: 1400px; margin: 0 auto; }
+h1 { margin: 0; font-size: 1.6rem; font-weight: 650; letter-spacing: -.01em; }
+.sub { color: var(--text-secondary); margin-top: .2rem; }
+.verdict { margin-top: .9rem; padding: .6rem .9rem; border-radius: .5rem; background: var(--surface-2); font-weight: 600;
+  display: flex; gap: .5rem; align-items: center; }
+.verdict .icon { font-size: 1.1rem; }
+.verdict.h1 { box-shadow: inset 4px 0 0 var(--good); }
+.verdict.h0 { box-shadow: inset 4px 0 0 var(--critical); }
+nav { display: flex; gap: .2rem; margin-top: 1rem; border-bottom: 1px solid var(--line); align-items: flex-end; }
+nav button { background: none; border: 0; padding: .55rem .9rem; font: inherit; color: var(--text-secondary); cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -1px; }
+nav button[aria-selected="true"] { color: var(--text-primary); border-bottom-color: var(--text-primary); font-weight: 600; }
+nav .spacer { flex: 1; }
+nav .theme { font-size: .85rem; padding: .3rem .6rem; border: 1px solid var(--line); border-radius: .4rem; margin-bottom: .35rem; margin-left: .3rem; }
+nav .saved { font-size: .8rem; color: var(--text-secondary); margin-bottom: .45rem; max-width: 24rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+nav .saved a { color: inherit; }
+main { padding: 1.2rem 2rem 3rem; max-width: 1400px; margin: 0 auto; }
+section[hidden] { display: none; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); gap: .7rem; margin-bottom: 1.2rem; }
+.tile { background: var(--surface-1); border: 1px solid var(--line); border-radius: .6rem; padding: .7rem .9rem; }
+.tile .label { color: var(--text-secondary); font-size: .85rem; }
+.tile .value { font-size: 1.55rem; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: .1rem; white-space: nowrap; }
+.tile .note { color: var(--text-muted); font-size: .8rem; margin-top: .1rem; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(30rem, 1fr)); gap: 1rem; }
+.card { background: var(--surface-1); border: 1px solid var(--line); border-radius: .6rem; padding: 1rem 1.1rem .8rem; margin-bottom: 1rem; min-width: 0; }
+.card h2 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+.card .desc { color: var(--text-secondary); font-size: .88rem; margin: .15rem 0 .6rem; }
+.legend { display: flex; gap: 1rem; flex-wrap: wrap; font-size: .85rem; color: var(--text-secondary); margin-bottom: .3rem; }
+.legend span { display: inline-flex; align-items: center; gap: .35rem; }
+.key { width: .75rem; height: .75rem; border-radius: .2rem; display: inline-block; }
+.key.line { height: 2px; width: 1rem; border-radius: 1px; }
+.chart { position: relative; }
+.chart svg { display: block; max-width: 100%; height: auto; overflow: visible; }
+.chart text { fill: var(--text-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.chart .gridline { stroke: var(--grid); stroke-width: 1; }
+.chart .axis { stroke: var(--line); stroke-width: 1; }
+.chart .label-strong { fill: var(--text-secondary); font-weight: 600; }
+.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--line); border-radius: .45rem;
+  padding: .4rem .6rem; font-size: .82rem; box-shadow: 0 4px 16px rgba(0,0,0,.12); white-space: nowrap; z-index: 5; color: var(--text-primary); }
+.tip .t { color: var(--text-secondary); margin-bottom: .15rem; }
+.tip .row { display: flex; align-items: center; gap: .4rem; font-variant-numeric: tabular-nums; }
+.datatoggle { background: none; border: 0; color: var(--text-secondary); font: inherit; font-size: .8rem; cursor: pointer; padding: .3rem 0 0;
+  text-decoration: underline dotted; }
+table { border-collapse: collapse; width: 100%; font-size: .88rem; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: .35rem .55rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--text-secondary); font-weight: 600; position: sticky; top: 0; background: var(--surface-1); cursor: pointer; user-select: none; }
+th.num, td.num { text-align: right; }
+td.wrap { white-space: normal; }
+tbody tr.clickable { cursor: pointer; }
+tbody tr.clickable:hover { background: var(--surface-2); }
+tbody tr.sel { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--e1); }
+.dot { display: inline-block; width: .6rem; height: .6rem; border-radius: 50%; margin-right: .35rem; vertical-align: 0; }
+.tools { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; margin-bottom: .6rem; }
+.tools input, .tools select { font: inherit; font-size: .9rem; padding: .3rem .5rem; border: 1px solid var(--line); border-radius: .4rem;
+  background: var(--surface-1); color: var(--text-primary); }
+.tools .count { color: var(--text-secondary); font-size: .85rem; }
+.pager { display: flex; gap: .4rem; align-items: center; justify-content: flex-end; margin-top: .5rem; font-size: .85rem; color: var(--text-secondary); }
+button.small { font: inherit; font-size: .85rem; padding: .25rem .6rem; border: 1px solid var(--line); border-radius: .4rem;
+  background: var(--surface-1); color: var(--text-primary); cursor: pointer; }
+button.small:disabled { opacity: .4; cursor: default; }
+.scroll { max-height: 34rem; overflow: auto; }
+dl.settings { display: grid; grid-template-columns: max-content 1fr; gap: .3rem 1.2rem; margin: 0; font-size: .9rem; }
+dl.settings dt { color: var(--text-secondary); }
+dl.settings dd { margin: 0; overflow-wrap: anywhere; }
+.viewer { display: grid; grid-template-columns: minmax(16rem, 26rem) minmax(0, 1fr); gap: 1.2rem; align-items: start; }
+.board { display: grid; grid-template-columns: repeat(8, 1fr); aspect-ratio: 1; border-radius: .3rem; overflow: hidden; }
+.board div { position: relative; }
+.board .l { background: var(--sq-light); }
+.board .d { background: var(--sq-dark); }
+.board .last { box-shadow: inset 0 0 0 100vmax rgba(236, 196, 64, .35); }
+.board img { position: absolute; inset: 6%; width: 88%; height: 88%; object-fit: contain; }
+.board .glyph { position: absolute; inset: 0; display: grid; place-items: center; font-size: 2rem; line-height: 1; }
+.moves { display: flex; flex-wrap: wrap; gap: .1rem .3rem; font-size: .9rem; max-height: 9rem; overflow: auto; margin-top: .6rem; }
+.moves .mv { cursor: pointer; padding: 0 .2rem; border-radius: .2rem; }
+.moves .mv.book { color: var(--text-muted); font-style: italic; }
+.moves .mv.cur { background: var(--e1-wash); outline: 1px solid var(--e1); }
+.moves .no { color: var(--text-muted); }
+.vnav { display: flex; gap: .35rem; margin-top: .5rem; align-items: center; }
+.vhead { font-weight: 600; margin-bottom: .4rem; }
+.vhead .r { color: var(--text-secondary); font-weight: 400; }
+.empty { color: var(--text-muted); padding: 1rem 0; }
+footer { color: var(--text-muted); font-size: .8rem; text-align: center; padding: 1rem; }
+@media print {
+  nav, .datatoggle, .tools, .pager, #viewer-card { display: none !important; }
+  section[hidden] { display: block !important; }
+  section[data-view] { break-before: page; }
+  section[data-view="summary"] { break-before: auto; }
+  .card, .tile { break-inside: avoid; }
+  .scroll { max-height: none !important; overflow: visible !important; }
+  body { background: var(--surface-1); }
+}
+</style>
+</head>
+<body>
+<script id="report-data" type="application/json">__DATA__</script>
+<script id="report-pieces" type="application/json">__PIECES__</script>
+<header>
+  <h1 id="title"></h1>
+  <div class="sub" id="subtitle"></div>
+  <div class="verdict" id="verdict" hidden></div>
+  <nav role="tablist" id="tabs">
+    <button role="tab" data-view="summary" aria-selected="true">Summary</button>
+    <button role="tab" data-view="progress">Progress</button>
+    <button role="tab" data-view="engines">Engines</button>
+    <button role="tab" data-view="openings">Openings</button>
+    <button role="tab" data-view="games">Games</button>
+    <span class="spacer"></span>
+    <span class="saved" id="saved" hidden></span>
+    <button class="theme" id="save-html" title="Save this report as a web page (Ctrl/⌘+S)">Save…</button>
+    <button class="theme" id="save-pdf" title="Save this report as a PDF, every view in one document">Save as PDF…</button>
+    <button class="theme" id="theme-toggle" title="Switch between light and dark">◐ Theme</button>
+  </nav>
+</header>
+<main>
+  <section data-view="summary">
+    <div class="tiles" id="tiles"></div>
+    <div class="grid2">
+      <div class="card"><h2>Pair results</h2><p class="desc" id="penta-desc"></p><div id="chart-penta"></div></div>
+      <div class="card"><h2>Results by colour</h2><p class="desc" id="color-desc"></p><div id="chart-colors"></div></div>
+    </div>
+    <div class="grid2">
+      <div class="card"><h2>How games ended</h2><p class="desc">Each bar splits by who won.</p><div id="chart-endings"></div></div>
+      <div class="card"><h2>Settings</h2><p class="desc">How the match was played.</p><dl class="settings" id="settings"></dl></div>
+    </div>
+  </section>
+
+  <section data-view="progress" hidden>
+    <div class="card"><h2>Log-likelihood ratio</h2><p class="desc" id="llr-desc"></p><div id="chart-llr"></div></div>
+    <div class="card"><h2>Elo estimate</h2><p class="desc" id="elo-desc"></p><div id="chart-elo"></div></div>
+    <div class="card"><h2>Score</h2><p class="desc" id="score-desc"></p><div id="chart-score"></div></div>
+  </section>
+
+  <section data-view="engines" hidden>
+    <div class="tiles" id="engine-tiles"></div>
+    <div class="grid2">
+      <div class="card"><h2>Time per move</h2><p class="desc" id="time-desc"></p><div id="chart-time"></div></div>
+      <div class="card"><h2>Search depth</h2><p class="desc" id="depth-desc"></p><div id="chart-depth"></div></div>
+    </div>
+    <div class="card"><h2>Game length</h2><p class="desc">Games by number of moves.</p><div id="chart-length"></div></div>
+  </section>
+
+  <section data-view="openings" hidden>
+    <div class="card">
+      <h2>Openings</h2>
+      <p class="desc" id="openings-desc"></p>
+      <div class="tools"><input type="search" id="op-filter" placeholder="Filter openings"><span class="count" id="op-count"></span></div>
+      <div class="scroll"><table id="op-table"></table></div>
+    </div>
+  </section>
+
+  <section data-view="games" hidden>
+    <div class="card" id="viewer-card" hidden>
+      <div class="viewer">
+        <div>
+          <div class="vhead" id="v-head"></div>
+          <div class="board" id="v-board" aria-label="Board"></div>
+          <div class="vnav">
+            <button class="small" id="v-first" title="Start (Home)">⏮</button>
+            <button class="small" id="v-prev" title="Back (←)">◀</button>
+            <button class="small" id="v-next" title="Forward (→)">▶</button>
+            <button class="small" id="v-last" title="End (End)">⏭</button>
+            <span class="count" id="v-ply"></span>
+          </div>
+          <div class="moves" id="v-moves"></div>
+        </div>
+        <div>
+          <h2 style="font-size:1rem;margin:0">Evaluation</h2>
+          <p class="desc">Each engine's own evaluation after its move, from White's side, in pawns (capped at ±10). Click to go to a move.</p>
+          <div id="chart-v-eval"></div>
+          <h2 style="font-size:1rem;margin:.6rem 0 0">Time per move</h2>
+          <p class="desc">Seconds each engine took.</p>
+          <div id="chart-v-time"></div>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Games</h2>
+      <p class="desc" id="games-desc"></p>
+      <div class="tools">
+        <input type="search" id="g-filter" placeholder="Filter: opening, ending, engine…">
+        <select id="g-result">
+          <option value="">All results</option>
+          <option value="1">Engine 1 won</option>
+          <option value="0">Engine 2 won</option>
+          <option value="0.5">Draws</option>
+        </select>
+        <span class="count" id="g-count"></span>
+      </div>
+      <div class="scroll"><table id="g-table"></table></div>
+      <div class="pager"><button class="small" id="g-prevpage">Previous</button><span id="g-page"></span><button class="small" id="g-nextpage">Next</button></div>
+    </div>
+  </section>
+</main>
+<footer id="footer"></footer>
+<script>
+'use strict';
+// The page as it was written, before any view is drawn: what Save writes.
+const ORIGINAL = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+const R = JSON.parse(document.getElementById('report-data').textContent);
+const PIECES = JSON.parse(document.getElementById('report-pieces').textContent || '{}');
+const S = R.status;
+const C = R.config;
+const N1 = S.names[0];
+const N2 = S.names[1];
+const games = R.games;
+const NO_EVAL = 32767;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+const $ = (s, root = document) => root.querySelector(s);
+function h(tag, props = {}, kids = []) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'style' && typeof v === 'object') Object.assign(n.style, v);
+    else if (k in n && k !== 'list') n[k] = v;
+    else n.setAttribute(k, v);
+  }
+  for (const k of [].concat(kids)) if (k != null) n.append(k);
+  return n;
+}
+const SVGNS = 'http://www.w3.org/2000/svg';
+function s(tag, attrs = {}, kids = []) {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+  for (const k of [].concat(kids)) if (k != null) n.append(k);
+  return n;
+}
+const fmt = (x, d = 1) => (Number.isFinite(x) ? x.toFixed(d) : '–');
+const signed = (x, d = 1) => (Number.isFinite(x) ? (x > 0 ? '+' : x < 0 ? '−' : '') + Math.abs(x).toFixed(d) : '–');
+const pct = (x, d = 1) => (Number.isFinite(x) ? (x * 100).toFixed(d) + '%' : '–');
+const int = (x) => Math.round(x).toLocaleString();
+function duration(sec) {
+  sec = Math.max(0, Math.round(sec));
+  const hh = Math.floor(sec / 3600), mm = Math.floor((sec % 3600) / 60), ss = sec % 60;
+  return hh ? `${hh}h ${mm}m` : mm ? `${mm}m ${ss}s` : `${ss}s`;
+}
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function niceTicks(lo, hi, count = 5) {
+  if (!(hi > lo)) { hi = lo + 1; }
+  const span = hi - lo;
+  const step0 = span / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((x) => span / x <= count) ?? 10 * mag;
+  // From the step at or below lo to the step at or above hi.
+  const ticks = [];
+  const first = Math.floor(lo / step + 1e-9) * step;
+  const last = Math.ceil(hi / step - 1e-9) * step;
+  for (let t = first; t <= last + step * 1e-9; t += step) ticks.push(+t.toFixed(10));
+  return ticks;
+}
+
+// Every chart gets a "Show data" table view.
+function withTable(container, chartNode, headers, rows) {
+  container.replaceChildren(chartNode);
+  if (!rows?.length) return;
+  const btn = h('button', { className: 'datatoggle', textContent: 'Show data' });
+  let table = null;
+  btn.onclick = () => {
+    if (table) { table.remove(); table = null; btn.textContent = 'Show data'; return; }
+    table = h('div', { className: 'scroll', style: { maxHeight: '16rem', marginTop: '.4rem' } }, [
+      h('table', {}, [
+        h('thead', {}, h('tr', {}, headers.map((t, i) => h('th', { className: i ? 'num' : '', textContent: t })))),
+        h('tbody', {}, rows.map((r) => h('tr', {}, r.map((c, i) => h('td', { className: i ? 'num' : '', textContent: c }))))),
+      ]),
+    ]);
+    container.append(table);
+    btn.textContent = 'Hide data';
+  };
+  container.append(btn);
+}
+
+function legend(items) {
+  return h('div', { className: 'legend' }, items.map(([label, color, line]) =>
+    h('span', {}, [h('i', { className: 'key' + (line ? ' line' : ''), style: { background: color } }), label])));
+}
+
+// Tooltip shared by a chart.
+function tooltip(wrap) {
+  const tip = h('div', { className: 'tip', hidden: true });
+  wrap.append(tip);
+  return {
+    show(x, y, title, rows) {
+      tip.replaceChildren(h('div', { className: 't', textContent: title }),
+        ...rows.map(([color, text]) => h('div', { className: 'row' }, [color ? h('i', { className: 'key', style: { background: color } }) : null, text])));
+      tip.hidden = false;
+      const w = wrap.clientWidth;
+      const tw = tip.offsetWidth;
+      tip.style.left = `${Math.min(Math.max(0, x + 12), w - tw)}px`;
+      tip.style.top = `${Math.max(0, y - tip.offsetHeight - 8)}px`;
+    },
+    hide() { tip.hidden = true; },
+  };
+}
+
+// Line chart: series [{name, color, points:[[x,y],...], band:[[x,lo,hi],...]}],
+// hlines [{y, label}], with a crosshair and a tooltip.
+function lineChart(opts) {
+  const W = opts.width ?? 760, H = opts.height ?? 260, M = { l: 52, r: opts.right ?? 64, t: 12, b: 32 };
+  const wrap = h('div', { className: 'chart' });
+  const all = opts.series.flatMap((sr) => sr.points);
+  if (!all.length) return h('p', { className: 'empty', textContent: opts.empty ?? 'No data yet.' });
+  let xs = all.map((p) => p[0]);
+  let ys = all.map((p) => p[1]).concat(...opts.series.map((sr) => (sr.band ?? []).flatMap((b) => [b[1], b[2]])), (opts.hlines ?? []).map((l) => l.y));
+  let x0 = Math.min(...xs), x1 = Math.max(...xs);
+  if (x0 === x1) x1 = x0 + 1;
+  let y0 = opts.yMin ?? Math.min(...ys), y1 = opts.yMax ?? Math.max(...ys);
+  if (opts.yMin === undefined && opts.yMax === undefined) { const pad = (y1 - y0) * 0.08 || 1; y0 -= pad; y1 += pad; }
+  if (opts.zero && y0 > 0) y0 = 0;
+  const yt = niceTicks(y0, y1, 5);
+  y0 = Math.min(y0, yt[0]); y1 = Math.max(y1, yt[yt.length - 1]);
+  const X = (x) => M.l + ((x - x0) / (x1 - x0)) * (W - M.l - M.r);
+  const Y = (y) => H - M.b - ((y - y0) / (y1 - y0)) * (H - M.t - M.b);
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img', 'aria-label': opts.label ?? '' });
+  for (const t of yt) {
+    svg.append(s('line', { class: 'gridline', x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t) }));
+    svg.append(s('text', { x: M.l - 6, y: Y(t) + 4, 'text-anchor': 'end' }, (opts.yFmt ?? String)(t)));
+  }
+  for (const t of niceTicks(x0, x1, 7).filter((v) => v >= x0 && v <= x1)) {
+    svg.append(s('text', { x: X(t), y: H - M.b + 16, 'text-anchor': 'middle' }, (opts.xFmt ?? int)(t)));
+  }
+  svg.append(s('line', { class: 'axis', x1: M.l, x2: W - M.r, y1: H - M.b, y2: H - M.b }));
+  if (opts.xLabel) svg.append(s('text', { x: W - M.r, y: H - 2, 'text-anchor': 'end' }, opts.xLabel));
+  for (const l of opts.hlines ?? []) {
+    svg.append(s('line', { x1: M.l, x2: W - M.r, y1: Y(l.y), y2: Y(l.y), stroke: l.color ?? css('--text-muted'), 'stroke-width': 1 }));
+    if (l.label) svg.append(s('text', { x: W - M.r + 6, y: Y(l.y) + 4, class: 'label-strong' }, l.label));
+  }
+  for (const sr of opts.series) {
+    if (sr.band?.length) {
+      const top = sr.band.map((b) => `${X(b[0])},${Y(b[2])}`);
+      const bottom = sr.band.slice().reverse().map((b) => `${X(b[0])},${Y(b[1])}`);
+      svg.append(s('polygon', { points: top.concat(bottom).join(' '), fill: sr.wash ?? sr.color, opacity: sr.wash ? 1 : 0.1 }));
+    }
+    if (sr.points.length) {
+      const d = sr.points.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('');
+      svg.append(s('path', { d, fill: 'none', stroke: sr.color, 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+      const last = sr.points[sr.points.length - 1];
+      svg.append(s('circle', { cx: X(last[0]), cy: Y(last[1]), r: 4, fill: sr.color, stroke: css('--surface-1'), 'stroke-width': 2 }));
+      if (opts.endLabels) svg.append(s('text', { x: X(last[0]) + 8, y: Y(last[1]) + 4, class: 'label-strong' }, (opts.yFmt ?? String)(last[1])));
+    }
+  }
+  // Hover: nearest x.
+  const cross = s('line', { x1: 0, x2: 0, y1: M.t, y2: H - M.b, stroke: css('--text-muted'), 'stroke-width': 1, visibility: 'hidden' });
+  const dots = opts.series.map((sr) => s('circle', { r: 4, fill: sr.color, stroke: css('--surface-1'), 'stroke-width': 2, visibility: 'hidden' }));
+  svg.append(cross, ...dots);
+  const hit = s('rect', { x: M.l, y: M.t, width: W - M.l - M.r, height: H - M.t - M.b, fill: 'transparent' });
+  svg.append(hit);
+  wrap.append(svg);
+  const tip = tooltip(wrap);
+  const nearest = (pts, x) => {
+    let lo = 0, hi = pts.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid][0] < x) lo = mid + 1; else hi = mid; }
+    if (lo > 0 && Math.abs(pts[lo - 1][0] - x) <= Math.abs(pts[lo][0] - x)) lo--;
+    return pts[lo];
+  };
+  const toX = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const px = ((ev.clientX - r.left) / r.width) * W;
+    return { x: x0 + ((px - M.l) / (W - M.l - M.r)) * (x1 - x0), sx: ev.clientX - r.left, sy: ev.clientY - r.top };
+  };
+  hit.addEventListener('mousemove', (ev) => {
+    const { x, sx, sy } = toX(ev);
+    const rows = [];
+    let at = null;
+    opts.series.forEach((sr, i) => {
+      if (!sr.points.length) { dots[i].setAttribute('visibility', 'hidden'); return; }
+      const p = nearest(sr.points, x);
+      at ??= p[0];
+      dots[i].setAttribute('cx', X(p[0])); dots[i].setAttribute('cy', Y(p[1])); dots[i].setAttribute('visibility', 'visible');
+      rows.push([sr.color, (opts.tipFmt ?? ((sr2, p2) => `${sr2.name}: ${(opts.yFmt ?? String)(p2[1])}`))(sr, p)]);
+    });
+    if (at === null) return;
+    cross.setAttribute('x1', X(at)); cross.setAttribute('x2', X(at)); cross.setAttribute('visibility', 'visible');
+    tip.show(sx, sy, (opts.tipTitle ?? ((x2) => `${opts.xName ?? 'x'} ${int(x2)}`))(at), rows);
+  });
+  hit.addEventListener('mouseleave', () => { tip.hide(); cross.setAttribute('visibility', 'hidden'); dots.forEach((d) => d.setAttribute('visibility', 'hidden')); });
+  if (opts.onClick) {
+    hit.style.cursor = 'pointer';
+    hit.addEventListener('click', (ev) => opts.onClick(toX(ev).x));
+  }
+  if (opts.marker !== undefined) {
+    const m = s('line', { x1: X(opts.marker), x2: X(opts.marker), y1: M.t, y2: H - M.b, stroke: css('--text-primary'), 'stroke-width': 1.5, 'pointer-events': 'none' });
+    svg.insertBefore(m, cross);
+  }
+  return wrap;
+}
+
+// Vertical columns: bars [{label, value, color, tip}].
+function columnChart(bars, opts = {}) {
+  const W = opts.width ?? 760, H = opts.height ?? 230, M = { l: 44, r: 12, t: 22, b: 30 };
+  const wrap = h('div', { className: 'chart' });
+  if (!bars.length) return h('p', { className: 'empty', textContent: 'No data yet.' });
+  const max = Math.max(1, ...bars.map((b) => b.value));
+  const yt = niceTicks(0, max * 1.08, 4);
+  const top = yt[yt.length - 1];
+  const Y = (v) => H - M.b - (v / top) * (H - M.t - M.b);
+  const band = (W - M.l - M.r) / bars.length;
+  const bw = Math.min(opts.barMax ?? 24 * 2.2, band - 2);
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img', 'aria-label': opts.label ?? '' });
+  for (const t of yt) {
+    svg.append(s('line', { class: 'gridline', x1: M.l, x2: W - M.r, y1: Y(t), y2: Y(t) }));
+    svg.append(s('text', { x: M.l - 6, y: Y(t) + 4, 'text-anchor': 'end' }, int(t)));
+  }
+  wrap.append(svg);
+  const tip = tooltip(wrap);
+  bars.forEach((b, i) => {
+    const cx = M.l + band * (i + 0.5);
+    const y = Y(b.value);
+    const hgt = H - M.b - y;
+    if (hgt > 0) {
+      const r = Math.min(4, hgt, bw / 2);
+      const x = cx - bw / 2;
+      svg.append(s('path', { d: `M${x},${H - M.b}V${y + r}Q${x},${y} ${x + r},${y}H${x + bw - r}Q${x + bw},${y} ${x + bw},${y + r}V${H - M.b}Z`, fill: b.color }));
+    }
+    if (opts.labelValues !== false && bars.length <= 12) svg.append(s('text', { x: cx, y: y - 6, 'text-anchor': 'middle', class: 'label-strong' }, int(b.value)));
+    if (bars.length <= 24 || i % Math.ceil(bars.length / 16) === 0) svg.append(s('text', { x: cx, y: H - M.b + 16, 'text-anchor': 'middle' }, b.label));
+    const hit = s('rect', { x: cx - band / 2, y: M.t, width: band, height: H - M.t - M.b, fill: 'transparent' });
+    hit.addEventListener('mousemove', (ev) => {
+      const r = svg.getBoundingClientRect();
+      tip.show(ev.clientX - r.left, ev.clientY - r.top, b.tipTitle ?? b.label, [[b.color, b.tip ?? int(b.value)]]);
+    });
+    hit.addEventListener('mouseleave', () => tip.hide());
+    svg.append(hit);
+  });
+  svg.append(s('line', { class: 'axis', x1: M.l, x2: W - M.r, y1: H - M.b, y2: H - M.b }));
+  return wrap;
+}
+
+// Horizontal stacked bars: rows [{label, parts:[{value,color,name}]}], with 2px gaps.
+function stackedBars(rows, opts = {}) {
+  const rowH = 24, gap = 14, W = opts.width ?? 760, L = opts.labelWidth ?? 190, Rm = 56;
+  const H = rows.length * (rowH + gap) + 4;
+  const wrap = h('div', { className: 'chart' });
+  if (!rows.length) return h('p', { className: 'empty', textContent: 'No data yet.' });
+  const max = opts.normalize ? 1 : Math.max(1, ...rows.map((r) => r.parts.reduce((a, p) => a + p.value, 0)));
+  const svg = s('svg', { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img', 'aria-label': opts.label ?? '' });
+  wrap.append(svg);
+  const tip = tooltip(wrap);
+  rows.forEach((row, i) => {
+    const y = i * (rowH + gap) + 2;
+    const total = row.parts.reduce((a, p) => a + p.value, 0);
+    svg.append(s('text', { x: L - 10, y: y + rowH / 2 + 4, 'text-anchor': 'end', class: 'label-strong' }, row.label));
+    let x = L;
+    const scale = (W - L - Rm) / (opts.normalize ? Math.max(total, 1) : max);
+    const parts = row.parts.filter((p) => p.value > 0);
+    parts.forEach((p, j) => {
+      const w = p.value * scale - (j < parts.length - 1 ? 2 : 0);
+      const first = j === 0, last = j === parts.length - 1;
+      const r = Math.min(4, w / 2);
+      const x2 = x + w;
+      const d = `M${x + (first ? r : 0)},${y}H${x2 - (last ? r : 0)}${last ? `Q${x2},${y} ${x2},${y + r}V${y + rowH - r}Q${x2},${y + rowH} ${x2 - r},${y + rowH}` : `V${y + rowH}`}H${x + (first ? r : 0)}${first ? `Q${x},${y + rowH} ${x},${y + rowH - r}V${y + r}Q${x},${y} ${x + r},${y}` : `V${y}`}Z`;
+      const seg = s('path', { d, fill: p.color });
+      seg.addEventListener('mousemove', (ev) => {
+        const rc = svg.getBoundingClientRect();
+        tip.show(ev.clientX - rc.left, ev.clientY - rc.top, row.label,
+          row.parts.map((q) => [q.color, `${q.name}: ${int(q.value)}${total ? ` (${pct(q.value / total, 0)})` : ''}`]));
+      });
+      seg.addEventListener('mouseleave', () => tip.hide());
+      svg.append(seg);
+      x = x2 + 2;
+    });
+    svg.append(s('text', { x: W - Rm + 8, y: y + rowH / 2 + 4 }, opts.totalFmt ? opts.totalFmt(row, total) : int(total)));
+  });
+  return wrap;
+}
+
+// ---------------------------------------------------------------------------
+// Header
+// ---------------------------------------------------------------------------
+const started = new Date(R.started);
+const ended = R.ended && !R.ended.startsWith('0001') ? new Date(R.ended) : null;
+document.title = `${N1} vs ${N2} — match report`;
+$('#title').textContent = `${N1} vs ${N2}`;
+$('#subtitle').textContent = [
+  S.tc, `${int(S.games)} games`, `${S.workers} at once`,
+  started.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }),
+  `took ${duration(S.elapsed)}`,
+  ended ? null : 'in progress when the report was made',
+].filter(Boolean).join(' · ');
+{
+  const v = $('#verdict');
+  let text = S.message;
+  let icon = 'ℹ︎';
+  if (S.verdict === 'H1') icon = '✓';
+  else if (S.verdict === 'H0') icon = '✕';
+  if (!S.verdict && C.sprt.enabled) text = `No SPRT decision: ${S.message || 'the match ended first'} (LLR ${signed(S.llr, 2)} of ${fmt(S.lower, 2)} … ${fmt(S.upper, 2)}).`;
+  if (text) {
+    v.hidden = false;
+    v.className = 'verdict' + (S.verdict ? ' ' + S.verdict.toLowerCase() : '');
+    v.replaceChildren(h('span', { className: 'icon', textContent: icon }), h('span', { textContent: text }));
+  }
+}
+$('#footer').textContent = `Made by Board on ${new Date().toLocaleString()}. Engine 1 is ${N1} (tested), engine 2 is ${N2} (base); results are from ${N1}'s side.`;
+
+// Tabs, theme.
+for (const b of document.querySelectorAll('#tabs [data-view]')) {
+  b.onclick = () => showView(b.dataset.view);
+}
+function showView(name) {
+  for (const b of document.querySelectorAll('#tabs [data-view]')) b.setAttribute('aria-selected', b.dataset.view === name);
+  for (const sec of document.querySelectorAll('main > section')) sec.hidden = sec.dataset.view !== name;
+  render(name);
+  history.replaceState(null, '', '#' + name);
+}
+$('#theme-toggle').onclick = () => {
+  const dark = document.documentElement.dataset.theme
+    ? document.documentElement.dataset.theme === 'dark'
+    : matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.dataset.theme = dark ? 'light' : 'dark';
+  rendered.clear();
+  const v = current();
+  if (v === 'games') { rendered.add('games'); drawGames(); if (viewer) drawViewer(); } else render(v);
+};
+// Charts are drawn at the width of their card, so text keeps its size.
+const cw = (sel) => Math.max(320, Math.floor($(sel).clientWidth || 760));
+let lastWidth = innerWidth;
+addEventListener('resize', () => {
+  clearTimeout(window.__rz);
+  window.__rz = setTimeout(() => {
+    if (innerWidth === lastWidth) return;
+    lastWidth = innerWidth;
+    rendered.clear();
+    const v = current();
+    if (v === 'games') { rendered.add('games'); if (viewer) drawViewerCharts(); } else render(v);
+  }, 200);
+});
+const current = () => document.querySelector('#tabs [aria-selected="true"]').dataset.view;
+const rendered = new Set();
+function render(name) {
+  if (rendered.has(name)) return;
+  rendered.add(name);
+  ({ summary: renderSummary, progress: renderProgress, engines: renderEngines, openings: renderOpenings, games: renderGames })[name]();
+}
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+function tile(label, value, note) {
+  return h('div', { className: 'tile' }, [h('div', { className: 'label', textContent: label }), h('div', { className: 'value', textContent: value }),
+    note ? h('div', { className: 'note', textContent: note }) : null]);
+}
+
+function categorize(reason) {
+  const r = reason.toLowerCase();
+  if (r.includes('checkmate')) return 'Checkmate';
+  if (r.includes('adjudication: move limit')) return 'Move limit';
+  if (r.includes('draw by adjudication')) return 'Adjudicated draw';
+  if (r.includes('wins by adjudication')) return 'Adjudicated win';
+  if (r.includes('repetition')) return 'Repetition';
+  if (r.includes('fifty')) return 'Fifty-move rule';
+  if (r.includes('stalemate')) return 'Stalemate';
+  if (r.includes('insufficient')) return 'Insufficient material';
+  if (r.includes('time') || r.includes('too long')) return 'Time forfeit';
+  if (r.includes('crash') || r.includes('did not start')) return 'Engine crash';
+  if (r.includes('illegal')) return 'Illegal move';
+  return 'Other';
+}
+
+function renderSummary() {
+  const st = S.stats;
+  const tiles = [
+    tile('Games', int(S.games), S.total ? `of ${int(S.total)} planned` : 'until the SPRT decides'),
+    tile(`${N1}: W – L – D`, `${st.Wins} – ${st.Losses} – ${st.Draws}`, `score ${pct(S.score)}`),
+    tile('Elo difference', `${signed(S.elo)} ± ${fmt(S.eloMargin)}`, '95% confidence, logistic'),
+    tile('Likelihood of superiority', pct(S.los), `${N1} stronger than ${N2}`),
+    tile('Draw rate', pct(S.drawRatio)),
+  ];
+  if (C.sprt.enabled) tiles.push(tile('LLR', signed(S.llr, 2), `bounds ${fmt(S.lower, 2)} … ${fmt(S.upper, 2)}`));
+  tiles.push(tile('Pairs', int(st.Penta.reduce((a, b) => a + b, 0)), 'same opening, colours swapped'));
+  if (S.timeLosses[0] + S.timeLosses[1] + S.crashes[0] + S.crashes[1]) {
+    tiles.push(tile('Time losses / crashes', `${S.timeLosses[0] + S.timeLosses[1]} / ${S.crashes[0] + S.crashes[1]}`,
+      `${N1}: ${S.timeLosses[0]} / ${S.crashes[0]} · ${N2}: ${S.timeLosses[1]} / ${S.crashes[1]}`));
+  }
+  $('#tiles').replaceChildren(...tiles);
+
+  // Pentanomial.
+  const pentaLabels = ['0', '½', '1', '1½', '2'];
+  $('#penta-desc').textContent = `Pairs by ${N1}'s points out of 2. Lost pairs on the left, won on the right.`;
+  const color = (i) => (i < 2 ? css('--e2') : i > 2 ? css('--e1') : css('--draw'));
+  const pentaNames = [`${N2} won both`, `${N2} won one, one draw`, 'Even (two draws, or a win each)', `${N1} won one, one draw`, `${N1} won both`];
+  const total = st.Penta.reduce((a, b) => a + b, 0);
+  withTable($('#chart-penta'), h('div', {}, [
+    legend([[`${N1} ahead`, css('--e1')], ['Even', css('--draw')], [`${N2} ahead`, css('--e2')]]),
+    columnChart(st.Penta.map((v, i) => ({ label: pentaLabels[i], value: v, color: color(i), tipTitle: pentaNames[i], tip: `${int(v)} pairs (${pct(total ? v / total : 0)})` })), { label: 'Pair results', width: cw('#chart-penta') }),
+  ]), ['Points', 'Pairs'], st.Penta.map((v, i) => [pentaLabels[i], int(v)]));
+
+  // Results by colour.
+  const byColor = { white: { w: 0, d: 0, l: 0 }, black: { w: 0, d: 0, l: 0 } };
+  for (const g of games) {
+    const c = byColor[g.firstWhite ? 'white' : 'black'];
+    if (g.points === 1) c.w++; else if (g.points === 0) c.l++; else c.d++;
+  }
+  $('#color-desc').textContent = `${N1}'s results with each colour.`;
+  const rows = [['white', `${N1} as White`], ['black', `${N1} as Black`]].map(([k, label]) => ({
+    label, parts: [
+      { name: `${N1} won`, value: byColor[k].w, color: css('--e1') },
+      { name: 'Draw', value: byColor[k].d, color: css('--draw') },
+      { name: `${N2} won`, value: byColor[k].l, color: css('--e2') },
+    ],
+  }));
+  withTable($('#chart-colors'), h('div', {}, [
+    legend([[`${N1} won`, css('--e1')], ['Draw', css('--draw')], [`${N2} won`, css('--e2')]]),
+    stackedBars(rows, { normalize: true, totalFmt: (row, t) => `${int(t)} games`, width: cw('#chart-colors'), labelWidth: 170 }),
+  ]), ['', `${N1} won`, 'Draw', `${N2} won`], rows.map((r) => [r.label, ...r.parts.map((p) => int(p.value))]));
+
+  // Endings.
+  const ends = new Map();
+  for (const g of games) {
+    const k = categorize(g.reason);
+    const e = ends.get(k) ?? { w: 0, d: 0, l: 0 };
+    if (g.points === 1) e.w++; else if (g.points === 0) e.l++; else e.d++;
+    ends.set(k, e);
+  }
+  const endRows = [...ends.entries()].sort((a, b) => (b[1].w + b[1].d + b[1].l) - (a[1].w + a[1].d + a[1].l)).map(([k, e]) => ({
+    label: k, parts: [
+      { name: `${N1} won`, value: e.w, color: css('--e1') },
+      { name: 'Draw', value: e.d, color: css('--draw') },
+      { name: `${N2} won`, value: e.l, color: css('--e2') },
+    ],
+  }));
+  withTable($('#chart-endings'), h('div', {}, [
+    legend([[`${N1} won`, css('--e1')], ['Draw', css('--draw')], [`${N2} won`, css('--e2')]]),
+    stackedBars(endRows, { label: 'How games ended', width: cw('#chart-endings'), labelWidth: 170 }),
+  ]), ['Ending', `${N1} won`, 'Draw', `${N2} won`], endRows.map((r) => [r.label, ...r.parts.map((p) => int(p.value))]));
+
+  // Settings.
+  const tc = C.timeControl;
+  const adj = C.adjudication;
+  const ops = C.openings;
+  const engineLine = (e) => [e.name, e.args?.length ? `command line: ${e.args.join(' ')}` : '',
+    Object.keys(e.options ?? {}).length ? 'options: ' + Object.entries(e.options).map(([k, v]) => `${k}=${v}`).join(', ') : ''].filter(Boolean).join(' · ');
+  const rowsSet = [
+    ['Engine 1 (tested)', engineLine(C.engines[0])],
+    ['Engine 2 (base)', engineLine(C.engines[1])],
+    ['Time control', tc.nodes ? `${int(tc.nodes)} nodes per move` : tc.moveTimeMs ? `${tc.moveTimeMs / 1000}s per move` : `${tc.baseMs / 1000}s + ${tc.incMs / 1000}s`],
+    ['Games', C.games ? int(C.games) : 'until the SPRT decides'],
+    ['Games at once', C.concurrency],
+    ['Openings', `${{ book: 'built-in book', file: ops.path?.split(/[\\/]/).pop() ?? 'file', start: 'start position' }[ops.source || 'book']}${ops.source !== 'start' ? `, ${ops.order === 'sequential' ? 'in order' : 'random order'}${ops.plies ? `, up to ${ops.plies} plies` : ''}` : ''} (${int(S.openings)} available)`],
+    ['SPRT', C.sprt.enabled ? `Elo0 ${C.sprt.elo0}, Elo1 ${C.sprt.elo1}, α ${C.sprt.alpha}, β ${C.sprt.beta} (pentanomial, logistic Elo)` : 'off'],
+    ['Adjudication', [adj.draw ? `draw from move ${adj.drawMoveNumber} after ${adj.drawMoves} moves each within ±${adj.drawScore} cp` : null,
+      adj.resign ? `win after ${adj.resignMoves} moves each with both at ${adj.resignScore} cp` : null,
+      adj.maxMoves ? `draw at move ${adj.maxMoves}` : null].filter(Boolean).join('; ') || 'none'],
+    ['Started', started.toLocaleString()],
+    ['Ended', ended ? ended.toLocaleString() : 'still running'],
+    ['Games file', S.pgnPath || 'not saved'],
+  ];
+  $('#settings').replaceChildren(...rowsSet.flatMap(([k, v]) => [h('dt', { textContent: k }), h('dd', { textContent: String(v) })]));
+}
+
+// ---------------------------------------------------------------------------
+// Progress
+// ---------------------------------------------------------------------------
+function renderProgress() {
+  const P = R.pairs;
+  if (C.sprt.enabled) {
+    $('#llr-desc').textContent = `After each pair. The test accepts H1 (${N1} is ${C.sprt.elo1} Elo stronger) at ${fmt(S.upper, 2)} and H0 (${C.sprt.elo0} Elo) at ${fmt(S.lower, 2)}.`;
+    withTable($('#chart-llr'), lineChart({
+      series: [{ name: 'LLR', color: css('--e1'), points: P.map((p) => [p.games, p.llr]) }],
+      hlines: [{ y: S.upper, label: 'H1' }, { y: S.lower, label: 'H0' }, { y: 0, color: css('--grid') }],
+      xName: 'Games', xLabel: 'games', yFmt: (v) => fmt(v, 2), label: 'LLR by games', endLabels: true, width: cw('#chart-llr'),
+    }), ['Games', 'LLR'], P.map((p) => [int(p.games), fmt(p.llr, 3)]));
+  } else {
+    $('#chart-llr').closest('.card').hidden = true;
+  }
+  $('#elo-desc').textContent = `${N1} against ${N2} after each pair, with its 95% confidence band.`;
+  const eloPts = P.filter((p) => Number.isFinite(p.elo) && Math.abs(p.elo) < 2000);
+  withTable($('#chart-elo'), lineChart({
+    series: [{ name: 'Elo', color: css('--e1'), wash: css('--e1-wash'), points: eloPts.map((p) => [p.games, p.elo]),
+      band: eloPts.filter((p) => Math.abs(p.margin) < 1000).map((p) => [p.games, p.elo - p.margin, p.elo + p.margin]) }],
+    hlines: [{ y: 0, color: css('--text-muted') }].concat(C.sprt.enabled ? [{ y: C.sprt.elo1, label: `Elo1 ${C.sprt.elo1}`, color: css('--grid') }] : []),
+    xName: 'Games', xLabel: 'games', yFmt: (v) => signed(v, 1), label: 'Elo by games', endLabels: true, width: cw('#chart-elo'),
+    tipFmt: (sr, p) => {
+      const pp = eloPts.find((q) => q.games === p[0]);
+      return `Elo ${signed(p[1])} ± ${fmt(pp?.margin)}`;
+    },
+  }), ['Games', 'Elo', '±'], eloPts.map((p) => [int(p.games), signed(p.elo), fmt(p.margin)]));
+  $('#score-desc').textContent = `${N1}'s score so far, in percent.`;
+  withTable($('#chart-score'), lineChart({
+    series: [{ name: 'Score', color: css('--e1'), points: P.map((p) => [p.games, p.score * 100]) }],
+    hlines: [{ y: 50, color: css('--text-muted'), label: '50%' }],
+    xName: 'Games', xLabel: 'games', yFmt: (v) => `${fmt(v, 1)}%`, label: 'Score by games', height: 200, width: cw('#chart-score'),
+  }), ['Games', 'Score %'], P.map((p) => [int(p.games), fmt(p.score * 100, 2)]));
+}
+
+// ---------------------------------------------------------------------------
+// Engines
+// ---------------------------------------------------------------------------
+function renderEngines() {
+  const agg = [0, 1].map((i) => {
+    let moves = 0, time = 0, dsum = 0, dn = 0;
+    for (const g of games) { moves += g.engineMoves[i]; time += g.engineTimeMs[i]; dsum += g.depthSum[i]; dn += g.depthN[i]; }
+    return { moves, time, depth: dn ? dsum / dn : NaN };
+  });
+  const avgLen = games.length ? games.reduce((a, g) => a + g.plies, 0) / games.length / 2 : NaN;
+  const avgDur = games.length ? games.reduce((a, g) => a + g.durationMs, 0) / games.length / 1000 : NaN;
+  const tiles = [];
+  [N1, N2].forEach((name, i) => {
+    tiles.push(tile(`${name}: time per move`, agg[i].moves ? `${fmt(agg[i].time / agg[i].moves / 1000, 3)}s` : '–', `${int(agg[i].moves)} moves`));
+    tiles.push(tile(`${name}: average depth`, fmt(agg[i].depth, 1), `${S.timeLosses[i]} time losses, ${S.crashes[i]} crashes`));
+  });
+  tiles.push(tile('Average game', `${fmt(avgLen, 0)} moves`, `${fmt(avgDur, 1)}s each`));
+  $('#engine-tiles').replaceChildren(...tiles);
+
+  // By move number, from the games with move data.
+  const byMove = [0, 1].map(() => new Map());
+  let detailed = 0;
+  for (const g of games) {
+    if (!g.data) continue;
+    detailed++;
+    const whiteFirst = !g.startFen || g.startFen.split(' ')[1] !== 'b';
+    for (let i = g.bookPlies; i < g.data.times.length; i++) {
+      const whiteMoved = (i % 2 === 0) === whiteFirst;
+      const engine = whiteMoved === g.firstWhite ? 0 : 1;
+      const mv = Math.floor(i / 2) + 1;
+      const m = byMove[engine].get(mv) ?? { t: 0, n: 0, d: 0, dn: 0 };
+      m.t += g.data.times[i]; m.n++;
+      if (g.data.depths[i] > 0) { m.d += g.data.depths[i]; m.dn++; }
+      byMove[engine].set(mv, m);
+    }
+  }
+  const series = (fn, keep) => [0, 1].map((i) => ({
+    name: [N1, N2][i], color: [css('--e1'), css('--e2')][i],
+    points: [...byMove[i].entries()].filter(([, m]) => keep(m)).sort((a, b) => a[0] - b[0]).map(([mv, m]) => [mv, fn(m)]),
+  }));
+  const note = detailed < games.length ? ` From the last ${int(detailed)} games.` : '';
+  $('#time-desc').textContent = `Average seconds per move, by move number (moves made by fewer than 5 games left out).${note}`;
+  const tSeries = series((m) => m.t / m.n / 1000, (m) => m.n >= 5);
+  withTable($('#chart-time'), h('div', {}, [
+    legend([[N1, css('--e1'), true], [N2, css('--e2'), true]]),
+    lineChart({ series: tSeries, xName: 'Move', xLabel: 'move', yFmt: (v) => `${fmt(v, 2)}s`, zero: true, label: 'Time per move', right: 16, width: cw('#chart-time'),
+      tipFmt: (sr, p) => `${sr.name}: ${fmt(p[1], 3)}s` }),
+  ]), ['Move', `${N1} (s)`, `${N2} (s)`], mergeRows(tSeries, (v) => fmt(v, 3)));
+  $('#depth-desc').textContent = `Average depth reported for the chosen move, by move number.${note}`;
+  const dSeries = series((m) => m.d / m.dn, (m) => m.dn >= 5);
+  withTable($('#chart-depth'), h('div', {}, [
+    legend([[N1, css('--e1'), true], [N2, css('--e2'), true]]),
+    lineChart({ series: dSeries, xName: 'Move', xLabel: 'move', yFmt: (v) => fmt(v, 1), label: 'Depth', right: 16, width: cw('#chart-depth'),
+      tipFmt: (sr, p) => `${sr.name}: depth ${fmt(p[1], 1)}` }),
+  ]), ['Move', N1, N2], mergeRows(dSeries, (v) => fmt(v, 1)));
+
+  // Game length histogram, 10-move buckets.
+  const buckets = new Map();
+  for (const g of games) {
+    const b = Math.floor(Math.ceil(g.plies / 2) / 10) * 10;
+    buckets.set(b, (buckets.get(b) ?? 0) + 1);
+  }
+  const maxB = Math.max(0, ...buckets.keys());
+  const bars = [];
+  for (let b = 0; b <= maxB; b += 10) bars.push({ label: `${b}`, tipTitle: `${b}–${b + 9} moves`, value: buckets.get(b) ?? 0, color: css('--e1'), tip: `${int(buckets.get(b) ?? 0)} games` });
+  withTable($('#chart-length'), columnChart(bars, { label: 'Game length', labelValues: bars.length <= 12, width: cw('#chart-length'), height: 210 }),
+    ['Moves', 'Games'], bars.map((b) => [b.tipTitle, int(b.value)]));
+}
+
+function mergeRows(series, f) {
+  const keys = [...new Set(series.flatMap((sr) => sr.points.map((p) => p[0])))].sort((a, b) => a - b);
+  const maps = series.map((sr) => new Map(sr.points));
+  return keys.map((k) => [String(k), ...maps.map((m) => (m.has(k) ? f(m.get(k)) : '–'))]);
+}
+
+// ---------------------------------------------------------------------------
+// Openings
+// ---------------------------------------------------------------------------
+function renderOpenings() {
+  const map = new Map();
+  for (const g of games) {
+    const k = g.opening || '(unnamed position)';
+    const o = map.get(k) ?? { name: k, games: 0, points: 0, w: 0, d: 0, l: 0, nums: [] };
+    o.games++; o.points += g.points; o.nums.push(g.number);
+    if (g.points === 1) o.w++; else if (g.points === 0) o.l++; else o.d++;
+    map.set(k, o);
+  }
+  const list = [...map.values()];
+  $('#openings-desc').textContent = `${int(list.length)} openings. Score is ${N1}'s; each opening is played from both sides, so a score far from 50% means one engine handled it better.`;
+  let sortKey = 'games', dir = -1;
+  const cols = [['name', 'Opening'], ['games', 'Games'], ['w', `${N1} won`], ['d', 'Draws'], ['l', `${N2} won`], ['score', 'Score']];
+  const draw = () => {
+    const f = $('#op-filter').value.trim().toLowerCase();
+    const rows = list.filter((o) => !f || o.name.toLowerCase().includes(f))
+      .map((o) => ({ ...o, score: o.points / o.games }))
+      .sort((a, b) => (a[sortKey] < b[sortKey] ? -dir : a[sortKey] > b[sortKey] ? dir : 0));
+    $('#op-count').textContent = `${int(rows.length)} shown`;
+    $('#op-table').replaceChildren(
+      h('thead', {}, h('tr', {}, cols.map(([k, label], i) => {
+        const th = h('th', { className: i ? 'num' : '', textContent: label + (sortKey === k ? (dir > 0 ? ' ▲' : ' ▼') : '') });
+        th.onclick = () => { if (sortKey === k) dir = -dir; else { sortKey = k; dir = k === 'name' ? 1 : -1; } draw(); };
+        return th;
+      }))),
+      h('tbody', {}, rows.slice(0, 1000).map((o) => {
+        const tr = h('tr', { className: 'clickable', title: 'Show these games' }, [
+          h('td', { className: 'wrap', textContent: o.name }), h('td', { className: 'num', textContent: int(o.games) }),
+          h('td', { className: 'num', textContent: int(o.w) }), h('td', { className: 'num', textContent: int(o.d) }),
+          h('td', { className: 'num', textContent: int(o.l) }), h('td', { className: 'num', textContent: pct(o.score, 0) }),
+        ]);
+        tr.onclick = () => { showView('games'); $('#g-filter').value = o.name; gamesPage = 0; drawGames(); };
+        return tr;
+      })),
+    );
+  };
+  $('#op-filter').oninput = draw;
+  draw();
+}
+
+// ---------------------------------------------------------------------------
+// Games
+// ---------------------------------------------------------------------------
+let gamesPage = 0;
+const PAGE = 200;
+let gamesSort = { key: 'number', dir: 1 };
+let selected = null;
+
+function renderGames() {
+  $('#games-desc').textContent = R.detailed < games.length
+    ? `${int(games.length)} games. The last ${int(R.detailed)} can be replayed here; all are in the games file.`
+    : `${int(games.length)} games. Click a game to replay it with each engine's evaluation and time.`;
+  $('#g-filter').oninput = () => { gamesPage = 0; drawGames(); };
+  $('#g-result').onchange = () => { gamesPage = 0; drawGames(); };
+  $('#g-prevpage').onclick = () => { gamesPage--; drawGames(); };
+  $('#g-nextpage').onclick = () => { gamesPage++; drawGames(); };
+  drawGames();
+}
+
+function filteredGames() {
+  const f = $('#g-filter').value.trim().toLowerCase();
+  const res = $('#g-result').value;
+  const k = gamesSort.key, d = gamesSort.dir;
+  return games.filter((g) => (res === '' || String(g.points) === res)
+    && (!f || `${g.white} ${g.black} ${g.reason} ${g.opening} ${g.result}`.toLowerCase().includes(f)))
+    .sort((a, b) => (a[k] < b[k] ? -d : a[k] > b[k] ? d : 0));
+}
+
+function drawGames() {
+  const list = filteredGames();
+  const pages = Math.max(1, Math.ceil(list.length / PAGE));
+  gamesPage = Math.min(Math.max(0, gamesPage), pages - 1);
+  $('#g-count').textContent = `${int(list.length)} games`;
+  $('#g-page').textContent = `Page ${gamesPage + 1} of ${pages}`;
+  $('#g-prevpage').disabled = gamesPage === 0;
+  $('#g-nextpage').disabled = gamesPage >= pages - 1;
+  const cols = [['number', '#'], ['pair', 'Pair'], ['white', 'White'], ['black', 'Black'], ['result', 'Result'], ['reason', 'Ending'], ['plies', 'Moves'], ['durationMs', 'Time'], ['opening', 'Opening']];
+  const winColor = (g) => (g.points === 1 ? css('--e1') : g.points === 0 ? css('--e2') : css('--draw'));
+  $('#g-table').replaceChildren(
+    h('thead', {}, h('tr', {}, cols.map(([k, label]) => {
+      const th = h('th', { className: ['number', 'pair', 'plies', 'durationMs'].includes(k) ? 'num' : '', textContent: label + (gamesSort.key === k ? (gamesSort.dir > 0 ? ' ▲' : ' ▼') : '') });
+      th.onclick = () => { gamesSort = gamesSort.key === k ? { key: k, dir: -gamesSort.dir } : { key: k, dir: 1 }; drawGames(); };
+      return th;
+    }))),
+    h('tbody', {}, list.slice(gamesPage * PAGE, (gamesPage + 1) * PAGE).map((g) => {
+      const tr = h('tr', { className: (g.san ? 'clickable' : '') + (selected === g ? ' sel' : '') }, [
+        h('td', { className: 'num', textContent: g.number }), h('td', { className: 'num', textContent: g.pair }),
+        h('td', { textContent: g.white }), h('td', { textContent: g.black }),
+        h('td', {}, [h('i', { className: 'dot', style: { background: winColor(g) }, title: g.points === 1 ? `${N1} won` : g.points === 0 ? `${N2} won` : 'Draw' }), g.result]),
+        h('td', { textContent: g.reason }), h('td', { className: 'num', textContent: Math.ceil(g.plies / 2) }),
+        h('td', { className: 'num', textContent: `${fmt(g.durationMs / 1000, 1)}s` }), h('td', { className: 'wrap', textContent: g.opening }),
+      ]);
+      if (g.san) tr.onclick = () => openGame(g);
+      return tr;
+    })),
+  );
+}
+
+// --- the game viewer ---
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+const NAMES = { k: 'king', q: 'queen', r: 'rook', b: 'bishop', n: 'knight', p: 'pawn' };
+const GLYPH = { K: '♔', Q: '♕', R: '♖', B: '♗', N: '♘', P: '♙', k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟' };
+function parseFen(fen) {
+  const rows = fen.split(' ')[0].split('/');
+  const board = [];
+  for (const row of rows) {
+    const r = [];
+    for (const ch of row) { if (/\d/.test(ch)) for (let i = 0; i < +ch; i++) r.push(null); else r.push(ch); }
+    board.push(r);
+  }
+  return { board, turn: fen.split(' ')[1] || 'w' };
+}
+// Apply a UCI move to a board array (castling, en passant and promotion).
+function applyUci(pos, uci) {
+  const b = pos.board.map((r) => r.slice());
+  const f = { x: uci.charCodeAt(0) - 97, y: 8 - +uci[1] };
+  const t = { x: uci.charCodeAt(2) - 97, y: 8 - +uci[3] };
+  const piece = b[f.y][f.x];
+  b[f.y][f.x] = null;
+  if (piece && piece.toLowerCase() === 'p' && f.x !== t.x && !b[t.y][t.x]) b[f.y][t.x] = null; // en passant
+  if (piece && piece.toLowerCase() === 'k' && Math.abs(t.x - f.x) === 2) { // castling
+    const rookFrom = t.x > f.x ? 7 : 0, rookTo = t.x > f.x ? 5 : 3;
+    b[f.y][rookTo] = b[f.y][rookFrom]; b[f.y][rookFrom] = null;
+  }
+  b[t.y][t.x] = uci.length > 4 ? (piece === piece.toUpperCase() ? uci[4].toUpperCase() : uci[4]) : piece;
+  return { board: b, turn: pos.turn === 'w' ? 'b' : 'w' };
+}
+
+let viewer = null;
+function openGame(g) {
+  selected = g;
+  drawGames();
+  const positions = [parseFen(g.startFen || START_FEN)];
+  for (const u of g.uci) positions.push(applyUci(positions[positions.length - 1], u));
+  viewer = { g, positions, ply: g.uci.length };
+  $('#viewer-card').hidden = false;
+  $('#v-head').replaceChildren(document.createTextNode(`#${g.number} · ${g.white} – ${g.black} · ${g.result} `), h('span', { className: 'r', textContent: `${g.reason}${g.opening ? ' · ' + g.opening : ''}` }));
+  drawViewerCharts();
+  drawViewer();
+  $('#viewer-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function drawViewerCharts() {
+  const g = viewer.g;
+  const whiteFirst = !g.startFen || g.startFen.split(' ')[1] !== 'b';
+  const engineOf = (i) => (((i % 2 === 0) === whiteFirst) === g.firstWhite ? 0 : 1);
+  const ev = [[], []], tm = [[], []];
+  for (let i = g.bookPlies; i < g.data.evals.length; i++) {
+    const e = engineOf(i);
+    const v = g.data.evals[i];
+    if (v !== NO_EVAL) ev[e].push([i + 1, Math.max(-10, Math.min(10, v / 100))]);
+    tm[e].push([i + 1, g.data.times[i] / 1000]);
+  }
+  const names = [N1, N2], colors = [css('--e1'), css('--e2')];
+  const moveName = (ply) => `${Math.ceil(ply / 2)}${ply % 2 === (whiteFirst ? 1 : 0) ? '.' : '…'} ${g.san[ply - 1] ?? ''}`;
+  $('#chart-v-eval').replaceChildren(legend([[N1, colors[0], true], [N2, colors[1], true]]), lineChart({
+    series: [0, 1].map((i) => ({ name: names[i], color: colors[i], points: ev[i] })),
+    hlines: [{ y: 0, color: css('--text-muted') }], yMin: -10, yMax: 10, height: 200, right: 16,
+    xName: 'Ply', xFmt: (x) => String(Math.ceil(x / 2)), xLabel: 'move', yFmt: (v) => signed(v, 1),
+    tipTitle: (x) => moveName(x), tipFmt: (sr, p) => `${sr.name}: ${signed(p[1], 2)}`,
+    onClick: (x) => { viewer.ply = Math.max(0, Math.min(g.uci.length, Math.round(x))); drawViewer(); },
+    marker: viewer.ply, label: 'Evaluation', width: cw('#chart-v-eval'),
+  }));
+  $('#chart-v-time').replaceChildren(lineChart({
+    series: [0, 1].map((i) => ({ name: names[i], color: colors[i], points: tm[i] })), height: 150, zero: true, right: 16,
+    xName: 'Ply', xFmt: (x) => String(Math.ceil(x / 2)), xLabel: 'move', yFmt: (v) => `${fmt(v, 2)}s`,
+    tipTitle: (x) => moveName(x), tipFmt: (sr, p) => `${sr.name}: ${fmt(p[1], 3)}s`,
+    onClick: (x) => { viewer.ply = Math.max(0, Math.min(g.uci.length, Math.round(x))); drawViewer(); },
+    marker: viewer.ply, label: 'Time per move', width: cw('#chart-v-time'),
+  }));
+}
+
+function drawViewer() {
+  const { g, positions, ply } = viewer;
+  const pos = positions[ply];
+  const last = ply > 0 ? g.uci[ply - 1] : null;
+  const lastSq = last ? [last.slice(0, 2), last.slice(2, 4)] : [];
+  const cells = [];
+  for (let y = 0; y < 8; y++) {
+    for (let x = 0; x < 8; x++) {
+      const sq = String.fromCharCode(97 + x) + (8 - y);
+      const cell = h('div', { className: ((x + y) % 2 ? 'd' : 'l') + (lastSq.includes(sq) ? ' last' : '') });
+      const p = pos.board[y][x];
+      if (p) {
+        const key = `${p === p.toUpperCase() ? 'white' : 'black'}-${NAMES[p.toLowerCase()]}`;
+        if (PIECES[key]) cell.append(h('img', { src: PIECES[key], alt: key.replace('-', ' ') }));
+        else cell.append(h('span', { className: 'glyph', textContent: GLYPH[p] }));
+      }
+      cells.push(cell);
+    }
+  }
+  $('#v-board').replaceChildren(...cells);
+  $('#v-ply').textContent = ply ? `move ${Math.ceil(ply / 2)}` : 'start';
+  const whiteFirst = !g.startFen || g.startFen.split(' ')[1] !== 'b';
+  const moves = [];
+  g.san.forEach((m, i) => {
+    const isWhite = (i % 2 === 0) === whiteFirst;
+    if (isWhite || i === 0) moves.push(h('span', { className: 'no', textContent: `${Math.floor(i / 2) + 1}${isWhite ? '.' : '…'}` }));
+    const span = h('span', { className: 'mv' + (i < g.bookPlies ? ' book' : '') + (i + 1 === ply ? ' cur' : ''), textContent: m,
+      title: i < g.bookPlies ? 'Opening (book) move' : evalTitle(g, i) });
+    span.onclick = () => { viewer.ply = i + 1; drawViewer(); };
+    moves.push(span);
+  });
+  $('#v-moves').replaceChildren(...moves);
+  $('#v-moves .cur')?.scrollIntoView({ block: 'nearest' });
+  drawViewerCharts();
+}
+
+function evalTitle(g, i) {
+  const v = g.data.evals[i];
+  const e = v === NO_EVAL ? 'no evaluation' : Math.abs(v) >= 9000 ? `mate (${v > 0 ? 'White' : 'Black'})` : signed(v / 100, 2);
+  return `${e} · depth ${g.data.depths[i] || '–'} · ${fmt(g.data.times[i] / 1000, 3)}s`;
+}
+
+$('#v-first').onclick = () => { viewer.ply = 0; drawViewer(); };
+$('#v-prev').onclick = () => { viewer.ply = Math.max(0, viewer.ply - 1); drawViewer(); };
+$('#v-next').onclick = () => { viewer.ply = Math.min(viewer.g.uci.length, viewer.ply + 1); drawViewer(); };
+$('#v-last').onclick = () => { viewer.ply = viewer.g.uci.length; drawViewer(); };
+document.addEventListener('keydown', (e) => {
+  if (!viewer || current() !== 'games' || e.target.closest('input, select')) return;
+  const map = { ArrowLeft: '#v-prev', ArrowRight: '#v-next', Home: '#v-first', End: '#v-last' };
+  if (map[e.key]) { e.preventDefault(); $(map[e.key]).click(); }
+});
+
+// ---------------------------------------------------------------------------
+// Saving: in Board's report window through the app; in a browser, as a
+// download (and PDF through the browser's print dialog).
+// ---------------------------------------------------------------------------
+function renderAll() {
+  const keep = current();
+  for (const v of ['summary', 'progress', 'engines', 'openings', 'games']) {
+    for (const sec of document.querySelectorAll('main > section')) sec.hidden = sec.dataset.view !== v;
+    render(v);
+  }
+  for (const sec of document.querySelectorAll('main > section')) sec.hidden = sec.dataset.view !== keep;
+}
+function savedNote(file) {
+  const box = $('#saved');
+  if (!file) return;
+  box.hidden = false;
+  box.replaceChildren('Saved ');
+  const a = h('a', { href: '#', textContent: file.split(/[\\/]/).pop(), title: 'Show in folder' });
+  a.onclick = (e) => { e.preventDefault(); window.reportApi?.show(file); };
+  box.append(a);
+}
+async function saveHtml() {
+  if (window.reportApi) {
+    try { savedNote(await window.reportApi.save()); } catch (err) { alertNote(err); }
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([ORIGINAL], { type: 'text/html' }));
+  const a = h('a', { href: url, download: `${N1} vs ${N2} report.html`.replace(/[\\/:*?"<>|]+/g, ' ') });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+async function savePdf() {
+  renderAll();
+  if (window.reportApi) {
+    try { savedNote(await window.reportApi.pdf()); } catch (err) { alertNote(err); }
+    return;
+  }
+  window.print();
+}
+function alertNote(err) {
+  const box = $('#saved');
+  box.hidden = false;
+  box.textContent = `Could not save: ${String(err?.message ?? err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')}`;
+}
+$('#save-html').onclick = saveHtml;
+$('#save-pdf').onclick = savePdf;
+addEventListener('beforeprint', renderAll);
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveHtml(); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p' && window.reportApi) { e.preventDefault(); savePdf(); }
+});
+
+showView(['summary', 'progress', 'engines', 'openings', 'games'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'summary');
+</script>
+</body>
+</html>

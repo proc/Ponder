@@ -1,0 +1,15 @@
+{
+  "name": "board",
+  "version": "0.1.0",
+  "description": "A chess GUI for UCI engines, built with Electron and Go",
+  "main": "app/main.js",
+  "private": true,
+  "scripts": {
+    "build:backend": "node scripts/build-backend.js",
+    "start": "npm run build:backend && electron .",
+    "test": "cd backend && go test ./..."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}
