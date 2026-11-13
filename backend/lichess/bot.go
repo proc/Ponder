@@ -33,6 +33,48 @@ type Policy struct {
 	MinMinutes float64 `json:"minMinutes"`
 	MaxMinutes float64 `json:"maxMinutes"` // 0: no limit
 	MaxGames   int     `json:"maxGames"`   // games at once
+	// Speeds turned off (ultraBullet, bullet, blitz, rapid, classical: false);
+	// a speed not named is accepted.
+	Speeds map[string]bool `json:"speeds,omitempty"`
+	// The increment, in seconds (max 0: no limit).
+	MinIncrement int `json:"minIncrement,omitempty"`
+	MaxIncrement int `json:"maxIncrement,omitempty"`
+	// The challenger's rating (0: no limit).
+	MinRating int `json:"minRating,omitempty"`
+	MaxRating int `json:"maxRating,omitempty"`
+	// Decline games that start from a set-up position.
+	NoFromPosition bool `json:"noFromPosition,omitempty"`
+}
+
+// Speeds are Lichess's speeds with a clock, fastest first.
+var Speeds = []string{"ultraBullet", "bullet", "blitz", "rapid", "classical"}
+
+// speedReason is why a challenge at speed is declined, or "" when the speed
+// is accepted: too fast or too slow when every accepted speed is on one
+// side of it.
+func (p Policy) speedReason(speed string) string {
+	if on, named := p.Speeds[speed]; !named || on {
+		return ""
+	}
+	at, first, last := -1, -1, -1
+	for i, sp := range Speeds {
+		if sp == speed {
+			at = i
+		}
+		if on, named := p.Speeds[sp]; !named || on {
+			if first < 0 {
+				first = i
+			}
+			last = i
+		}
+	}
+	switch {
+	case first >= 0 && at < first:
+		return "tooFast"
+	case last >= 0 && at > last:
+		return "tooSlow"
+	}
+	return "timeControl"
 }
 
 type Config struct {
@@ -40,6 +82,14 @@ type Config struct {
 	Token   string       `json:"token"`
 	Engine  EngineConfig `json:"engine"`
 	Policy  Policy       `json:"policy"`
+	// What the engine says in the chat of the games it plays.
+	Greeting Greeting `json:"greeting"`
+	// Ponder lets the engine think on its opponent's time, when it can.
+	Ponder bool `json:"ponder"`
+	// When the engine offers or accepts a draw.
+	Draw DrawOffer `json:"draw"`
+	// The endgame tablebase asked about drawn positions ("": Lichess's).
+	TablebaseURL string `json:"tablebaseUrl"`
 }
 
 // ChallengeView and GameView describe challenges and games to the UI.
@@ -128,10 +178,14 @@ type Bot struct {
 	answered map[string]string
 	waiters  map[string]chan string
 	seek     *seeker
+	sending  bool // a challenge request is on its way
+	// Challenges accepted whose games have not started yet, and when: they
+	// already take a place under the limit of games at once.
+	accepted map[string]time.Time
 }
 
 func NewBot(h Hooks) *Bot {
-	return &Bot{hooks: h, state: "off", expect: map[string]bool{}, answered: map[string]string{}, waiters: map[string]chan string{}, incoming: map[string]*Challenge{}, outgoing: map[string]*Challenge{}, games: map[string]*runner{}}
+	return &Bot{hooks: h, state: "off", expect: map[string]bool{}, answered: map[string]string{}, waiters: map[string]chan string{}, incoming: map[string]*Challenge{}, outgoing: map[string]*Challenge{}, games: map[string]*runner{}, accepted: map[string]time.Time{}}
 }
 
 // Connect checks the token and account, then follows the event stream.
@@ -199,11 +253,12 @@ func (b *Bot) UpgradeToBot() (Status, error) {
 	return b.Connect(cfg)
 }
 
-// Configure changes the engine and challenge policy without reconnecting.
+// Configure changes the engine, challenge policy and chat messages without
+// reconnecting.
 // A new engine is used from the next game.
-func (b *Bot) Configure(engine EngineConfig, policy Policy) {
+func (b *Bot) Configure(engine EngineConfig, policy Policy, greeting Greeting, ponder bool, draw DrawOffer) {
 	b.mu.Lock()
-	b.cfg.Engine, b.cfg.Policy = engine, policy
+	b.cfg.Engine, b.cfg.Policy, b.cfg.Greeting, b.cfg.Ponder, b.cfg.Draw = engine, policy, greeting, ponder, draw
 	b.mu.Unlock()
 	b.emit()
 }
@@ -225,6 +280,7 @@ func (b *Bot) Disconnect(resign bool) {
 	b.state, b.message, b.account = "off", "", nil
 	b.incoming, b.outgoing = map[string]*Challenge{}, map[string]*Challenge{}
 	b.expect = map[string]bool{}
+	b.accepted = map[string]time.Time{}
 	b.autoAccept = false
 	seek := b.seek
 	b.seek = nil
@@ -328,8 +384,12 @@ func (b *Bot) onEvent(ctx context.Context, gen int, e Event) {
 		}
 		if auto {
 			b.expect[ch.ID] = true
+			b.accepted[ch.ID] = time.Now() // it has its place before the next challenge is looked at
 			b.mu.Unlock()
 			if err := b.client.Accept(ctx, ch.ID); err != nil {
+				b.mu.Lock()
+				delete(b.accepted, ch.ID)
+				b.mu.Unlock()
 				b.note(fmt.Sprintf("Could not accept %s's challenge: %v", ch.Challenger.DisplayName(), err))
 			}
 			b.emit()
@@ -339,6 +399,7 @@ func (b *Bot) onEvent(ctx context.Context, gen int, e Event) {
 	case "challengeCanceled", "challengeDeclined":
 		if ch := e.Challenge; ch != nil {
 			delete(b.incoming, ch.ID)
+			delete(b.accepted, ch.ID)
 			reason := ch.DeclineReason
 			if reason == "" {
 				reason = map[string]string{"challengeCanceled": "canceled", "challengeDeclined": "generic"}[e.Type]
@@ -360,6 +421,7 @@ func (b *Bot) onEvent(ctx context.Context, gen int, e Event) {
 			b.answerLocked(id, "accepted")
 			delete(b.incoming, id)
 			delete(b.outgoing, id)
+			delete(b.accepted, id)
 			if r, ok := b.games[id]; ok && !r.finished {
 				break // already playing (the stream resends games on reconnect)
 			}
@@ -387,6 +449,41 @@ func (b *Bot) onEvent(ctx context.Context, gen int, e Event) {
 	b.emit()
 }
 
+// acceptedWait is how long an accepted challenge holds a place while its
+// game has not started (Lichess starts it at once; this is for one that
+// never does).
+const acceptedWait = 30 * time.Second
+
+// committedLocked counts the games the engine is in or about to be in,
+// leaving out challenge id: games being played, challenges accepted whose
+// games are about to start, and the challenge the engine sent that waits
+// for an answer (accepted, it is a game too).
+func (b *Bot) committedLocked(except string) int {
+	n := 0
+	for _, r := range b.games {
+		if !r.finished {
+			n++
+		}
+	}
+	for id, at := range b.accepted {
+		switch {
+		case time.Since(at) > acceptedWait:
+			delete(b.accepted, id)
+		case id != except && b.games[id] == nil:
+			n++
+		}
+	}
+	for id := range b.outgoing {
+		if id != except && b.games[id] == nil {
+			n++
+		}
+	}
+	if b.sending {
+		n++
+	}
+	return n
+}
+
 // declineReason says why a challenge would be declined, or "" to accept it.
 // Without policy, only what the engine cannot play counts.
 func (b *Bot) declineReason(ch *Challenge, policy bool) string {
@@ -402,12 +499,9 @@ func (b *Bot) declineReason(ch *Challenge, policy bool) string {
 	p := b.cfg.Policy
 	minutes := float64(ch.TimeControl.Limit) / 60
 	isBot := ch.Challenger.Title == "BOT"
-	active := 0
-	for _, r := range b.games {
-		if !r.finished {
-			active++
-		}
-	}
+	speedReason := p.speedReason(SpeedOf(ch.TimeControl.Limit, ch.TimeControl.Increment))
+	rating := ch.Challenger.Rating
+	active := b.committedLocked(ch.ID)
 	maxGames := p.MaxGames
 	if maxGames < 1 {
 		maxGames = 1
@@ -421,10 +515,20 @@ func (b *Bot) declineReason(ch *Challenge, policy bool) string {
 		return "casual"
 	case !ch.Rated && !p.Casual:
 		return "rated"
+	case p.NoFromPosition && ch.Variant.Key == "fromPosition":
+		return "standard"
 	case minutes < p.MinMinutes:
 		return "tooFast"
 	case p.MaxMinutes > 0 && minutes > p.MaxMinutes:
 		return "tooSlow"
+	case ch.TimeControl.Increment < p.MinIncrement:
+		return "timeControl"
+	case p.MaxIncrement > 0 && ch.TimeControl.Increment > p.MaxIncrement:
+		return "timeControl"
+	case speedReason != "":
+		return speedReason
+	case rating > 0 && (rating < p.MinRating || p.MaxRating > 0 && rating > p.MaxRating):
+		return "generic"
 	case active >= maxGames:
 		return "later"
 	}
@@ -513,10 +617,12 @@ func (b *Bot) Accept(id string) error {
 	defer cancel()
 	b.mu.Lock()
 	b.expect[id] = true
+	b.accepted[id] = time.Now()
 	b.mu.Unlock()
 	if err := client.Accept(ctx, id); err != nil {
 		b.mu.Lock()
 		delete(b.expect, id)
+		delete(b.accepted, id)
 		b.mu.Unlock()
 		return err
 	}
@@ -560,9 +666,48 @@ func (b *Bot) answerLocked(id, answer string) {
 	}
 }
 
+// Challenge sends one challenge. Only one may wait for an answer at a time,
+// and none while the engine is playing or looking for a random bot.
 func (b *Bot) Challenge(p ChallengeParams) error {
+	b.mu.Lock()
+	busy := b.busyLocked()
+	if busy == "" && b.seek != nil {
+		busy = "Stop the random-bot search before challenging someone yourself."
+	}
+	if busy != "" {
+		b.mu.Unlock()
+		return errors.New(busy)
+	}
+	b.sending = true
+	b.mu.Unlock()
+	defer func() {
+		b.mu.Lock()
+		b.sending = false
+		b.mu.Unlock()
+	}()
 	_, err := b.challenge(p)
 	return err
+}
+
+// busyLocked says why the engine cannot send a new challenge now, or "".
+func (b *Bot) busyLocked() string {
+	if b.sending {
+		return "A challenge is already being sent."
+	}
+	for _, ch := range b.outgoing {
+		return fmt.Sprintf("Your challenge to %s is waiting for an answer. Cancel it to challenge someone else.", ch.DestName())
+	}
+	for _, r := range b.games {
+		if !r.finished {
+			return "Your engine is playing a game. Challenge again when it is over."
+		}
+	}
+	for id, at := range b.accepted {
+		if b.games[id] == nil && time.Since(at) <= acceptedWait {
+			return "Your engine accepted a challenge and its game is about to start."
+		}
+	}
+	return ""
 }
 
 func (b *Bot) challenge(p ChallengeParams) (Challenge, error) {
@@ -656,9 +801,25 @@ func (b *Bot) Watch(id string) error {
 	}
 	b.watching = id
 	v, ok := r.viewLocked()
+	// What the engine thought of the moves it has played, so that the
+	// scores of the whole game show, not only of the moves watched live.
+	var infos []game.EngineInfo
+	for ply := 0; ply <= len(r.moves); ply++ {
+		if in, ok := r.chosen[ply]; ok {
+			infos = append(infos, in)
+		}
+	}
+	if !r.finished && r.thinking == len(r.moves) && r.lastLinePly == len(r.moves) && len(r.lastLine.PV) > 0 {
+		infos = append(infos, r.infoLocked(r.lastLine)) // and of the move it is thinking about
+	}
 	b.mu.Unlock()
 	if ok && b.hooks.Show != nil {
 		b.hooks.Show(v)
+		if b.hooks.Emit != nil {
+			for _, in := range infos {
+				b.hooks.Emit("engineInfo", in)
+			}
+		}
 	}
 	b.emit()
 	return nil
@@ -737,11 +898,12 @@ func (b *Bot) emit() {
 // runner plays one game: it follows the game stream and asks the engine
 // for a move whenever it is the bot's turn. Its fields are guarded by Bot.mu.
 type runner struct {
-	b      *Bot
-	id     string
-	info   *GameInfo
-	ctx    context.Context
-	cancel context.CancelFunc
+	ratingDiff *game.RatingDiff // once a rated game is over
+	b          *Bot
+	id         string
+	info       *GameInfo
+	ctx        context.Context
+	cancel     context.CancelFunc
 
 	color        chess.Color
 	white, black GamePlayer
@@ -764,12 +926,50 @@ type runner struct {
 	// The clock, in seconds, for the PGN.
 	initial, increment int64
 	eng                *uci.Engine
-	thinking           int // ply the engine is searching for, or -1
+	greeted            bool // hello was said (or it was too late to)
+	thinking           int  // ply the engine is searching for, or -1
 	lastInfo           time.Time
+	lastStats          time.Time // when the depth and counts were last sent on their own
+	// The engine's newest search line, and the ply it is for: what the
+	// arrows show once it has chosen its move.
+	lastLine    uci.Info
+	lastLinePly int
+	ponder      string // the reply it named with its move
+	// What the engine made of each position it moved in (its score, depth
+	// and line), by the number of moves played before: shown again when the
+	// game is put on the board later.
+	chosen map[int]game.EngineInfo
+
+	// Pondering: thinking on the opponent's time about the reply the engine
+	// expects. canPonder: it is turned on and the engine offers it.
+	canPonder bool
+	// The reply to ponder on once the engine's move is on the board: after
+	// nextAfter was played as move number nextPly.
+	nextPonder, nextAfter string
+	nextPly               int
+	// The reply being pondered on ("" when not), and how many moves had
+	// been played when it began.
+	pondering  string
+	ponderBase int
+	ponderLine uci.Info // its newest line while pondering
+	// The move number (moves played before it) of the search that began as
+	// a ponder hit, or -1.
+	hitPly int
+	// Answers to ignore: each "stop" of a ponder search that missed is
+	// answered with a bestmove nobody asked for.
+	discard int
+	chat    chatLog
+	// The engine's score (its own side's, centipawns) for each move it
+	// chose, and what the tablebase was asked and said, by move number.
+	scores  []int
+	tbAsked map[int]bool
+	tbDraw  map[int]bool
+	// Moves sent with a draw offer.
+	drawOffers int
 }
 
 func newRunner(b *Bot, id string, info *GameInfo) *runner {
-	r := &runner{b: b, id: id, info: info, thinking: -1}
+	r := &runner{b: b, id: id, info: info, thinking: -1, hitPly: -1}
 	if info.Color == "black" {
 		r.color = chess.Black
 	}
@@ -851,6 +1051,7 @@ func (r *runner) startEngine(cfg EngineConfig) error {
 	}
 	eng, err := uci.Start(cfg.Path, cfg.Args, uci.Handlers{
 		OnInfo:     r.onInfo,
+		OnPonder:   r.onPonder,
 		OnBestMove: r.onBestMove,
 		OnExit: func() {
 			r.setMessage("The engine stopped unexpectedly")
@@ -862,12 +1063,28 @@ func (r *runner) startEngine(cfg EngineConfig) error {
 	for name, value := range cfg.Options {
 		eng.SetOption(name, value)
 	}
+	// An engine that can ponder says so with a Ponder option; setting it
+	// tells the engine it will be asked to (it manages its time for it).
+	r.b.mu.Lock()
+	ponder := r.b.cfg.Ponder
+	r.b.mu.Unlock()
+	canPonder := false
+	if ponder {
+		for _, o := range eng.Options {
+			if strings.EqualFold(o.Name, "Ponder") {
+				eng.SetOption(o.Name, "true")
+				canPonder = true
+			}
+		}
+	}
 	if err := eng.NewGame(); err != nil {
 		eng.Quit()
 		return err
 	}
 	r.b.mu.Lock()
 	r.eng = eng
+	r.canPonder = canPonder
+	r.pondering, r.nextPonder, r.discard = "", "", 0
 	r.b.mu.Unlock()
 	return nil
 }
@@ -917,11 +1134,15 @@ func (r *runner) onGameEvent(e GameEvent) {
 			r.start, r.startFEN = p, p.FEN()
 		}
 		b.mu.Unlock()
+		r.seedChat()
 		if e.State != nil {
 			r.onState(*e.State)
 		}
+		r.sayHello()
 	case "gameState":
 		r.onState(e.GameState)
+	case "chatLine":
+		r.onChatLine(e)
 	case "opponentGone":
 		if e.Gone {
 			r.setMessage("The opponent left the game")
@@ -968,35 +1189,39 @@ func (r *runner) onState(st GameState) {
 	}
 	r.pos, r.moves, r.state, r.stateAt = pos, moves, st, time.Now()
 	ended := st.Status != "" && st.Status != "started" && st.Status != "created"
-	var think bool
-	var position, goCmd string
+	var cmds []string // for the engine, in order
 	eng := r.eng
 	var save string
+	var bye []chatSend
 	if ended && !r.finished {
 		r.finished = true
 		r.result, r.reason = resultOf(st)
 		if r.play && r.result != "*" && b.hooks.Save != nil {
 			save, _ = r.pgnLocked()
 		}
-	} else if !ended && pos.Turn == r.color && r.thinking != len(moves) && eng != nil && len(pos.LegalMoves()) > 0 {
-		r.thinking = len(moves)
-		think = true
-		position = "position fen " + r.startFEN
-		if len(moves) > 0 {
-			position += " moves " + strings.Join(moves, " ")
+		if r.rated && r.result != "*" && b.client != nil {
+			go r.ratingDiffs(b.client)
 		}
-		goCmd = fmt.Sprintf("go wtime %d btime %d winc %d binc %d", st.WTime, st.BTime, st.WInc, st.BInc)
+		if r.play && r.result != "*" {
+			bye = b.cfg.Greeting.lines(false, b.meLocked(), r.opponent().DisplayName())
+		}
+	} else if !ended && eng != nil {
+		cmds = r.engineCommandsLocked(st)
+		r.lookupTablebaseLocked()
 	}
 	finished := r.finished
 	watched := b.watching == r.id
 	view, ok := r.viewLocked()
 	b.mu.Unlock()
 
-	if think {
-		eng.Go(position, goCmd)
+	for _, c := range cmds {
+		eng.Send(c)
 	}
 	if save != "" {
 		go b.hooks.Save(save)
+	}
+	if len(bye) > 0 {
+		go r.send(bye)
 	}
 	if finished {
 		r.stopEngine()
@@ -1008,6 +1233,65 @@ func (r *runner) onState(st GameState) {
 		b.hooks.Show(view)
 	}
 	b.emit()
+}
+
+// engineCommandsLocked is what to tell the engine now that the game stands
+// as r.moves: search on its turn, and on its opponent's, ponder.
+//
+// Pondering follows the UCI protocol. After "bestmove e2e4 ponder e7e5" and
+// once e2e4 is on the board, the engine is given the position with the
+// expected reply played and "go ponder" with the clocks. If the opponent
+// plays that reply, "ponderhit" turns the search into the real one, which
+// ends with the engine's move. If not, "stop" ends it (its bestmove is
+// ignored) and a new search starts from the position that came about.
+func (r *runner) engineCommandsLocked(st GameState) []string {
+	n := len(r.moves)
+	ourTurn := r.pos.Turn == r.color
+	canMove := len(r.pos.LegalMoves()) > 0
+	position := func(extra ...string) string {
+		all := append(append([]string(nil), r.moves...), extra...)
+		p := "position fen " + r.startFEN
+		if len(all) > 0 {
+			p += " moves " + strings.Join(all, " ")
+		}
+		return p
+	}
+	clock := fmt.Sprintf("wtime %d btime %d winc %d binc %d", st.WTime, st.BTime, st.WInc, st.BInc)
+	var cmds []string
+	if r.pondering != "" && (ourTurn || r.ponderBase != n) {
+		// The opponent moved (or the game went another way).
+		if ourTurn && canMove && r.ponderBase == n-1 && r.moves[n-1] == r.pondering {
+			cmds = append(cmds, "ponderhit")
+			r.thinking = n // its answer is the move for this position
+			r.hitPly = n
+			// What it found while pondering is its line for this position.
+			if len(r.ponderLine.PV) > 0 {
+				r.lastLine, r.lastLinePly = r.ponderLine, n
+			}
+		} else {
+			cmds = append(cmds, "stop")
+			r.discard++
+		}
+		r.pondering = ""
+	}
+	switch {
+	case ourTurn && canMove && r.thinking != n:
+		r.thinking = n
+		cmds = append(cmds, position(), "go "+clock)
+	case !ourTurn && canMove && r.canPonder && r.pondering == "" && r.nextPonder != "" &&
+		r.nextPly == n && n > 0 && r.moves[n-1] == r.nextAfter:
+		// The reply must be legal, and leave the engine something to think about.
+		reply, err := parseMove(&r.pos, r.nextPonder)
+		if err == nil {
+			if after := r.pos.Make(reply); len(after.LegalMoves()) > 0 {
+				r.pondering, r.ponderBase = reply.UCI(), n
+				r.ponderLine = uci.Info{}
+				cmds = append(cmds, position(reply.UCI()), "go ponder "+clock)
+			}
+		}
+		r.nextPonder = ""
+	}
+	return cmds
 }
 
 func resultOf(st GameState) (result, reason string) {
@@ -1052,17 +1336,60 @@ func resultOf(st GameState) (result, reason string) {
 func (r *runner) onBestMove(move string) {
 	b := r.b
 	b.mu.Lock()
+	switch {
+	case r.discard > 0:
+		// The answer to the "stop" of a ponder search that missed.
+		r.discard--
+		r.ponder = ""
+		b.mu.Unlock()
+		return
+	case r.pondering != "":
+		// An answer while pondering, before ponderhit or stop: the engine
+		// gave up the search (it should wait). It is not a move to play;
+		// the next search starts from the opponent's move.
+		r.pondering, r.ponder = "", ""
+		b.mu.Unlock()
+		return
+	}
 	ply := r.thinking
 	stale := r.finished || ply != len(r.moves) || r.pos.Turn != r.color
 	ctx := r.ctx
 	client := b.client
+	var chosen game.EngineInfo
+	show := false
+	playable := !stale && move != "" && move != "(none)" && move != "0000"
+	draw := false
+	if playable {
+		if draw = r.offerDrawLocked(); draw {
+			r.drawOffers++
+		}
+		if chosen, show = r.chosenLocked(move); show {
+			if r.chosen == nil {
+				r.chosen = map[int]game.EngineInfo{}
+			}
+			r.chosen[chosen.Ply] = chosen
+			show = b.watching == r.id
+		}
+	}
+	// The reply the engine named is what it ponders on once its move is
+	// on the board.
+	r.nextPonder = ""
+	if playable && r.canPonder && r.ponder != "" {
+		if best, err := parseMove(&r.pos, move); err == nil {
+			r.nextPonder, r.nextAfter, r.nextPly = r.ponder, best.UCI(), len(r.moves)+1
+		}
+	}
+	r.ponder = ""
 	b.mu.Unlock()
 	if stale || move == "" || move == "(none)" || move == "0000" || ctx == nil {
 		return
 	}
+	if show && b.hooks.Emit != nil {
+		b.hooks.Emit("engineInfo", chosen)
+	}
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
-		err = client.Move(ctx, r.id, move)
+		err = client.Move(ctx, r.id, move, draw)
 		if err == nil || ctx.Err() != nil {
 			break
 		}
@@ -1077,38 +1404,159 @@ func (r *runner) onBestMove(move string) {
 	}
 }
 
+// infoEvery is how often the UI hears of a search at most: often enough
+// for the depth to be seen climbing.
+const infoEvery = 40 * time.Millisecond
+
+// onInfo passes the engine's search on to the UI while its game is on the
+// board: its lines, and between them the depth and node counts, both on
+// its own turn and while it ponders on its opponent's.
 func (r *runner) onInfo(in uci.Info) {
 	b := r.b
 	b.mu.Lock()
-	if b.watching != r.id || r.thinking != len(r.moves) || in.MultiPV > 1 || len(in.PV) == 0 || time.Since(r.lastInfo) < 100*time.Millisecond {
+	n := len(r.moves)
+	pondering := r.pondering != "" && r.ponderBase == n && r.pos.Turn != r.color
+	if (!pondering && r.thinking != n) || in.MultiPV > 1 {
 		b.mu.Unlock()
 		return
 	}
-	r.lastInfo = time.Now()
+	line := len(in.PV) > 0
+	switch {
+	case line && pondering:
+		r.ponderLine = in // the search's line, should the reply be played
+	case line:
+		r.lastLine, r.lastLinePly = in, n
+	}
+	now := time.Now()
+	var out game.EngineInfo
+	switch {
+	case b.watching != r.id:
+		b.mu.Unlock()
+		return
+	case line:
+		if now.Sub(r.lastInfo) < infoEvery {
+			b.mu.Unlock()
+			return
+		}
+		r.lastInfo, r.lastStats = now, now
+		if pondering {
+			out = r.ponderInfoLocked(in)
+		} else {
+			out = r.infoLocked(in)
+		}
+	default:
+		// No moves: the depth it has reached, and how fast it goes.
+		if now.Sub(r.lastStats) < infoEvery || (in.Depth == 0 && in.Nodes == 0) {
+			b.mu.Unlock()
+			return
+		}
+		r.lastStats = now
+		out = game.EngineInfo{Side: r.side(), Depth: in.Depth, Nodes: in.Nodes, NPS: in.NPS, Ply: n, Stats: true, Pondering: pondering}
+	}
+	b.mu.Unlock()
+	if b.hooks.Emit != nil {
+		b.hooks.Emit("engineInfo", out)
+	}
+}
+
+func (r *runner) side() string {
+	if r.color == chess.Black {
+		return "black"
+	}
+	return "white"
+}
+
+// infoLocked is a search line for the UI: the score from White's side, the
+// line in SAN, and its first two moves (the move the engine means to play
+// and the reply it expects) for the arrows on the board.
+func (r *runner) infoLocked(in uci.Info) game.EngineInfo {
+	out := r.lineLocked(in, r.pos)
+	out.PonderHit = r.hitPly == len(r.moves)
+	if len(out.PV) > 0 {
+		if mv, err := parseMove(&r.pos, in.PV[0]); err == nil {
+			out.Best = mv.UCI()
+			if len(in.PV) > 1 && len(out.PV) > 1 {
+				next := r.pos.Make(mv)
+				if reply, err := parseMove(&next, in.PV[1]); err == nil {
+					out.Ponder = reply.UCI()
+				}
+			}
+		}
+	}
+	return out
+}
+
+// ponderInfoLocked is a line of the search on the opponent's time: it
+// starts with the reply the engine expects, then goes on as the engine sees it.
+func (r *runner) ponderInfoLocked(in uci.Info) game.EngineInfo {
+	reply, err := parseMove(&r.pos, r.pondering)
+	if err != nil {
+		return game.EngineInfo{Side: r.side(), Ply: len(r.moves), Stats: true, Pondering: true}
+	}
+	out := r.lineLocked(in, r.pos.Make(reply))
+	out.PV = append([]string{r.pos.SAN(reply)}, out.PV...)
+	out.Ponder, out.Pondering = reply.UCI(), true
+	return out
+}
+
+// lineLocked reads a line the engine searched from pos.
+func (r *runner) lineLocked(in uci.Info, pos chess.Position) game.EngineInfo {
 	out := game.EngineInfo{
-		Side:  map[chess.Color]string{chess.White: "white", chess.Black: "black"}[r.color],
+		Side:  r.side(),
 		Depth: in.Depth, HasEval: in.HasScore, CP: in.ScoreCP, IsMate: in.IsMate, Mate: in.Mate,
 		Nodes: in.Nodes, NPS: in.NPS, Ply: len(r.moves),
 	}
 	if r.color == chess.Black {
 		out.CP, out.Mate = -out.CP, -out.Mate
 	}
-	p := r.pos
 	for i, s := range in.PV {
 		if i == 12 {
 			break
 		}
-		mv, err := p.ParseUCIMove(s)
+		mv, err := parseMove(&pos, s)
 		if err != nil {
 			break
 		}
-		out.PV = append(out.PV, p.SAN(mv))
-		p = p.Make(mv)
+		out.PV = append(out.PV, pos.SAN(mv))
+		pos = pos.Make(mv)
 	}
-	b.mu.Unlock()
-	if b.hooks.Emit != nil {
-		b.hooks.Emit("engineInfo", out)
+	return out
+}
+
+func (r *runner) onPonder(move string) {
+	r.b.mu.Lock()
+	r.ponder = move
+	r.b.mu.Unlock()
+}
+
+// chosenLocked tells the UI the move the engine chose and the reply it
+// expects: the one it named with the move, or else the next move of its
+// last line when that line starts with the move.
+func (r *runner) chosenLocked(move string) (game.EngineInfo, bool) {
+	best, err := parseMove(&r.pos, move)
+	if err != nil {
+		return game.EngineInfo{}, false
 	}
+	var line uci.Info
+	if r.lastLinePly == len(r.moves) {
+		line = r.lastLine
+	}
+	out := r.infoLocked(line)
+	if out.Best != best.UCI() {
+		// The line is not for this move: keep its numbers, not its moves.
+		out.PV, out.Ponder = []string{r.pos.SAN(best)}, ""
+	}
+	out.Best, out.Played = best.UCI(), true
+	if r.ponder != "" {
+		next := r.pos.Make(best)
+		if reply, err := parseMove(&next, r.ponder); err == nil {
+			out.Ponder = reply.UCI()
+			if len(out.PV) < 2 {
+				out.PV = append(out.PV[:1:1], next.SAN(reply))
+			}
+		}
+	}
+	return out, true
 }
 
 func (r *runner) opponent() GamePlayer {
@@ -1138,6 +1586,37 @@ func (r *runner) gameViewLocked() GameView {
 }
 
 // viewLocked describes the game for the board.
+// gameUser is a player's username, "" for the computer.
+func gameUser(p GamePlayer) string {
+	if p.AILevel > 0 {
+		return ""
+	}
+	if p.Name != "" {
+		return p.Name
+	}
+	return p.ID
+}
+
+// ratingDiffs shows how the finished rated game changed the ratings.
+func (r *runner) ratingDiffs(c *Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	d, err := c.RatingDiffs(ctx, r.id)
+	if err != nil || d == nil {
+		return
+	}
+	b := r.b
+	b.mu.Lock()
+	r.ratingDiff = d
+	watched := b.watching == r.id
+	v, ok := r.viewLocked()
+	b.mu.Unlock()
+	if watched && ok && b.hooks.Show != nil {
+		b.hooks.Show(v)
+	}
+	b.emit()
+}
+
 func (r *runner) viewLocked() (game.ExternalView, bool) {
 	if !r.started {
 		return game.ExternalView{}, false
@@ -1179,7 +1658,8 @@ func (r *runner) viewLocked() (game.ExternalView, bool) {
 		White: player(r.white, r.color == chess.White), Black: player(r.black, r.color == chess.Black),
 		StartFEN: r.startFEN, Moves: append([]string(nil), r.moves...),
 		WhiteMs: r.state.WTime, BlackMs: r.state.BTime, At: r.stateAt,
-		Finished: r.finished, Result: r.result, Reason: r.reason,
+		Finished: r.finished, Result: r.result, Reason: r.reason, RatingDiff: r.ratingDiff,
+		Speed: r.speed, Users: &game.Users{White: gameUser(r.white), Black: gameUser(r.black)},
 	}
 	if !r.finished {
 		v.Running = len(r.moves) >= 2 // Lichess starts the clocks after each side's first move
@@ -1256,12 +1736,16 @@ func (b *Bot) SetAutoAccept(on bool) error {
 		delete(b.incoming, ch.ID)
 		if reason == "" {
 			b.expect[ch.ID] = true
+			b.accepted[ch.ID] = time.Now()
 		}
 		b.mu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		if reason != "" {
 			b.decline(ctx, ch.ID, reason)
 		} else if err := client.Accept(ctx, ch.ID); err != nil {
+			b.mu.Lock()
+			delete(b.accepted, ch.ID)
+			b.mu.Unlock()
 			b.note(fmt.Sprintf("Could not accept %s's challenge: %v", ch.Challenger.DisplayName(), err))
 		}
 		cancel()

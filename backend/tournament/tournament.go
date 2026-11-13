@@ -621,7 +621,7 @@ func (t *Tournament) updateLocked() {
 
 func (t *Tournament) gamePGN(number int, op Opening, seats [2]*player, res gameResult) (string, error) {
 	tags := []pgn.Tag{
-		{Name: "Event", Value: t.cfg.Event}, {Name: "Site", Value: "Board"},
+		{Name: "Event", Value: t.cfg.Event}, {Name: "Site", Value: "Ponder"},
 		{Name: "Date", Value: time.Now().Format("2006.01.02")}, {Name: "Round", Value: fmt.Sprint(number)},
 		{Name: "White", Value: seats[0].spec.Name}, {Name: "Black", Value: seats[1].spec.Name},
 		{Name: "Result", Value: res.Result}, {Name: "TimeControl", Value: t.cfg.TimeControl.PGN()},

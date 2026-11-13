@@ -34,7 +34,7 @@ func main() {
 		switch f[0] {
 		case "uci":
 			say("id name Random Mover")
-			say("id author Board")
+			say("id author Ponder")
 			say("option name Delay type spin default 400 min 0 max 5000")
 			say("uciok")
 		case "isready":

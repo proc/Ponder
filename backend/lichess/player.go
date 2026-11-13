@@ -74,6 +74,7 @@ type Player struct {
 	current  string
 
 	seek       *PlaySeek
+	sending    bool // a challenge request is on its way
 	seekCancel context.CancelFunc
 }
 
@@ -102,14 +103,16 @@ type pgame struct {
 	state    GameState
 	stateAt  time.Time
 	// A move played on the board and sent, not yet confirmed by Lichess.
-	pending   string
-	pendingAt time.Time
-	shown     bool // put on the board once already
-	finished  bool
-	result    string
-	reason    string
-	message   string
-	cancel    context.CancelFunc
+	pending    string
+	pendingAt  time.Time
+	shown      bool // put on the board once already
+	ratingDiff *game.RatingDiff
+	finished   bool
+	result     string
+	reason     string
+	message    string
+	cancel     context.CancelFunc
+	chat       chatLog
 }
 
 func (p *Player) emit() {
@@ -425,6 +428,27 @@ func (p *Player) Challenge(cp ChallengeParams) error {
 	if strings.TrimSpace(cp.Username) == "" {
 		return errors.New("enter a Lichess username")
 	}
+	// One challenge waiting for an answer at a time.
+	p.mu.Lock()
+	busy := ""
+	if p.sending {
+		busy = "A challenge is already being sent."
+	}
+	for _, ch := range p.outgoing {
+		busy = fmt.Sprintf("Your challenge to %s is waiting for an answer. Cancel it to challenge someone else.", ch.DestName())
+		break
+	}
+	if busy != "" {
+		p.mu.Unlock()
+		return errors.New(busy)
+	}
+	p.sending = true
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		p.sending = false
+		p.mu.Unlock()
+	}()
 	var ch Challenge
 	err := p.call(func(ctx context.Context, c *Client) (err error) {
 		ch, err = c.Challenge(ctx, cp)
@@ -557,7 +581,7 @@ func (p *Player) Move(id, uciMove string) error {
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		err := c.Move(ctx, id, mv.UCI())
+		err := c.Move(ctx, id, mv.UCI(), false)
 		cancel()
 		if err == nil {
 			return
@@ -731,11 +755,14 @@ func (g *pgame) onGameEvent(e GameEvent) {
 			g.startFEN = g.start.FEN()
 		}
 		p.mu.Unlock()
+		g.seedChat()
 		if e.State != nil {
 			g.onState(*e.State)
 		}
 	case "gameState":
 		g.onState(e.GameState)
+	case "chatLine":
+		g.onChatLine(e)
 	case "opponentGone":
 		p.mu.Lock()
 		if e.Gone {
@@ -778,6 +805,9 @@ func (g *pgame) onState(st GameState) {
 		if g.result != "*" && p.hooks.Save != nil {
 			save, _ = g.pgnLocked()
 		}
+		if g.rated && g.result != "*" && p.client != nil {
+			go g.ratingDiffs(p.client)
+		}
 	}
 	finished := g.finished
 	v, ok := g.viewLocked()
@@ -793,6 +823,25 @@ func (g *pgame) onState(st GameState) {
 	}
 	if finished && g.cancel != nil {
 		g.cancel()
+	}
+	p.emit()
+}
+
+// ratingDiffs shows how the finished rated game changed the ratings.
+func (g *pgame) ratingDiffs(c *Client) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	d, err := c.RatingDiffs(ctx, g.id)
+	if err != nil || d == nil {
+		return
+	}
+	p := g.p
+	p.mu.Lock()
+	g.ratingDiff = d
+	v, ok := g.viewLocked()
+	p.mu.Unlock()
+	if ok && p.hooks.Show != nil {
+		p.hooks.Show(v, false)
 	}
 	p.emit()
 }
@@ -908,7 +957,8 @@ func (g *pgame) viewLocked() (game.ExternalView, bool) {
 		White: player(g.white, g.color == chess.White), Black: player(g.black, g.color == chess.Black),
 		StartFEN: g.startFEN, Moves: moves,
 		WhiteMs: wms, BlackMs: bms, At: at,
-		Finished: g.finished, Result: g.result, Reason: g.reason,
+		Finished: g.finished, Result: g.result, Reason: g.reason, RatingDiff: g.ratingDiff,
+		Speed: g.speed, Users: &game.Users{White: gameUser(g.white), Black: gameUser(g.black)},
 	}
 	if !g.finished {
 		v.Running = len(moves) >= 2 // Lichess starts the clocks after each side's first move

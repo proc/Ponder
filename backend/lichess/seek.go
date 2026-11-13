@@ -30,7 +30,8 @@ type SeekStatus struct {
 	Current   string `json:"current"` // bot being challenged
 	Rating    int    `json:"rating"`
 	Message   string `json:"message"`
-	GameID    string `json:"gameId"` // the accepted challenge's game
+	GameID    string `json:"gameId"`           // the accepted challenge's game
+	NextAt    int64  `json:"nextAt,omitempty"` // when the next challenge goes out (Unix ms), while waiting
 }
 
 type seeker struct {
@@ -43,7 +44,8 @@ type seeker struct {
 // Seek timings; variables so tests can shorten them.
 var (
 	seekAnswerTimeout = 30 * time.Second // then the challenge is cancelled
-	seekPause         = 3 * time.Second  // between challenges
+	seekPause         = 3 * time.Second  // after a failed request
+	seekGap           = time.Minute      // at least this long from one challenge to the next
 	seekRetry         = 30 * time.Second // when no bot is left to try
 )
 
@@ -62,6 +64,12 @@ func (b *Bot) StartSeek(p SeekParams) error {
 	}
 	if p.MinRating > 0 && p.MaxRating > 0 && p.MinRating > p.MaxRating {
 		return errors.New("the lowest rating is above the highest")
+	}
+	b.mu.Lock()
+	busy := b.busyLocked()
+	b.mu.Unlock()
+	if busy != "" {
+		return errors.New(busy)
 	}
 	b.StopSeek()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -113,6 +121,7 @@ func inRange(r, lo, hi int) bool {
 func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 	speed := sk.status.Speed
 	tried := map[string]bool{}
+	var lastSent time.Time
 	for ctx.Err() == nil {
 		client, err := b.connected()
 		if err != nil {
@@ -167,8 +176,20 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			}
 			continue
 		}
+		// One challenge a minute at most, however quickly the last was answered.
+		if wait := time.Until(lastSent.Add(seekGap)); !lastSent.IsZero() && wait > 0 {
+			next := time.Now().Add(wait)
+			if !b.seekUpdate(sk, func(st *SeekStatus) { st.NextAt = next.UnixMilli() }) {
+				return
+			}
+			if !sleepCtx(ctx, wait) {
+				return
+			}
+			continue // the bots online may have changed meanwhile
+		}
 		u := pool[rand.Intn(len(pool))]
 		tried[strings.ToLower(u.ID)] = true
+		lastSent = time.Now()
 		accepted, retryAfter := b.seekOne(ctx, sk, client, u, speed)
 		if accepted || ctx.Err() != nil {
 			return
@@ -185,6 +206,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 	rating := u.RatingFor(speed)
 	if !b.seekUpdate(sk, func(st *SeekStatus) {
 		st.Tried++
+		st.NextAt = 0
 		st.Current, st.Rating = name, rating
 		st.Message = fmt.Sprintf("Challenging %s (%d)…", name, rating)
 	}) {
@@ -256,7 +278,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		why = "declined" + reasonText(got)
 	}
 	b.seekUpdate(sk, func(st *SeekStatus) {
-		st.Message = fmt.Sprintf("%s %s. Trying another bot…", name, why)
+		st.Message = fmt.Sprintf("%s %s.", name, why)
 	})
 	return false, seekPause
 }

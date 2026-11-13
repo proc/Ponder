@@ -279,3 +279,90 @@ func httpGet(url string) (string, error) {
 	b, err := io.ReadAll(res.Body)
 	return string(b), err
 }
+
+func TestOnlineBotsAndStatus(t *testing.T) {
+	f := fake.New("secret", "Alice")
+	f.Delay = 50 * time.Millisecond
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	c := NewClient(srv.URL, "")
+	ctx := t.Context()
+	bots, err := c.OnlineBots(ctx, 3)
+	if err != nil || len(bots) != 3 {
+		t.Fatalf("bots %d err %v", len(bots), err)
+	}
+	b := bots[0]
+	if b.Perfs["blitz"].Rating == 0 || b.Profile == nil || b.Profile.Flag == "" || b.PlayTime == nil || b.CreatedAt == 0 {
+		t.Fatalf("details missing: %+v", b)
+	}
+	f.AutoGame("maia1", "SlowBot", 120, 1)
+	st, err := c.UsersStatus(ctx, []string{"maia1", "grumpy"})
+	if err != nil || len(st) != 2 {
+		t.Fatalf("status %+v err %v", st, err)
+	}
+	if !st[0].Playing || st[0].GameID == "" || st[0].Clock != "2+1" || st[1].Playing || !st[1].Online {
+		t.Fatalf("status %+v", st)
+	}
+}
+
+// A rated game's rating changes reach the board once Lichess has them.
+func TestRatingDiffs(t *testing.T) {
+	t.Run("spectate", func(t *testing.T) {
+		h := newSpect(t)
+		h.fake.MaxPlies = 12
+		id := h.fake.AutoGame("maia1", "SlowBot", 60, 0)
+		h.fake.SetRated(id, true)
+		h.sp.Start(h.srv.URL, "maia1")
+		v := h.waitFor("rating changes", func(v game.ExternalView, _ SpectateStatus) bool {
+			return v.ID == id && v.Finished && v.RatingDiff != nil
+		})
+		if v.Result == "1/2-1/2" && (v.RatingDiff.White != 0 || v.RatingDiff.Black != 0) || v.Result == "1-0" && v.RatingDiff.White != 8 || v.Result == "0-1" && v.RatingDiff.Black != 9 {
+			t.Fatalf("result %s diff %+v", v.Result, *v.RatingDiff)
+		}
+	})
+	t.Run("play", func(t *testing.T) {
+		h := newPlayHarness(t)
+		if _, err := h.p.Connect(h.srv.URL, "secret"); err != nil {
+			t.Fatal(err)
+		}
+		if err := h.p.Seek(LobbySeek{Limit: 600, Rated: true}); err != nil {
+			t.Fatal(err)
+		}
+		st := h.wait("game", func(s PlayStatus) bool { return len(s.Games) == 1 })
+		h.wait("board", func(PlayStatus) bool { return h.last().ID == st.Games[0].ID })
+		if err := h.p.Resign(st.Games[0].ID); err != nil {
+			t.Fatal(err)
+		}
+		end := time.Now().Add(5 * time.Second)
+		for time.Now().Before(end) {
+			if v := h.last(); v.RatingDiff != nil {
+				mine := v.RatingDiff.White
+				if v.Side == "black" {
+					mine = v.RatingDiff.Black
+				}
+				if mine >= 0 {
+					t.Fatalf("lost but rating diff %+v (side %s)", *v.RatingDiff, v.Side)
+				}
+				return
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatal("no rating changes shown")
+	})
+}
+
+func TestPlayersInfo(t *testing.T) {
+	f := fake.New("secret", "Alice")
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	info := NewClient(srv.URL, "").Players(t.Context(), []string{"maia1", "Bob"}, "blitz")
+	for _, name := range []string{"maia1", "Bob"} {
+		p := info.Players[name]
+		if p.Error != "" || len(p.Profile) == 0 || len(p.History) == 0 || len(p.Perf) == 0 {
+			t.Fatalf("%s: %+v", name, p)
+		}
+	}
+	if !strings.Contains(string(info.Crosstable), "nbGames") {
+		t.Fatalf("crosstable %s", info.Crosstable)
+	}
+}

@@ -72,8 +72,11 @@ type Game struct {
 	auto         bool
 	white, black user
 	watchers     []chan string
+	endedAt      time.Time
 	// Offers in a Board API game: the account's ("my") and the opponent's.
 	myDraw, oppDraw, myTakeback, oppTakeback bool
+	// The players' room of the chat, as GET …/chat gives it.
+	chat []map[string]string
 }
 
 // Server is the fake Lichess. Its fields may be set before use.
@@ -90,6 +93,20 @@ type Server struct {
 	Online []OnlineBot
 	// The opponent accepts draw offers and takeback proposals (Board API).
 	AcceptOffers bool
+	// Like Lichess, the spectator stream (/api/stream/game) starts by
+	// replaying every position of the game; StreamLag sends each position
+	// that many moves late, and positions after plies in Drop are lost.
+	StreamLag int
+	Drop      map[int]bool
+	// Reply, when set, chooses the opponent's move in a position reached
+	// after ply moves (a UCI move; "" or an illegal one: a random move).
+	Reply func(pos chess.Position, ply int) string
+	// Tablebase is the category the endgame tablebase (/tablebase/standard)
+	// gives every position ("": unknown); TablebaseAsked counts its calls.
+	Tablebase      string
+	TablebaseAsked int
+	// DrawOffers counts the moves of the account's that came with a draw offer.
+	DrawOffers int
 	// OAuth: the code challenges of sign-ins in progress, by code.
 	oauth map[string]string
 
@@ -185,7 +202,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 5 && (parts[1] == "bot" || parts[1] == "board") && parts[2] == "game" && parts[3] == "stream":
 		s.streamGame(w, r, parts[4])
 	case len(parts) == 6 && (parts[1] == "bot" || parts[1] == "board") && parts[2] == "game" && parts[4] == "move":
-		if err := s.botMove(parts[3], parts[5]); err != nil {
+		if err := s.botMove(parts[3], parts[5], r.URL.Query().Get("offeringDraw") == "true"); err != nil {
 			bad(err.Error())
 			return
 		}
@@ -195,6 +212,37 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			bad(err.Error())
 			return
 		}
+		ok(nil)
+	case len(parts) == 5 && (parts[1] == "bot" || parts[1] == "board") && parts[2] == "game" && parts[4] == "chat":
+		s.mu.Lock()
+		g := s.games[parts[3]]
+		if g == nil {
+			s.mu.Unlock()
+			w.WriteHeader(404)
+			fmt.Fprint(w, `{"error":"Not found"}`)
+			return
+		}
+		if r.Method == "GET" {
+			history := append([]map[string]string{}, g.chat...)
+			s.mu.Unlock()
+			ok(history)
+			return
+		}
+		r.ParseForm()
+		room, text := r.Form.Get("room"), r.Form.Get("text")
+		if (room != "player" && room != "spectator") || text == "" || len([]rune(text)) > 140 {
+			s.mu.Unlock()
+			bad("Invalid chat message")
+			return
+		}
+		s.chatLocked(g, s.Username, room, text)
+		// Someone answers, so there is a conversation to see.
+		who := g.Opponent.Name
+		if room == "spectator" {
+			who = "Kibitzer"
+		}
+		time.AfterFunc(s.Delay, func() { s.Say(g.ID, who, room, "You said: "+text) })
+		s.mu.Unlock()
 		ok(nil)
 	case path == "/api/board/seek" && r.Method == "POST":
 		s.seek(w, r)
@@ -384,6 +432,32 @@ func (s *Server) publishLocked(g *Game) {
 	}
 }
 
+func (s *Server) chatLocked(g *Game, username, room, text string) {
+	if room == "player" {
+		g.chat = append(g.chat, map[string]string{"user": username, "text": text})
+	}
+	l := line(map[string]string{"type": "chatLine", "username": username, "text": text, "room": room})
+	for _, ch := range g.subs {
+		select {
+		case ch <- l:
+		default:
+		}
+	}
+}
+
+// Say posts a chat message in a game as username (room: player or
+// spectator). It reports whether there is such a game.
+func (s *Server) Say(id, username, room, text string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g := s.games[id]
+	if g == nil {
+		return false
+	}
+	s.chatLocked(g, username, room, text)
+	return true
+}
+
 func (s *Server) streamGame(w http.ResponseWriter, r *http.Request, id string) {
 	s.mu.Lock()
 	g := s.games[id]
@@ -443,6 +517,15 @@ func (s *Server) public(w http.ResponseWriter, r *http.Request) bool {
 		fmt.Fprint(w, `{"error":"Not found"}`)
 	}
 	switch {
+	case path == "/tablebase/standard":
+		s.mu.Lock()
+		s.TablebaseAsked++
+		category := s.Tablebase
+		s.mu.Unlock()
+		if category == "" {
+			category = "unknown"
+		}
+		fmt.Fprint(w, line(map[string]any{"category": category, "moves": []any{}}))
 	case path == "/oauth":
 		// Sign-in: approve at once and send the browser back with a code.
 		q := r.URL.Query()
@@ -472,13 +555,75 @@ func (s *Server) public(w http.ResponseWriter, r *http.Request) bool {
 		s.mu.Lock()
 		online := append([]OnlineBot(nil), s.Online...)
 		s.mu.Unlock()
-		for _, b := range online {
-			perf := func(r int) map[string]any { return map[string]any{"rating": r, "games": 100, "rd": 50} }
+		if nb, err := strconv.Atoi(r.URL.Query().Get("nb")); err == nil && nb < len(online) {
+			online = online[:nb]
+		}
+		flags := []string{"US", "DE", "FR", "IN", "BR", "NO"}
+		for i, b := range online {
+			perf := func(r, games int) map[string]any {
+				p := map[string]any{"rating": r, "games": games, "rd": 50, "prog": (r % 23) - 11}
+				if games < 20 {
+					p["prov"] = true
+				}
+				return p
+			}
 			fmt.Fprintln(w, line(map[string]any{
 				"id": strings.ToLower(b.Name), "username": b.Name, "title": "BOT", "online": true,
-				"perfs": map[string]any{"bullet": perf(b.Rating - 100), "blitz": perf(b.Rating), "rapid": perf(b.Rating + 100)},
+				"perfs": map[string]any{"bullet": perf(b.Rating-100, 40+i*30), "blitz": perf(b.Rating, 500+i*100),
+					"rapid": perf(b.Rating+100, 200+i*10), "classical": perf(b.Rating+150, i*5)},
+				"createdAt": time.Now().Add(-time.Duration(i+1) * 400 * 24 * time.Hour).UnixMilli(),
+				"seenAt":    time.Now().Add(-time.Duration(i) * time.Minute).UnixMilli(),
+				"playTime":  map[string]int{"total": 3600 * (100 + i*50), "tv": 60 * i},
+				"profile":   map[string]string{"flag": flags[i%len(flags)], "bio": b.Name + " is a test bot that plays random moves."},
 			}))
 		}
+	case path == "/api/users/status":
+		ids := strings.Split(r.URL.Query().Get("ids"), ",")
+		s.mu.Lock()
+		var out []map[string]any
+		for _, id := range ids {
+			id = strings.ToLower(strings.TrimSpace(id))
+			if id == "" {
+				continue
+			}
+			st := map[string]any{"id": id, "name": id, "online": true}
+			for _, b := range s.Online {
+				if strings.ToLower(b.Name) == id {
+					st["name"], st["title"] = b.Name, "BOT"
+				}
+			}
+			for _, g := range s.games {
+				if g.Status != "started" {
+					continue
+				}
+				in := g.Opponent.ID == id
+				if g.auto {
+					in = g.white.ID == id || g.black.ID == id
+				}
+				if in {
+					st["playing"] = map[string]any{"id": g.ID, "clock": fmt.Sprintf("%d+%d", g.limit/60, g.inc/1000), "variant": "standard"}
+				}
+			}
+			out = append(out, st)
+		}
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, line(out))
+	case len(parts) == 3 && parts[0] == "api" && parts[1] == "user":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, line(fakeProfile(parts[2])))
+	case len(parts) == 4 && parts[0] == "api" && parts[1] == "user" && parts[3] == "rating-history":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, line(fakeHistory(parts[2])))
+	case len(parts) == 5 && parts[0] == "api" && parts[1] == "user" && parts[3] == "perf":
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, line(fakePerfStat(parts[2], parts[4])))
+	case len(parts) == 4 && parts[0] == "api" && parts[1] == "crosstable":
+		a, b := fakeSeed(parts[2]), fakeSeed(parts[3])
+		n := (a+b)%17 + 3
+		sa := float64((a*7+b)%(n*2+1)) / 2
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, line(map[string]any{"users": map[string]float64{strings.ToLower(parts[2]): sa, strings.ToLower(parts[3]): float64(n) - sa}, "nbGames": n}))
 	case len(parts) == 4 && parts[0] == "api" && parts[1] == "user" && parts[3] == "current-game":
 		s.mu.Lock()
 		var found *Game
@@ -572,6 +717,22 @@ func (s *Server) exportLocked(g *Game) map[string]any {
 	if g.Winner != "" {
 		out["winner"] = g.Winner
 	}
+	// Rated games: the rating changes, a moment after the end (like Lichess).
+	if g.Status != "started" && g.Status != "created" && g.endedAt.IsZero() {
+		g.endedAt = time.Now()
+	}
+	if g.Rated && g.Status != "started" && g.Status != "created" && time.Since(g.endedAt) >= s.Delay {
+		diff := map[string]int{"white": 0, "black": 0}
+		switch g.Winner {
+		case "white":
+			diff["white"], diff["black"] = 8, -8
+		case "black":
+			diff["white"], diff["black"] = -9, 9
+		}
+		for side, d := range diff {
+			out["players"].(map[string]any)[side].(map[string]any)["ratingDiff"] = d
+		}
+	}
 	return out
 }
 
@@ -586,10 +747,20 @@ func (s *Server) describeLocked(g *Game) map[string]any {
 }
 
 func (s *Server) entryLocked(g *Game) map[string]any {
+	return s.entryAtLocked(g, len(g.Moves))
+}
+
+// entryAtLocked is the stream line for the position after ply moves.
+func (s *Server) entryAtLocked(g *Game, ply int) map[string]any {
 	w, b := s.clocksLocked(g)
-	e := map[string]any{"fen": g.pos.FEN(), "wc": w / 1000, "bc": b / 1000}
-	if n := len(g.Moves); n > 0 {
-		e["lm"] = g.Moves[n-1]
+	pos := g.start
+	for _, m := range g.Moves[:ply] {
+		mv, _ := pos.ParseUCIMove(m)
+		pos = pos.Make(mv)
+	}
+	e := map[string]any{"fen": pos.FEN(), "wc": w / 1000, "bc": b / 1000}
+	if ply > 0 {
+		e["lm"] = g.Moves[ply-1]
 	}
 	return e
 }
@@ -597,13 +768,24 @@ func (s *Server) entryLocked(g *Game) map[string]any {
 // publishMovesLocked sends the move to spectators; when the game is over,
 // the final description, and the streams close.
 func (s *Server) publishMovesLocked(g *Game) {
-	l := line(s.entryLocked(g))
 	over := g.Status != "started"
+	var lines []string
+	ply := len(g.Moves) - s.StreamLag
+	if ply >= 1 && !s.Drop[ply] {
+		lines = append(lines, line(s.entryAtLocked(g, ply)))
+	}
+	if over {
+		for p := max(ply+1, 1); p <= len(g.Moves); p++ { // the late ones
+			lines = append(lines, line(s.entryAtLocked(g, p)))
+		}
+	}
 	final := line(s.describeLocked(g))
 	for _, ch := range g.watchers {
-		select {
-		case ch <- l:
-		default:
+		for _, l := range lines {
+			select {
+			case ch <- l:
+			default:
+			}
 		}
 		if over {
 			select {
@@ -627,8 +809,12 @@ func (s *Server) streamMoves(w http.ResponseWriter, r *http.Request, id string) 
 		fmt.Fprint(w, `{"error":"Not found"}`)
 		return
 	}
-	first := []string{line(s.describeLocked(g)), line(s.entryLocked(g))}
-	ch := make(chan string, 64)
+	// The game so far, position by position, as Lichess replays it.
+	first := []string{line(s.describeLocked(g))}
+	for p := 0; p <= len(g.Moves)-s.StreamLag || (p <= len(g.Moves) && g.Status != "started"); p++ {
+		first = append(first, line(s.entryAtLocked(g, p)))
+	}
+	ch := make(chan string, 512)
 	if g.Status == "started" {
 		g.watchers = append(g.watchers, ch)
 	} else {
@@ -669,7 +855,13 @@ func (s *Server) opponentTurnLocked(g *Game) {
 		if len(moves) == 0 {
 			return
 		}
-		s.playLocked(g, moves[s.rng.Intn(len(moves))])
+		mv := moves[s.rng.Intn(len(moves))]
+		if s.Reply != nil {
+			if m, err := g.pos.ParseUCIMove(s.Reply(g.pos, ply)); err == nil {
+				mv = m
+			}
+		}
+		s.playLocked(g, mv)
 	})
 }
 
@@ -683,9 +875,16 @@ func (s *Server) playLocked(g *Game, mv chess.Move) {
 			g.btime += g.inc
 		}
 	}
+	// A move declines the other side's draw offer; one's own offer stands
+	// until the other side moves.
+	if (g.pos.Turn == chess.White) == g.BotWhite {
+		g.oppDraw = false
+	} else {
+		g.myDraw = false
+	}
 	g.Moves = append(g.Moves, mv.UCI())
 	g.pos = g.pos.Make(mv)
-	g.myDraw, g.oppDraw, g.myTakeback, g.oppTakeback = false, false, false, false
+	g.myTakeback, g.oppTakeback = false, false
 	if len(g.Moves) >= 2 {
 		g.turnStart = time.Now()
 	}
@@ -710,11 +909,23 @@ func (s *Server) playLocked(g *Game, mv chess.Move) {
 	s.opponentTurnLocked(g)
 }
 
+// SetRated makes a game rated (AutoGame games are casual).
+func (s *Server) SetRated(id string, rated bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if g := s.games[id]; g != nil {
+		g.Rated = rated
+	}
+}
+
 func (s *Server) finishLocked(g *Game) {
+	if g.endedAt.IsZero() {
+		g.endedAt = time.Now()
+	}
 	s.broadcastLocked(map[string]any{"type": "gameFinish", "game": s.gameInfoLocked(g)})
 }
 
-func (s *Server) botMove(id, uciMove string) error {
+func (s *Server) botMove(id, uciMove string, draw bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g := s.games[id]
@@ -728,7 +939,20 @@ func (s *Server) botMove(id, uciMove string) error {
 	if err != nil {
 		return fmt.Errorf("illegal move %s", uciMove)
 	}
+	if draw {
+		s.DrawOffers++
+		if g.oppDraw {
+			// The move accepts the opponent's offer: it is not played.
+			g.oppDraw = false
+			s.agreeLocked(g, "draw", false)
+			return nil
+		}
+	}
 	s.playLocked(g, mv)
+	if draw && g.Status == "started" {
+		g.myDraw = true
+		s.publishLocked(g)
+	}
 	return nil
 }
 
@@ -1006,7 +1230,11 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 		if black == "" {
 			black = "SlowBot"
 		}
-		fmt.Fprint(w, line(map[string]string{"id": s.AutoGame(white, black, limit, inc)}))
+		id := s.AutoGame(white, black, limit, inc)
+		if q.Get("rated") == "true" {
+			s.SetRated(id, true)
+		}
+		fmt.Fprint(w, line(map[string]string{"id": id}))
 	case "/_fake/games":
 		s.mu.Lock()
 		out := map[string]any{}
@@ -1028,6 +1256,20 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 			s.publishLocked(g)
 		}
 		s.mu.Unlock()
+		fmt.Fprint(w, `{"ok":true}`)
+	case "/_fake/chat":
+		// Someone says something in a game's chat.
+		room, from := q.Get("room"), q.Get("from")
+		if room == "" {
+			room = "spectator"
+		}
+		if from == "" {
+			from = "Kibitzer"
+		}
+		if !s.Say(q.Get("game"), from, room, q.Get("text")) {
+			w.WriteHeader(404)
+			return
+		}
 		fmt.Fprint(w, `{"ok":true}`)
 	case "/_fake/calls":
 		fmt.Fprint(w, line(s.Calls()))
@@ -1072,4 +1314,93 @@ func explorerData(fen string, masters bool) map[string]any {
 	}
 	return map[string]any{"white": tw, "draws": td, "black": tb, "moves": moves, "topGames": top,
 		"opening": map[string]string{"eco": "C20", "name": "King's Pawn Game"}}
+}
+
+// Made-up but steady player data, from the name.
+func fakeSeed(name string) int {
+	h := 7
+	for _, c := range strings.ToLower(name) {
+		h = h*31 + int(c)
+	}
+	if h < 0 {
+		h = -h
+	}
+	return h
+}
+
+func fakeRating(name, perf string) int {
+	return 1400 + fakeSeed(name+perf)%1200
+}
+
+func fakeProfile(name string) map[string]any {
+	seed := fakeSeed(name)
+	perfs := map[string]any{}
+	for i, p := range []string{"bullet", "blitz", "rapid", "classical"} {
+		perfs[p] = map[string]any{"rating": fakeRating(name, p), "games": 50 + (seed>>uint(i))%3000, "rd": 45, "prog": seed%31 - 15}
+	}
+	win, loss, draw := 400+seed%900, 300+seed%700, 50+seed%200
+	return map[string]any{
+		"id": strings.ToLower(name), "username": name, "title": map[bool]string{true: "BOT", false: ""}[strings.Contains(strings.ToLower(name), "bot") || strings.HasPrefix(strings.ToLower(name), "maia")],
+		"perfs": perfs, "createdAt": time.Now().AddDate(-1-seed%6, 0, 0).UnixMilli(), "seenAt": time.Now().Add(-time.Minute).UnixMilli(),
+		"playTime": map[string]int{"total": 3600 * (50 + seed%2000), "tv": 600},
+		"count":    map[string]int{"all": win + loss + draw + 10, "rated": win + loss + draw, "win": win, "loss": loss, "draw": draw},
+		"profile":  map[string]string{"flag": []string{"US", "DE", "FR", "NO", "IN"}[seed%5], "bio": name + " plays on the fake Lichess.", "location": "Testville"},
+		"url":      "https://lichess.org/@/" + name,
+	}
+}
+
+func fakeHistory(name string) []map[string]any {
+	var out []map[string]any
+	for _, p := range []string{"Bullet", "Blitz", "Rapid", "Classical"} {
+		r := fakeRating(name, strings.ToLower(p)) - 150
+		seed := fakeSeed(name + p)
+		var points [][4]int
+		day := time.Now().AddDate(-1, 0, 0)
+		for i := 0; i < 60; i++ {
+			day = day.AddDate(0, 0, 6)
+			r += (seed>>uint(i%20))%41 - 17
+			points = append(points, [4]int{day.Year(), int(day.Month()) - 1, day.Day(), r})
+		}
+		out = append(out, map[string]any{"name": p, "points": points})
+	}
+	return out
+}
+
+func fakePerfStat(name, perf string) map[string]any {
+	seed := fakeSeed(name + perf)
+	r := fakeRating(name, perf)
+	win, loss, draw := 200+seed%500, 150+seed%400, 20+seed%90
+	at := time.Now().AddDate(0, -seed%10-1, 0).Format(time.RFC3339)
+	return map[string]any{
+		"user": map[string]string{"name": name},
+		"perf": map[string]any{"glicko": map[string]any{"rating": r, "deviation": 45, "provisional": false}, "nb": win + loss + draw, "progress": seed%31 - 15},
+		"rank": nil, "percentile": float64(seed%1000) / 10,
+		"stat": map[string]any{
+			"highest": map[string]any{"int": r + 40 + seed%120, "at": at, "gameId": "abcdefgh"},
+			"lowest":  map[string]any{"int": r - 300 - seed%200, "at": at, "gameId": "hgfedcba"},
+			"count":   map[string]any{"all": win + loss + draw, "rated": win + loss + draw, "win": win, "loss": loss, "draw": draw, "tour": 3, "berserk": 1, "opAvg": float64(r - 20), "seconds": 3600 * 40, "disconnects": 0},
+			"resultStreak": map[string]any{
+				"win":  map[string]any{"cur": map[string]int{"v": seed % 4}, "max": map[string]int{"v": 5 + seed%9}},
+				"loss": map[string]any{"cur": map[string]int{"v": 0}, "max": map[string]int{"v": 3 + seed%6}},
+			},
+		},
+	}
+}
+
+// Draws reports how many of the account's moves came with a draw offer, and
+// how often the tablebase was asked.
+func (s *Server) Draws() (offers, asked int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.DrawOffers, s.TablebaseAsked
+}
+
+// OfferDraw has the opponent offer a draw in a game.
+func (s *Server) OfferDraw(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if g := s.games[id]; g != nil && g.Status == "started" {
+		g.oppDraw = true
+		s.publishLocked(g)
+	}
 }

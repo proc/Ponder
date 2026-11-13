@@ -40,7 +40,75 @@ type User struct {
 		Rating int  `json:"rating"`
 		Games  int  `json:"games"`
 		Prov   bool `json:"prov"`
+		RD     int  `json:"rd,omitempty"`
+		Prog   int  `json:"prog,omitempty"` // rating change over the last 12 games
 	} `json:"perfs,omitempty"`
+	// More about the account, from /api/bot/online.
+	CreatedAt int64 `json:"createdAt,omitempty"` // ms
+	SeenAt    int64 `json:"seenAt,omitempty"`    // ms
+	PlayTime  *struct {
+		Total int `json:"total"` // seconds
+		TV    int `json:"tv"`
+	} `json:"playTime,omitempty"`
+	Profile *struct {
+		Flag     string `json:"flag,omitempty"`
+		Location string `json:"location,omitempty"`
+		Bio      string `json:"bio,omitempty"`
+		RealName string `json:"realName,omitempty"`
+		Links    string `json:"links,omitempty"`
+	} `json:"profile,omitempty"`
+	Flair    string `json:"flair,omitempty"`
+	Patron   bool   `json:"patron,omitempty"`
+	Verified bool   `json:"verified,omitempty"`
+}
+
+// UserStatus is whether a player is online and playing now.
+type UserStatus struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Title   string `json:"title,omitempty"`
+	Online  bool   `json:"online"`
+	Playing bool   `json:"playing"`
+	// The game being played, if any.
+	GameID  string `json:"gameId,omitempty"`
+	Clock   string `json:"clock,omitempty"`
+	Variant string `json:"variant,omitempty"`
+}
+
+// UsersStatus reads the online/playing status of players, 100 at a time.
+func (c *Client) UsersStatus(ctx context.Context, ids []string) ([]UserStatus, error) {
+	var out []UserStatus
+	for start := 0; start < len(ids); start += 100 {
+		batch := ids[start:min(start+100, len(ids))]
+		var raw []struct {
+			ID      string          `json:"id"`
+			Name    string          `json:"name"`
+			Title   string          `json:"title"`
+			Online  bool            `json:"online"`
+			Playing json.RawMessage `json:"playing"`
+		}
+		path := "/api/users/status?withGameMetas=true&ids=" + url.QueryEscape(strings.Join(batch, ","))
+		if err := c.call(ctx, "GET", path, nil, &raw); err != nil {
+			return out, err
+		}
+		for _, r := range raw {
+			st := UserStatus{ID: r.ID, Name: r.Name, Title: r.Title, Online: r.Online}
+			// "playing" is true/false, or with game metas, the game.
+			var game struct {
+				ID      string `json:"id"`
+				Clock   string `json:"clock"`
+				Variant string `json:"variant"`
+			}
+			var playing bool
+			if json.Unmarshal(r.Playing, &playing) == nil {
+				st.Playing = playing
+			} else if json.Unmarshal(r.Playing, &game) == nil {
+				st.Playing, st.GameID, st.Clock, st.Variant = true, game.ID, game.Clock, game.Variant
+			}
+			out = append(out, st)
+		}
+	}
+	return out, nil
 }
 
 // SpeedOf is the Lichess speed of a clock: it goes by the estimated game
@@ -104,6 +172,14 @@ type Challenge struct {
 	Direction     string      `json:"direction"`
 	InitialFen    string      `json:"initialFen"`
 	DeclineReason string      `json:"declineReason"`
+}
+
+// DestName is the challenged player's name, or "the player" when unknown.
+func (c Challenge) DestName() string {
+	if c.DestUser != nil && c.DestUser.DisplayName() != "" {
+		return c.DestUser.DisplayName()
+	}
+	return "the player"
 }
 
 // GameInfo is the game in gameStart / gameFinish events.
@@ -266,7 +342,7 @@ func (c *Client) request(ctx context.Context, method, path string, form url.Valu
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
-	req.Header.Set("User-Agent", "Board (UCI chess GUI)")
+	req.Header.Set("User-Agent", "Ponder (UCI chess GUI)")
 	if form != nil {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
@@ -370,8 +446,14 @@ func (c *Client) gamePath(gameID string) string {
 	return "/api/" + api + "/game/" + url.PathEscape(gameID)
 }
 
-func (c *Client) Move(ctx context.Context, gameID, uci string) error {
-	return c.call(ctx, "POST", c.gamePath(gameID)+"/move/"+url.PathEscape(uci), url.Values{}, nil)
+// Move plays a move. With draw, it also offers a draw, or accepts the
+// opponent's offer.
+func (c *Client) Move(ctx context.Context, gameID, uci string, draw bool) error {
+	path := c.gamePath(gameID) + "/move/" + url.PathEscape(uci)
+	if draw {
+		path += "?offeringDraw=true"
+	}
+	return c.call(ctx, "POST", path, url.Values{}, nil)
 }
 
 func (c *Client) Resign(ctx context.Context, gameID string) error {

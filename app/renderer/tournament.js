@@ -66,7 +66,7 @@ function syncTournamentForm() {
   for (const input of document.querySelectorAll('.tn-sprt input[type=number]')) input.disabled = !$('#tn-sprt').checked;
   for (const id of ['tn-draw-from', 'tn-draw-moves', 'tn-draw-score']) $('#' + id).disabled = !$('#tn-adj-draw').checked;
   for (const id of ['tn-resign-moves', 'tn-resign-score']) $('#' + id).disabled = !$('#tn-adj-resign').checked;
-  $('#tn-pgn').textContent = !$('#tn-save').checked ? 'not saved' : tn.pgnPath || 'a new file in Documents/Board/Tournaments';
+  $('#tn-pgn').textContent = !$('#tn-save').checked ? 'not saved' : tn.pgnPath || 'a new file in your Tournaments folder';
   $('#tn-pgn').title = tn.pgnPath;
   $('#tn-pgn-choose').disabled = !$('#tn-save').checked;
 }
@@ -291,7 +291,7 @@ function renderTournament() {
     el('span', { className: 'tn-num', textContent: `#${g.number}` }),
     el('span', { className: 'tn-players', textContent: `${g.white} – ${g.black}` }),
     el('span', { className: 'tn-plies', textContent: `move ${Math.floor(g.plies / 2) + 1}` }),
-    el('span', { className: 'tn-opening', textContent: g.opening ?? '', title: g.opening ?? '' }),
+    (() => { const o = el('span', { className: 'tn-opening', textContent: g.opening ?? '' }); o.dataset.opening = g.opening ?? ''; return o; })(),
   ])) : [el('p', { className: 'hint', textContent: running ? 'Starting…' : 'None' })]));
 
   $('#tn-recent').replaceChildren(...s.recent.map((g) => {

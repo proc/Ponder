@@ -1,7 +1,7 @@
 'use strict';
 // The opening explorer, as on Lichess: for the position on the board, the
 // moves played from it in the Masters or Lichess databases (through the
-// Lichess API) or in Board's own opening book (offline), with results.
+// Lichess API) or in Ponder's own opening book (offline), with results.
 // Clicking a move plays it on the board. Loaded after renderer.js.
 
 const ex = {
@@ -151,6 +151,7 @@ function resultBar(w, d, b) {
 
 function renderDbMoves(data) {
   $('#ex-opening').textContent = data.opening ? `${data.opening.eco} ${data.opening.name}` : '';
+  $('#ex-opening').dataset.opening = $('#ex-opening').textContent;
   const total = data.white + data.draws + data.black;
   if (!data.moves?.length) {
     $('#ex-moves').replaceChildren();
@@ -196,6 +197,7 @@ function renderDbMoves(data) {
 
 function renderBookMoves(moves) {
   $('#ex-opening').textContent = $('#opening .name').textContent ? `${$('#opening .eco').textContent} ${$('#opening .name').textContent}` : '';
+  $('#ex-opening').dataset.opening = $('#ex-opening').textContent.trim();
   $('#ex-games').replaceChildren();
   if (!moves.length) {
     $('#ex-moves').replaceChildren();

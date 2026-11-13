@@ -12,6 +12,36 @@ const binDir = app.isPackaged
 
 let win = null;
 
+// The app was called Board before. Its settings (engines, Lichess, the game
+// database, and what the window remembers) are brought along the first
+// time Ponder starts; the old folder is left as it was.
+(function bringSettingsAlong() {
+  try {
+    const now = app.getPath('userData');
+    const old = path.join(app.getPath('appData'), 'board');
+    const files = ['engines.json', 'lichess.json', 'database.json'];
+    if (path.resolve(old).toLowerCase() === path.resolve(now).toLowerCase() || !fs.existsSync(old)) return;
+    if (files.some((f) => fs.existsSync(path.join(now, f)))) return;
+    fs.mkdirSync(now, { recursive: true });
+    for (const f of files) {
+      if (fs.existsSync(path.join(old, f))) fs.copyFileSync(path.join(old, f), path.join(now, f));
+    }
+    const storage = path.join(old, 'Local Storage');
+    if (fs.existsSync(storage) && !fs.existsSync(path.join(now, 'Local Storage'))) {
+      fs.cpSync(storage, path.join(now, 'Local Storage'), { recursive: true });
+    }
+  } catch { /* start with fresh settings */ }
+})();
+
+// Where games and tournaments are saved unless another place is chosen:
+// Documents/Ponder, or Documents/Board when that is where they already are.
+function documentsDir() {
+  const docs = app.getPath('documents');
+  const now = path.join(docs, 'Ponder');
+  const old = path.join(docs, 'Board');
+  return !fs.existsSync(now) && fs.existsSync(old) ? old : now;
+}
+
 // ---------------------------------------------------------------------------
 // Go backend: one child process, JSON lines over stdin/stdout.
 // ---------------------------------------------------------------------------
@@ -71,7 +101,7 @@ const engineFile = () => path.join(app.getPath('userData'), 'engines.json');
 // Engines that ship with the app. Their paths follow the app, so they are
 // never stored.
 const BUILTIN_ENGINES = [
-  { id: 'builtin-basic', name: 'Board Basic (built-in)', file: 'basicengine' },
+  { id: 'builtin-basic', name: 'Ponder Basic (built-in)', file: 'basicengine' },
   { id: 'builtin-random', name: 'Random Mover (built-in)', file: 'randomengine' },
 ];
 const builtinPath = (id) => path.join(binDir, (BUILTIN_ENGINES.find((b) => b.id === id)?.file ?? 'randomengine') + exe);
@@ -142,6 +172,15 @@ ipcMain.handle('engines:probe', (_e, id) => {
   return backend.request('probe', { path: engine.path, args: engine.args });
 });
 
+// A file or folder for an engine option (tablebases, network, book, log).
+ipcMain.handle('engines:choosePath', async (_e, kind, title) => {
+  const pick = await dialog.showOpenDialog(win, {
+    title: `Choose ${kind === 'folder' ? 'a folder' : 'a file'} for ${title ?? 'the option'}`,
+    properties: kind === 'folder' ? ['openDirectory'] : ['openFile'],
+  });
+  return pick.canceled ? null : pick.filePaths[0] ?? null;
+});
+
 // Piece themes: each folder in svg/ holding all twelve <color>-<name>.svg
 // files is a theme named after the folder, e.g. svg/minimalist/white-king.svg.
 const svgDir = app.isPackaged
@@ -201,6 +240,36 @@ ipcMain.handle('pgn:open', async () => {
   return { name: path.basename(file), path: file };
 });
 
+// Where to write games exported from the Games list. Returns the path, or
+// null. The Go backend writes the file.
+ipcMain.handle('pgn:exportPath', async (_e, name) => {
+  const base = String(name || 'Games').replace(/[\\/:*?"<>|\x00-\x1f]+/g, '-').replace(/\.pgn$/i, '').slice(0, 120) || 'Games';
+  const result = await dialog.showSaveDialog(win, {
+    title: 'Export games',
+    defaultPath: path.join(lastPgnDir ?? app.getPath('documents'), base + '.pgn'),
+    filters: [{ name: 'PGN', extensions: ['pgn'] }, { name: 'All files', extensions: ['*'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  let file = result.filePath;
+  if (!path.extname(file)) file += '.pgn';
+  lastPgnDir = path.dirname(file);
+  return file;
+});
+
+// Test positions: an EPD file, read whole (suites are small).
+ipcMain.handle('epd:open', async () => {
+  const result = await dialog.showOpenDialog(win, {
+    title: 'Open test positions (EPD)',
+    defaultPath: lastPgnDir ?? app.getPath('documents'),
+    properties: ['openFile'],
+    filters: [{ name: 'EPD', extensions: ['epd', 'fen', 'txt'] }, { name: 'All files', extensions: ['*'] }],
+  });
+  if (result.canceled || !result.filePaths[0]) return null;
+  const file = result.filePaths[0];
+  if (fs.statSync(file).size > 20 * 1024 * 1024) throw new Error('That file is too large for a set of test positions (over 20 MB).');
+  return { name: path.basename(file), path: file, text: fs.readFileSync(file, 'utf8') };
+});
+
 ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)));
 
 // ---------------------------------------------------------------------------
@@ -210,7 +279,7 @@ ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)
 const databaseFile = () => path.join(app.getPath('userData'), 'database.json');
 const DATABASE_DEFAULTS = () => ({
   enabled: false,
-  path: path.join(app.getPath('documents'), 'Board', 'Games.pgn'),
+  path: path.join(documentsDir(), 'Games.pgn'),
   local: true, lichess: true, watched: false,
 });
 
@@ -242,7 +311,7 @@ ipcMain.handle('database:save', async (_e, patch) => {
 });
 
 // Tournaments: where games are saved, and openings files.
-const tournamentDir = () => path.join(app.getPath('documents'), 'Board', 'Tournaments');
+const tournamentDir = () => path.join(documentsDir(), 'Tournaments');
 const safeName = (s) => String(s).replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
 
 ipcMain.handle('tournament:defaultPgn', (_e, a, b) => {
@@ -411,16 +480,39 @@ const LICHESS_DEFAULTS = {
   baseUrl: 'https://lichess.org',
   engineId: 'builtin-basic',
   autoConnect: false,
+  // Let the engine think on its opponent's time (UCI pondering).
+  ponder: true,
   policy: {
     rated: true, casual: true, humans: true, bots: true,
     minMinutes: 0, maxMinutes: 0, maxGames: 1,
+    speeds: { ultraBullet: true, bullet: true, blitz: true, rapid: true, classical: true },
+    minIncrement: 0, maxIncrement: 0, minRating: 0, maxRating: 0, noFromPosition: false,
+  },
+  // What the engine says in the chat of its games ({me}, {opponent}: the
+  // names). An empty message is not sent.
+  // When the engine offers or accepts a draw (as lichess-bot's
+  // offer_draw_* options): its score within `score` centipawns of zero for
+  // `moves` of its moves in a row with at most `pieces` pieces on the board,
+  // or a position the Lichess tablebase calls a draw.
+  draw: { enabled: true, score: 0, egtbZero: true, moves: 10, pieces: 10 },
+  greeting: {
+    hello: "Hi! I'm {me}. Good luck!",
+    goodbye: 'Good game!',
+    helloSpectators: "Hi! I'm {me}.",
+    goodbyeSpectators: 'Thanks for watching!',
   },
 };
+const GREETING_MAX = 140;
 
 function loadLichess() {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(lichessFile(), 'utf8')); } catch { /* first run */ }
-  return { ...LICHESS_DEFAULTS, ...saved, policy: { ...LICHESS_DEFAULTS.policy, ...saved.policy } };
+  return {
+    ...LICHESS_DEFAULTS, ...saved,
+    policy: { ...LICHESS_DEFAULTS.policy, ...saved.policy },
+    greeting: { ...LICHESS_DEFAULTS.greeting, ...saved.greeting },
+    draw: { ...LICHESS_DEFAULTS.draw, ...saved.draw },
+  };
 }
 
 function saveLichess(settings) {
@@ -428,39 +520,75 @@ function saveLichess(settings) {
   fs.writeFileSync(lichessFile(), JSON.stringify(settings, null, 2), { mode: 0o600 });
 }
 
-function lichessToken(settings) {
-  if (settings.token) {
-    try { return safeStorage.decryptString(Buffer.from(settings.token, 'base64')); } catch { return ''; }
-  }
+// Electron's safeStorage, through its asynchronous calls (the synchronous
+// ones are deprecated, and gone in Electron 46). An Electron from before the
+// asynchronous calls existed still gets the old ones.
+async function canEncrypt() {
+  try {
+    if (safeStorage.isAsyncEncryptionAvailable) return await safeStorage.isAsyncEncryptionAvailable();
+    return safeStorage.isEncryptionAvailable();
+  } catch { return false; }
+}
+
+async function encryptSecret(text) {
+  const buf = safeStorage.encryptStringAsync ? await safeStorage.encryptStringAsync(text) : safeStorage.encryptString(text);
+  return buf.toString('base64');
+}
+
+// Reads the secret kept encrypted in settings[key] ('' if it cannot be
+// read). When the system's key has changed, it is stored again under the
+// new one.
+async function decryptSecret(settings, key) {
+  try {
+    const buf = Buffer.from(settings[key], 'base64');
+    if (!safeStorage.decryptStringAsync) return safeStorage.decryptString(buf);
+    const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(buf);
+    if (shouldReEncrypt && result) {
+      try {
+        const again = await encryptSecret(result);
+        const now = loadLichess();
+        if (now[key] === settings[key]) { now[key] = again; saveLichess(now); }
+        settings[key] = again;
+      } catch { /* keep the old one */ }
+    }
+    return result;
+  } catch { return ''; }
+}
+
+async function lichessToken(settings) {
+  if (settings.token) return decryptSecret(settings, 'token');
   return settings.plainToken ?? '';
 }
 
 // The person's own account (Board API), signed in with Lichess (OAuth) or
 // with a pasted token; kept like the bot's token.
-function accountToken(settings) {
-  if (settings.accountToken) {
-    try { return safeStorage.decryptString(Buffer.from(settings.accountToken, 'base64')); } catch { return ''; }
-  }
+async function accountToken(settings) {
+  if (settings.accountToken) return decryptSecret(settings, 'accountToken');
   return settings.plainAccountToken ?? '';
 }
 
-function setAccountToken(settings, token) {
+// Either token: yours, or else the bot's.
+const anyToken = async (settings) => (await accountToken(settings)) || lichessToken(settings);
+
+async function setAccountToken(settings, token) {
   delete settings.accountToken;
   delete settings.plainAccountToken;
   token = (token ?? '').trim();
-  if (token && safeStorage.isEncryptionAvailable()) settings.accountToken = safeStorage.encryptString(token).toString('base64');
+  if (token && await canEncrypt()) settings.accountToken = await encryptSecret(token);
   else if (token) settings.plainAccountToken = token;
 }
 
 // What the window may see: everything but the tokens.
-function publicLichess(settings) {
+async function publicLichess(settings) {
   const { token, plainToken, accountToken: _a, plainAccountToken: _p, ...rest } = settings;
   return {
     ...rest,
-    hasToken: Boolean(lichessToken(settings)),
-    hasAccount: Boolean(accountToken(settings)),
+    greetingDefaults: LICHESS_DEFAULTS.greeting,
+    drawDefaults: LICHESS_DEFAULTS.draw,
+    hasToken: Boolean(await lichessToken(settings)),
+    hasAccount: Boolean(await accountToken(settings)),
     encrypted: !plainToken,
-    canEncrypt: safeStorage.isEncryptionAvailable(),
+    canEncrypt: await canEncrypt(),
   };
 }
 
@@ -472,7 +600,7 @@ function lichessEngine(settings) {
 
 ipcMain.handle('lichess:settings', () => publicLichess(loadLichess()));
 
-ipcMain.handle('lichess:save', (_e, patch) => {
+ipcMain.handle('lichess:save', async (_e, patch) => {
   const settings = loadLichess();
   patch = patch ?? {};
   if (typeof patch.baseUrl === 'string') {
@@ -482,21 +610,44 @@ ipcMain.handle('lichess:save', (_e, patch) => {
   }
   if (typeof patch.engineId === 'string') settings.engineId = patch.engineId;
   if (typeof patch.autoConnect === 'boolean') settings.autoConnect = patch.autoConnect;
+  if (typeof patch.ponder === 'boolean') settings.ponder = patch.ponder;
   if (patch.policy && typeof patch.policy === 'object') {
     const p = { ...settings.policy };
     for (const k of ['rated', 'casual', 'humans', 'bots']) if (k in patch.policy) p[k] = Boolean(patch.policy[k]);
     for (const k of ['minMinutes', 'maxMinutes']) if (k in patch.policy) p[k] = Math.max(0, Number(patch.policy[k]) || 0);
+    for (const k of ['minIncrement', 'maxIncrement', 'minRating', 'maxRating']) if (k in patch.policy) p[k] = Math.max(0, Math.round(Number(patch.policy[k]) || 0));
+    if ('noFromPosition' in patch.policy) p.noFromPosition = Boolean(patch.policy.noFromPosition);
+    if (patch.policy.speeds && typeof patch.policy.speeds === 'object') {
+      p.speeds = { ...LICHESS_DEFAULTS.policy.speeds, ...p.speeds };
+      for (const k of Object.keys(LICHESS_DEFAULTS.policy.speeds)) if (k in patch.policy.speeds) p.speeds[k] = Boolean(patch.policy.speeds[k]);
+    }
     if ('maxGames' in patch.policy) p.maxGames = Math.min(8, Math.max(1, Math.round(Number(patch.policy.maxGames) || 1)));
     settings.policy = p;
+  }
+  if (patch.draw && typeof patch.draw === 'object') {
+    const d = { ...settings.draw };
+    const whole = (v, lo, hi, fallback) => (Number.isFinite(Number(v)) && v !== '' ? Math.min(hi, Math.max(lo, Math.round(Number(v)))) : fallback);
+    for (const k of ['enabled', 'egtbZero']) if (k in patch.draw) d[k] = Boolean(patch.draw[k]);
+    if ('score' in patch.draw) d.score = whole(patch.draw.score, 0, 1000, d.score);
+    if ('moves' in patch.draw) d.moves = whole(patch.draw.moves, 1, 100, d.moves);
+    if ('pieces' in patch.draw) d.pieces = whole(patch.draw.pieces, 2, 32, d.pieces);
+    settings.draw = d;
+  }
+  if (patch.greeting && typeof patch.greeting === 'object') {
+    const g = { ...settings.greeting };
+    for (const k of Object.keys(LICHESS_DEFAULTS.greeting)) {
+      if (typeof patch.greeting[k] === 'string') g[k] = [...patch.greeting[k].replace(/\s+/g, ' ').trim()].slice(0, GREETING_MAX).join('');
+    }
+    settings.greeting = g;
   }
   if (typeof patch.token === 'string') {
     const token = patch.token.trim();
     delete settings.token;
     delete settings.plainToken;
-    if (token && safeStorage.isEncryptionAvailable()) settings.token = safeStorage.encryptString(token).toString('base64');
+    if (token && await canEncrypt()) settings.token = await encryptSecret(token);
     else if (token) settings.plainToken = token;
   }
-  if (typeof patch.accountToken === 'string') setAccountToken(settings, patch.accountToken);
+  if (typeof patch.accountToken === 'string') await setAccountToken(settings, patch.accountToken);
   saveLichess(settings);
   return publicLichess(settings);
 });
@@ -504,7 +655,7 @@ ipcMain.handle('lichess:save', (_e, patch) => {
 // Sign in with Lichess: OAuth with PKCE, which needs no registered app. The
 // browser comes back to a one-off local server with a code, swapped for a
 // token that may play games (board:play) and send and answer challenges.
-const OAUTH_CLIENT = 'board-chess-gui';
+const OAUTH_CLIENT = 'ponder-chess-gui';
 const OAUTH_SCOPES = 'board:play challenge:read challenge:write';
 let signIn = null; // the sign-in in progress: { server, reject }
 
@@ -529,8 +680,8 @@ ipcMain.handle('lichess:signIn', async () => {
       const got = url.searchParams.get('code');
       const ok = !err && got && url.searchParams.get('state') === state;
       res.writeHead(ok ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(ok ? page('Signed in to Board', 'You can close this tab and go back to Board.')
-        : page('Not signed in', err === 'access_denied' ? 'The sign-in was cancelled.' : 'Something went wrong; try again from Board.'));
+      res.end(ok ? page('Signed in to Ponder', 'You can close this tab and go back to Ponder.')
+        : page('Not signed in', err === 'access_denied' ? 'The sign-in was cancelled.' : 'Something went wrong; try again from Ponder.'));
       done();
       if (ok) resolve(got);
       else reject(new Error(err === 'access_denied' ? 'The sign-in was cancelled.' : 'Lichess did not sign you in.'));
@@ -556,7 +707,7 @@ ipcMain.handle('lichess:signIn', async () => {
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data.access_token) throw new Error(`Lichess did not give a token (${data.error_description || data.error || res.status}).`);
   const now = loadLichess();
-  setAccountToken(now, data.access_token);
+  await setAccountToken(now, data.access_token);
   saveLichess(now);
   win?.focus();
   return publicLichess(now);
@@ -567,8 +718,8 @@ ipcMain.handle('lichess:signInCancel', () => { signIn?.cancel?.(); });
 // Sign out: forget the token (and revoke it, if Lichess can be reached).
 ipcMain.handle('lichess:signOut', async () => {
   const settings = loadLichess();
-  const token = accountToken(settings);
-  setAccountToken(settings, '');
+  const token = await accountToken(settings);
+  await setAccountToken(settings, '');
   saveLichess(settings);
   await backend.request('lichessAcctDisconnect', {}).catch(() => {});
   if (token) {
@@ -578,16 +729,16 @@ ipcMain.handle('lichess:signOut', async () => {
   return publicLichess(settings);
 });
 
-ipcMain.handle('lichess:accountConnect', () => {
+ipcMain.handle('lichess:accountConnect', async () => {
   const settings = loadLichess();
-  return backend.request('lichessAcctConnect', { baseUrl: settings.baseUrl, token: accountToken(settings) });
+  return backend.request('lichessAcctConnect', { baseUrl: settings.baseUrl, token: await accountToken(settings) });
 });
 
-ipcMain.handle('lichess:connect', () => {
+ipcMain.handle('lichess:connect', async () => {
   const settings = loadLichess();
   return backend.request('lichessConnect', {
-    baseUrl: settings.baseUrl, token: lichessToken(settings),
-    engine: lichessEngine(settings), policy: settings.policy,
+    baseUrl: settings.baseUrl, token: await lichessToken(settings),
+    engine: lichessEngine(settings), policy: settings.policy, greeting: settings.greeting, ponder: settings.ponder !== false, draw: settings.draw,
   });
 });
 
@@ -595,11 +746,11 @@ ipcMain.handle('lichess:connect', () => {
 // explorer needs a Lichess account, so the saved token is sent with it.
 const explorerCache = new Map();
 
-function lichessBases() {
+async function lichessBases() {
   const settings = loadLichess();
   const base = (settings.baseUrl || LICHESS_DEFAULTS.baseUrl).replace(/\/+$/, '');
   const explorer = /^https:\/\/lichess\.org$/.test(base) ? 'https://explorer.lichess.org' : base;
-  return { base, explorer, token: accountToken(settings) || lichessToken(settings) };
+  return { base, explorer, token: await anyToken(settings) };
 }
 
 async function lichessGet(url, { token, accept = 'application/json', text = false } = {}) {
@@ -618,7 +769,7 @@ async function lichessGet(url, { token, accept = 'application/json', text = fals
 }
 
 ipcMain.handle('lichess:explorer', async (_e, db, fen, opts = {}) => {
-  const { explorer, token } = lichessBases();
+  const { explorer, token } = await lichessBases();
   const q = new URLSearchParams({ fen, moves: '15', topGames: db === 'masters' ? '8' : '4' });
   if (db === 'lichess') {
     q.set('speeds', (opts.speeds ?? ['blitz', 'rapid', 'classical']).join(','));
@@ -640,15 +791,25 @@ ipcMain.handle('lichess:explorer', async (_e, db, fen, opts = {}) => {
   }
 });
 
+// Everything about the players of a Lichess game. A token (yours, or the
+// bot's) lets Lichess make fresh rating histories.
+ipcMain.handle('lichess:players', async (_e, users, perf) => {
+  const settings = loadLichess();
+  return backend.request('lichessPlayers', {
+    baseUrl: settings.baseUrl, token: await anyToken(settings),
+    users: (users ?? []).map(String).slice(0, 2), perf: String(perf ?? ''),
+  });
+});
+
 ipcMain.handle('lichess:gamePgn', async (_e, db, id) => {
-  const { base, explorer, token } = lichessBases();
+  const { base, explorer, token } = await lichessBases();
   const url = db === 'masters' ? `${explorer}/masters/pgn/${encodeURIComponent(id)}` : `${base}/game/export/${encodeURIComponent(id)}?evals=false&clocks=false`;
   return lichessGet(url, { token, accept: 'application/x-chess-pgn', text: true });
 });
 
 // Puzzles are fetched without the token: a Bot account cannot solve them.
 ipcMain.handle('lichess:puzzle', async (_e, kind, opts = {}) => {
-  const { base } = lichessBases();
+  const { base } = await lichessBases();
   if (kind === 'daily') return lichessGet(`${base}/api/puzzle/daily`);
   const q = new URLSearchParams();
   if (opts.angle) q.set('angle', opts.angle);
@@ -667,7 +828,7 @@ ipcMain.handle('puzzles:chooseFile', async () => {
 
 ipcMain.handle('lichess:configure', () => {
   const settings = loadLichess();
-  return backend.request('lichessConfigure', { engine: lichessEngine(settings), policy: settings.policy });
+  return backend.request('lichessConfigure', { engine: lichessEngine(settings), policy: settings.policy, greeting: settings.greeting, ponder: settings.ponder !== false, draw: settings.draw });
 });
 
 // ---------------------------------------------------------------------------
@@ -681,7 +842,8 @@ function createWindow() {
     minHeight: 600,
     show: false,
     backgroundColor: '#f3f2ee',
-    title: 'Board',
+    title: 'Ponder',
+    icon: path.join(__dirname, 'icon.png'), // Windows and Linux; macOS takes the bundle's
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -706,6 +868,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Run from source, the Dock would show Electron's icon.
+  if (process.platform === 'darwin' && !app.isPackaged) {
+    try { app.dock.setIcon(path.join(__dirname, 'icon.png')); } catch { /* keep Electron's */ }
+  }
   backend.start();
   applyDatabase(loadDatabase()).catch(() => {});
   createWindow();

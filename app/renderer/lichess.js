@@ -54,6 +54,8 @@ function lichessStatus(next) {
   if ((next.incoming ?? []).some((c) => !before.has(c.id))) sounds.play('challenge');
   renderLichess();
   renderLichessSettingsStatus();
+  // Once the bot is connected, list the bots online without waiting for a click.
+  if (next.state === 'connected' && prev.state !== 'connected' && !Array.isArray(ob.bots)) loadOnlineBots();
   if (typeof syncAnalysis === 'function') { syncAnalysis(); renderAnalysis(); }
 }
 
@@ -105,11 +107,13 @@ function renderLichess() {
   $('#lx-off').hidden = online;
 
   renderMe(); // also counts the tab's badge
+  if (ob.bots) renderOnlineBots(); // Challenge needs the bot connected
   if (!online) return;
 
   // Challenges to the bot.
   $('#lx-auto').checked = Boolean(s.autoAccept);
-  $('#lx-auto-note').textContent = s.autoAccept ? 'Challenges that match Settings → Lichess are accepted automatically.' : '';
+  $('#lx-auto-note').textContent = s.autoAccept ? 'Challenges that match the auto-accept rules are accepted automatically.' : '';
+  renderLichessRules();
   $('#lx-incoming-count').textContent = s.incoming.length ? String(s.incoming.length) : '';
   $('#lx-incoming-empty').hidden = s.incoming.length > 0;
   $('#lx-incoming').replaceChildren(...s.incoming.map((c) => {
@@ -129,6 +133,7 @@ function renderLichess() {
   }));
 
   renderSeek();
+  renderChallengeLocks();
 
   // Challenges the bot sent.
   $('#lx-outgoing').replaceChildren(...s.outgoing.map((c) => el('div', { className: 'lx-row waiting' }, [
@@ -178,12 +183,101 @@ async function lxPlay(g) {
   if (ok) lichessCommand('lichessPlay', { id: g.id });
 }
 
+// --- Auto-accept rules: which challenges are accepted automatically ---
+
+const RULE_SPEEDS = [['ultraBullet', 'UltraBullet'], ['bullet', 'Bullet'], ['blitz', 'Blitz'], ['rapid', 'Rapid'], ['classical', 'Classical']];
+const speedOn = (p, key) => p?.speeds?.[key] !== false;
+const rangeText = (min, max, unit = '') => (min && max ? `${min}–${max}${unit}` : min ? `${min}${unit} or more` : max ? `up to ${max}${unit}` : '');
+
+// The rules in a line, e.g. "Blitz, Rapid · rated · from people · 1 game at once".
+function rulesSummary(p) {
+  if (!p) return '';
+  const speeds = RULE_SPEEDS.filter(([k]) => speedOn(p, k)).map(([, name]) => name);
+  const parts = [
+    speeds.length === RULE_SPEEDS.length ? 'any speed' : speeds.join(', ') || 'no speed',
+    p.rated && p.casual ? 'rated and casual' : p.rated ? 'rated only' : p.casual ? 'casual only' : 'neither rated nor casual',
+    p.humans && p.bots ? 'from people and bots' : p.humans ? 'from people only' : p.bots ? 'from bots only' : 'from nobody',
+  ];
+  const minutes = rangeText(p.minMinutes, p.maxMinutes, ' min');
+  if (minutes) parts.push(minutes);
+  const inc = rangeText(p.minIncrement, p.maxIncrement, ' s');
+  if (inc) parts.push(`increment ${inc}`);
+  const rating = rangeText(p.minRating, p.maxRating);
+  if (rating) parts.push(`rated ${rating}`);
+  if (p.noFromPosition) parts.push('usual start only');
+  parts.push(`${p.maxGames} game${p.maxGames === 1 ? '' : 's'} at once`);
+  return parts.join(' · ');
+}
+
+// Why nothing at all would be accepted, or ''.
+function rulesProblem(p) {
+  if (!RULE_SPEEDS.some(([k]) => speedOn(p, k))) return 'No speed is ticked, so every challenge would be declined.';
+  if (!p.rated && !p.casual) return 'Neither rated nor casual is ticked, so every challenge would be declined.';
+  if (!p.humans && !p.bots) return 'Neither people nor bots is ticked, so every challenge would be declined.';
+  if (p.maxMinutes && p.minMinutes > p.maxMinutes) return 'The minutes run from more to less, so every challenge would be declined.';
+  if (p.maxIncrement && p.minIncrement > p.maxIncrement) return 'The increment runs from more to less, so every challenge would be declined.';
+  if (p.maxRating && p.minRating > p.maxRating) return 'The rating runs from more to less, so every challenge with a rating would be declined.';
+  return '';
+}
+
+function renderLichessRules(error) {
+  const p = lx.settings?.policy;
+  if (!p) return;
+  const form = $('#lx-rules-form');
+  // Leave the form alone while it is being typed in.
+  if (!form.contains(document.activeElement) || document.activeElement.type === 'checkbox') {
+    for (const box of $('#lx-rules-speeds').querySelectorAll('input')) box.checked = speedOn(p, box.dataset.speed);
+    $('#lr-rated').checked = p.rated;
+    $('#lr-casual').checked = p.casual;
+    $('#lr-humans').checked = p.humans;
+    $('#lr-bots').checked = p.bots;
+    $('#lr-position').checked = !p.noFromPosition;
+    const num = (id, v) => { $(id).value = v || ''; };
+    num('#lr-min', p.minMinutes); num('#lr-max', p.maxMinutes);
+    num('#lr-inc-min', p.minIncrement); num('#lr-inc-max', p.maxIncrement);
+    num('#lr-rating-min', p.minRating); num('#lr-rating-max', p.maxRating);
+    $('#lr-games').value = p.maxGames;
+  }
+  $('#lx-rules-summary').textContent = rulesSummary(p);
+  const problem = error || rulesProblem(p);
+  $('#lx-rules-error').textContent = problem;
+  $('#lx-rules-error').hidden = !problem;
+  $('#lx-rules').classList.toggle('problem', Boolean(problem));
+}
+
+// Every change is saved and applies at once.
+$('#lx-rules-form').onchange = async () => {
+  const speeds = {};
+  for (const box of $('#lx-rules-speeds').querySelectorAll('input')) speeds[box.dataset.speed] = box.checked;
+  const policy = {
+    speeds,
+    rated: $('#lr-rated').checked, casual: $('#lr-casual').checked,
+    humans: $('#lr-humans').checked, bots: $('#lr-bots').checked,
+    noFromPosition: !$('#lr-position').checked,
+    minMinutes: +$('#lr-min').value || 0, maxMinutes: +$('#lr-max').value || 0,
+    minIncrement: +$('#lr-inc-min').value || 0, maxIncrement: +$('#lr-inc-max').value || 0,
+    minRating: +$('#lr-rating-min').value || 0, maxRating: +$('#lr-rating-max').value || 0,
+    maxGames: +$('#lr-games').value || 1,
+  };
+  let error = '';
+  try {
+    lx.settings = await api.lichess.save({ policy });
+    if (lxOnline()) await api.lichess.configure();
+  } catch (err) {
+    error = errorText(err);
+  }
+  renderLichessRules(error);
+};
+$('#lx-rules-form').onsubmit = (e) => e.preventDefault();
+try { $('#lx-rules').open = localStorage.getItem('lichessRulesOpen') === '1'; } catch { /* closed */ }
+$('#lx-rules').ontoggle = () => { try { localStorage.setItem('lichessRulesOpen', $('#lx-rules').open ? '1' : '0'); } catch { /* ignore */ } };
+
 $('#lx-auto').onchange = async (e) => {
   const on = e.target.checked;
   if (on) {
     const waiting = lx.status.incoming?.length ?? 0;
     const ok = await confirmDialog(
-      'Accept challenges automatically? Your engine will play every challenge that matches the rules in Settings → Lichess; others are declined.'
+      `Accept challenges automatically? Your engine will play every challenge that matches the auto-accept rules (${rulesSummary(lx.settings?.policy)}); others are declined.`
       + (waiting ? ` This also answers the ${waiting === 1 ? 'challenge' : `${waiting} challenges`} waiting now.` : ''),
       'Accept automatically');
     if (!ok) { e.target.checked = false; return; }
@@ -271,6 +365,7 @@ $('#lx-watch-stop').onclick = () => lichessCommand('lichessSpectateStop');
 function lichessWatchStatus(st) {
   lx.watch = st;
   renderLichessWatch();
+  if (Array.isArray(ob?.bots)) renderOnlineBots(); // the TV of the bot being watched lights up
 }
 
 function renderLichessWatch() {
@@ -299,10 +394,23 @@ $('#lx-challenge').onsubmit = async (e) => {
     limit: +$('#lx-time').value, increment: +$('#lx-inc').value,
   });
   send.disabled = false;
-  if (ok) {
-    try { localStorage.setItem('lichessChallenge', JSON.stringify({ username, time: $('#lx-time').value, inc: $('#lx-inc').value, color: $('#lx-color').value, rated: $('#lx-rated').checked })); } catch { /* ignore */ }
-  }
+  renderChallengeLocks();
+  if (ok) saveChallengeForm(username);
 };
+
+// The challenge settings (time, increment, colour, rated) are kept whenever
+// one changes: they are also used by Challenge in the online bots list and
+// by Challenge random bot. The username is kept once a challenge to it went out.
+function saveChallengeForm(username) {
+  try {
+    const before = JSON.parse(localStorage.getItem('lichessChallenge') ?? '{}') ?? {};
+    localStorage.setItem('lichessChallenge', JSON.stringify({
+      username: username ?? before.username ?? '',
+      time: $('#lx-time').value, inc: $('#lx-inc').value, color: $('#lx-color').value, rated: $('#lx-rated').checked,
+    }));
+  } catch { /* ignore */ }
+}
+for (const id of ['#lx-time', '#lx-inc', '#lx-color', '#lx-rated']) $(id).addEventListener('change', () => saveChallengeForm());
 
 // Lichess's speed for the chosen clock: by initial time + 40 × increment.
 function lxSpeed() {
@@ -327,6 +435,32 @@ $('#lx-seek-go').onclick = async () => {
 };
 $('#lx-seek-stop').onclick = () => lichessCommand('lichessSeekStop');
 
+// One challenge at a time: why the engine (or you) cannot send another now.
+function engineBusy() {
+  const s = lx.status;
+  const out = s.outgoing?.[0];
+  if (out) return `Your engine's challenge to ${out.user} is waiting for an answer: cancel it to challenge someone else`;
+  if (s.seek?.active) return 'Your engine is looking for a random bot: stop that to challenge someone yourself';
+  if ((s.games ?? []).some((g) => !g.finished)) return 'Your engine is playing a game: challenge again when it is over';
+  return '';
+}
+function meBusy() {
+  const out = me.status.outgoing?.[0];
+  return out ? `Your challenge to ${out.user} is waiting for an answer: cancel it to challenge someone else` : '';
+}
+
+// The challenge buttons follow engineBusy / meBusy.
+function renderChallengeLocks() {
+  const eb = engineBusy();
+  $('#lx-send').disabled = Boolean(eb);
+  $('#lx-send').title = eb;
+  const seekBusy = eb && !lx.status.seek?.active ? eb : '';
+  $('#lx-seek-go').disabled = Boolean(seekBusy);
+  $('#lx-seek-go').title = seekBusy || 'Challenge a random bot in this rating range with the time control above, one a minute at most; if it declines or does not answer, try another until one accepts';
+  const mb = meBusy();
+  if ($('#lx-me-send')) { $('#lx-me-send').disabled = Boolean(mb); $('#lx-me-send').title = mb; }
+}
+
 function renderSeek() {
   const seek = lx.status.seek;
   const on = Boolean(seek?.active);
@@ -339,8 +473,15 @@ function renderSeek() {
     const range = seek.minRating || seek.maxRating
       ? `${seek.minRating || 'any'}–${seek.maxRating || 'any'} ${seek.speed}`
       : `any ${seek.speed} rating`;
-    box.textContent = `Random bot (${range}) · ${seek.tried} asked · ${seek.message}`;
-  }
+    const text = () => {
+      const left = seek.nextAt ? Math.max(0, Math.ceil((seek.nextAt - Date.now()) / 1000)) : 0;
+      const next = left ? ` Next challenge in ${left} s.` : '';
+      box.textContent = `Random bot (${range}) · ${seek.tried} asked · ${seek.message}${next}`;
+    };
+    text();
+    clearInterval(lx.seekTimer);
+    if (seek.nextAt) lx.seekTimer = setInterval(text, 1000);
+  } else clearInterval(lx.seekTimer);
   $('#lx-seek').classList.toggle('on', on);
 }
 
@@ -396,30 +537,83 @@ async function fillLichessSettings() {
   $('#ls-engine').replaceChildren(...engines.map((e) => el('option', { value: e.id, textContent: e.name })));
   $('#ls-engine').value = engines.some((e) => e.id === st.engineId) ? st.engineId : engines[0]?.id ?? '';
   $('#ls-autoconnect').checked = st.autoConnect;
-  const p = st.policy;
-  $('#ls-rated').checked = p.rated;
-  $('#ls-casual').checked = p.casual;
-  $('#ls-humans').checked = p.humans;
-  $('#ls-bots').checked = p.bots;
-  $('#ls-min').value = p.minMinutes;
-  $('#ls-max').value = p.maxMinutes;
-  $('#ls-games').value = p.maxGames;
+  $('#ls-ponder').checked = st.ponder !== false;
+  fillGreeting(st.greeting);
+  fillDraw(st.draw);
   $('#ls-server').value = st.baseUrl;
   $('#ls-error').hidden = true;
   renderLichessSettingsStatus();
 }
 
 
+// Draws: when the engine offers one with its move, or accepts one.
+function fillDraw(d) {
+  d = { ...lx.settings?.drawDefaults, ...d };
+  $('#ls-draw-on').checked = Boolean(d.enabled);
+  $('#ls-draw-score').value = d.score ?? 0;
+  $('#ls-draw-moves').value = d.moves ?? 10;
+  $('#ls-draw-pieces').value = d.pieces ?? 10;
+  $('#ls-draw-egtb').checked = Boolean(d.egtbZero);
+  renderDraw();
+}
+
+function drawPatch() {
+  return {
+    enabled: $('#ls-draw-on').checked,
+    score: $('#ls-draw-score').value,
+    moves: $('#ls-draw-moves').value,
+    pieces: $('#ls-draw-pieces').value,
+    egtbZero: $('#ls-draw-egtb').checked,
+  };
+}
+
+function renderDraw() {
+  const d = drawPatch();
+  for (const input of $('#ls-draw-rules').querySelectorAll('input')) input.disabled = !d.enabled;
+  $('#ls-draw-rules').classList.toggle('off', !d.enabled);
+  const n = (v, fallback) => (v === '' || !Number.isFinite(Number(v)) ? fallback : Math.round(Number(v)));
+  const score = n(d.score, 0), moves = n(d.moves, 10), pieces = n(d.pieces, 10);
+  let text = 'Your engine never offers a draw, and plays on when offered one.';
+  if (d.enabled) {
+    const close = score === 0 ? 'exactly 0.00' : `within ±${(score / 100).toFixed(2)}`;
+    text = `A draw is offered or accepted once the score was ${close} for ${moves} ${moves === 1 ? 'move' : 'moves'} in a row with ${pieces} or fewer pieces left`
+      + (d.egtbZero ? ', or at once in a tablebase draw.' : '.');
+  }
+  $('#ls-draw-summary').textContent = text;
+}
+
+$('#ls-draw').addEventListener('input', renderDraw);
+$('#ls-draw-reset').onclick = () => fillDraw(lx.settings?.drawDefaults);
+
+// Chat messages: what the engine says when its games start and end.
+const greetingInputs = () => [...$('#ls-greeting').querySelectorAll('input[data-greeting]')];
+
+function fillGreeting(g) {
+  for (const input of greetingInputs()) input.value = g?.[input.dataset.greeting] ?? '';
+  renderGreetingPreview();
+}
+
+// The message being written, with the names filled in.
+function renderGreetingPreview() {
+  const input = greetingInputs().find((i) => i === document.activeElement) ?? greetingInputs().find((i) => i.value.trim());
+  const me = lx.status?.account?.username || 'YourBot';
+  const text = (input?.value ?? '').replaceAll('{me}', me).replaceAll('{opponent}', 'Opponent').replace(/\s+/g, ' ').trim();
+  $('#ls-greet-preview').textContent = text ? `For example: “${text}”` : 'Your engine will say nothing.';
+}
+
+$('#ls-greeting').addEventListener('input', renderGreetingPreview);
+$('#ls-greeting').addEventListener('focusin', renderGreetingPreview);
+$('#ls-greet-reset').onclick = () => fillGreeting(lx.settings?.greetingDefaults);
+$('#ls-greet-clear').onclick = () => fillGreeting({});
+
 function lichessPatch() {
   const patch = {
     engineId: $('#ls-engine').value,
     autoConnect: $('#ls-autoconnect').checked,
+    ponder: $('#ls-ponder').checked,
     baseUrl: $('#ls-server').value,
-    policy: {
-      rated: $('#ls-rated').checked, casual: $('#ls-casual').checked,
-      humans: $('#ls-humans').checked, bots: $('#ls-bots').checked,
-      minMinutes: +$('#ls-min').value || 0, maxMinutes: +$('#ls-max').value || 0, maxGames: +$('#ls-games').value || 1,
-    },
+    greeting: Object.fromEntries(greetingInputs().map((i) => [i.dataset.greeting, i.value])),
+    draw: drawPatch(),
   };
   const token = $('#ls-token').value.trim();
   if (token) patch.token = token;
@@ -478,7 +672,7 @@ $('#ls-token-link').onclick = (e) => {
   e.preventDefault();
   const base = ($('#ls-server').value.trim() || 'https://lichess.org').replace(/\/+$/, '');
   const scopes = ['bot:play', 'challenge:read', 'challenge:write'].map((s) => `scopes[]=${encodeURIComponent(s)}`).join('&');
-  api.openExternal(`${base}/account/oauth/token/create?${scopes}&description=Board`).catch(lsError);
+  api.openExternal(`${base}/account/oauth/token/create?${scopes}&description=Ponder`).catch(lsError);
 };
 
 $('#ls-upgrade-btn').onclick = async () => {
@@ -494,6 +688,265 @@ $('#ls-upgrade-btn').onclick = async () => {
     lsError(err);
   }
 };
+
+// ---------------------------------------------------------------------------
+// Online bots: who is on Lichess now, their ratings and what they are doing,
+// with Challenge (your engine, or you), Watch and a link to the profile.
+// ---------------------------------------------------------------------------
+const ob = {
+  bots: null,        // the list, once loaded
+  status: new Map(), // id → { online, playing, gameId, clock }
+  shown: 50,         // rows drawn (Show more adds 50)
+  open: new Set(),   // ids with details open
+  sent: new Map(),   // id → note after a challenge
+  loading: false,
+  timer: null,
+};
+const OB_SPEEDS = ['bullet', 'blitz', 'rapid', 'classical'];
+const OB_SHORT = { bullet: 'Bullet', blitz: 'Blitz', rapid: 'Rapid', classical: 'Classical' };
+
+function flagEmoji(code) {
+  if (!/^[A-Z]{2}$/.test(code ?? '')) return '';
+  return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
+}
+const obName = (b) => b.username || b.name || b.id;
+const obPerf = (b, speed) => b.perfs?.[speed];
+const obRating = (b, speed) => (obPerf(b, speed)?.games ? obPerf(b, speed).rating : null);
+
+async function loadOnlineBots() {
+  if (ob.loading) return;
+  ob.loading = true;
+  $('#lx-online-load').disabled = true;
+  $('#lx-online-load').textContent = 'Loading…';
+  lx.settings ??= await api.lichess.settings();
+  const baseUrl = lx.settings?.baseUrl ?? 'https://lichess.org';
+  let bots = null;
+  try {
+    bots = await api.backend('lichessBots', { baseUrl, max: 300 });
+  } catch (err) {
+    lxSetNote(errorText(err));
+  }
+  ob.loading = false;
+  $('#lx-online-load').disabled = false;
+  $('#lx-online-load').textContent = 'Refresh';
+  if (!Array.isArray(bots)) return;
+  ob.bots = bots;
+  ob.shown = 50;
+  // The username boxes offer the same bots.
+  lx.bots = bots;
+  $('#lx-bots').replaceChildren(...bots.map((b) => el('option', { value: obName(b) })));
+  renderOnlineBots();
+  refreshBotStatus();
+  clearInterval(ob.timer);
+  // Who is playing changes all the time: check again while the tab is open.
+  ob.timer = setInterval(() => {
+    if (!$('#pane-lichess').hidden && document.visibilityState === 'visible') refreshBotStatus();
+  }, 20000);
+}
+
+async function refreshBotStatus() {
+  if (!ob.bots?.length) return;
+  const baseUrl = lx.settings?.baseUrl ?? 'https://lichess.org';
+  try {
+    const list = await api.backend('lichessUsersStatus', { baseUrl, ids: ob.bots.map((b) => b.id) });
+    ob.status = new Map((list ?? []).map((st) => [st.id, st]));
+    renderOnlineBots();
+  } catch { /* the list still shows; status is a bonus */ }
+}
+
+function obFiltered() {
+  const speed = $('#lx-online-speed').value;
+  const q = $('#lx-online-q').value.trim().toLowerCase();
+  const min = +$('#lx-online-min').value || 0;
+  const max = +$('#lx-online-max').value || 0;
+  const free = $('#lx-online-free').checked;
+  const sort = $('#lx-online-sort').value;
+  const list = ob.bots.filter((b) => {
+    if (q) {
+      const hay = [obName(b), b.profile?.bio, b.profile?.location, b.profile?.flag].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    const r = obRating(b, speed);
+    if ((min || max) && r == null) return false;
+    if (min && r < min) return false;
+    if (max && r > max) return false;
+    if (free && ob.status.get(b.id)?.playing) return false;
+    return true;
+  });
+  const rating = (b) => obRating(b, speed) ?? -1;
+  const by = {
+    rating: (a, b) => rating(b) - rating(a),
+    'rating-asc': (a, b) => (rating(a) < 0) - (rating(b) < 0) || rating(a) - rating(b),
+    games: (a, b) => (obPerf(b, speed)?.games ?? 0) - (obPerf(a, speed)?.games ?? 0),
+    active: (a, b) => (b.playTime?.total ?? 0) - (a.playTime?.total ?? 0),
+    name: (a, b) => obName(a).localeCompare(obName(b)),
+    new: (a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0),
+  }[sort];
+  return list.sort(by);
+}
+
+const obAgo = (ms) => {
+  if (!ms) return '';
+  const s = Math.max(0, (Date.now() - ms) / 1000);
+  if (s < 90) return 'just now';
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  if (s < 2 * 86400) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} days ago`;
+};
+const obHours = (secs) => (secs >= 3600 ? `${Math.round(secs / 3600).toLocaleString()} h` : `${Math.round(secs / 60)} min`);
+
+// A television: watch this bot's games on the board.
+const TV_ICON = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 1.5 8 4l2.5-2.5"/><rect x="1.5" y="4" width="13" height="8.5" rx="1.5"/><path d="M5 14.5h6"/></svg>';
+
+function renderOnlineBots() {
+  const loaded = Array.isArray(ob.bots);
+  $('#lx-online-bar').hidden = !loaded;
+  $('#lx-online-hint').hidden = loaded;
+  $('#lx-online-load').textContent = ob.loading ? 'Loading…' : loaded ? 'Refresh' : 'Show online bots';
+  if (!loaded) { $('#lx-online-list').replaceChildren(); $('#lx-online-foot').hidden = true; return; }
+  const speed = $('#lx-online-speed').value;
+  const list = obFiltered();
+  const playing = ob.bots.filter((b) => ob.status.get(b.id)?.playing).length;
+  $('#lx-online-count').textContent = `${ob.bots.length}${ob.status.size ? ` · ${playing} playing` : ''}`;
+  const engineOn = lxOnline();
+  const youOn = meOnline();
+  const tcEngine = `${+$('#lx-time').value / 60}+${$('#lx-inc').value}`;
+  const tcYou = `${+$('#lx-me-time').value / 60}+${$('#lx-me-inc').value}`;
+  const eBusy = engineOn ? engineBusy() : '';
+  const mBusy = youOn ? meBusy() : '';
+  const rows = list.slice(0, ob.shown).map((b) => {
+    const name = obName(b);
+    const st = ob.status.get(b.id);
+    const perf = obPerf(b, speed);
+    const r = obRating(b, speed);
+    const flag = flagEmoji(b.profile?.flag);
+    const who = el('span', { className: 'who', title: 'Show details' }, [
+      el('span', { className: 'state' + (st?.playing ? ' playing' : st && !st.online ? ' off' : ''), title: st?.playing ? 'Playing' : st && !st.online ? 'Offline' : 'Online' }),
+      ...(flag ? [el('span', { className: 'flag', textContent: flag, title: b.profile.flag })] : []),
+      el('span', { className: 'lx-title', textContent: b.title || 'BOT' }),
+      el('span', { className: 'name', textContent: name }),
+    ]);
+    who.onclick = () => { if (ob.open.has(b.id)) ob.open.delete(b.id); else ob.open.add(b.id); renderOnlineBots(); };
+    window.attachPlayerHover?.($('.name', who), name, () => $('#lx-online-speed').value);
+    const rating = el('span', { className: 'rating' + (r == null ? ' none' : ''), title: r == null ? `No ${speed} games` : `${OB_SHORT[speed]} rating${perf.prov ? ' (provisional)' : ''}, ${perf.games.toLocaleString()} games` },
+      r == null ? ['—'] : [String(r), ...(perf.prov ? [el('small', { textContent: '?' })] : [])]);
+    const others = OB_SPEEDS.filter((sp) => sp !== speed && obRating(b, sp) != null).map((sp) => `${OB_SHORT[sp]} ${obRating(b, sp)}`).join(' · ');
+    const games = perf?.games ? `${perf.games.toLocaleString()} ${speed} games` : '';
+    let doing = st?.playing ? `Playing${st.clock ? ' ' + st.clock : ''}` : st ? (st.online ? 'Free' : 'Offline') : '';
+    const sent = ob.sent.get(b.id);
+    if (sent) doing = sent;
+    const info = el('span', { className: 'info' }, [
+      el('span', { className: 'speeds', textContent: [games, others].filter(Boolean).join(' · ') || 'No rated games yet' }),
+      el('span', { className: 'doing' + (st?.playing && !sent ? ' playing' : ''), textContent: doing }),
+    ]);
+    const acts = [];
+    const engineBtn = lxButton('Challenge', () => obChallenge(b, 'engine'), 'small primary');
+    engineBtn.disabled = !engineOn || Boolean(eBusy);
+    engineBtn.title = !engineOn ? 'Connect your engine’s Bot account (below) to challenge with it'
+      : eBusy || `Challenge ${name} with your engine: ${tcEngine}, from “Challenge a player” below`;
+    acts.push(engineBtn);
+    if (youOn) {
+      const youBtn = lxButton('Play', () => obChallenge(b, 'you'), 'small');
+      youBtn.disabled = Boolean(mBusy);
+      youBtn.title = mBusy || `Challenge ${name} to play you: ${tcYou}, from your Challenge a friend settings`;
+      acts.push(youBtn);
+    }
+    const watching = lx.watch?.active && lx.watch.user?.toLowerCase() === name.toLowerCase();
+    const tv = lxButton('', () => obWatch(name), 'small lx-tv' + (st?.playing ? ' live' : '') + (watching ? ' on' : ''));
+    tv.innerHTML = TV_ICON;
+    tv.title = watching ? `Watching ${name} on the board`
+      : st?.playing ? `Watch ${name}'s game live on the board`
+        : `Watch ${name}: shows the last game now, and the next one when it starts`;
+    tv.setAttribute('aria-label', `Watch ${name}`);
+    tv.setAttribute('aria-pressed', String(Boolean(watching)));
+    acts.push(tv);
+    acts.push(lxLink(`${(lx.settings?.baseUrl ?? 'https://lichess.org').replace(/\/+$/, '')}/@/${name}`, 'Profile ↗', `${name} on Lichess`));
+    const row = el('div', { className: 'lx-bot' + (sent ? ' sent' : '') }, [who, rating, info, el('span', { className: 'acts' }, acts)]);
+    if (ob.open.has(b.id)) {
+      const item = (label, value) => (value ? el('span', {}, [el('b', { textContent: label }), value]) : null);
+      const perfs = OB_SPEEDS.filter((sp) => obPerf(b, sp)?.games).map((sp) => {
+        const p = obPerf(b, sp);
+        const prog = p.prog ? el('span', { className: 'prog ' + (p.prog > 0 ? 'up' : 'down'), textContent: ` ${p.prog > 0 ? '▲' : '▼'}${Math.abs(p.prog)}` }) : '';
+        return el('span', {}, [el('b', { textContent: OB_SHORT[sp] }), `${p.rating}${p.prov ? '?' : ''} · ${p.games.toLocaleString()} games`, prog]);
+      });
+      row.append(el('div', { className: 'details' }, [
+        ...(b.profile?.bio ? [el('span', { className: 'bio', textContent: b.profile.bio })] : []),
+        ...perfs,
+        item('Joined', b.createdAt ? new Date(b.createdAt).toLocaleDateString() : ''),
+        item('Last seen', obAgo(b.seenAt)),
+        item('Time played', b.playTime?.total ? obHours(b.playTime.total) : ''),
+        item('Location', [b.profile?.location, b.profile?.flag].filter(Boolean).join(' · ')),
+        item('Now', st?.playing ? `Playing ${st.clock ?? ''} ${st.variant && st.variant !== 'standard' ? st.variant : ''}`.trim() : ''),
+      ].filter(Boolean)));
+    }
+    return row;
+  });
+  if (!rows.length) rows.push(el('p', { className: 'hint lx-empty', textContent: ob.bots.length ? 'No bot matches.' : 'No bots are online right now.' }));
+  $('#lx-online-list').replaceChildren(...rows);
+  $('#lx-online-foot').hidden = list.length <= 0;
+  $('#lx-online-shown').textContent = `Showing ${Math.min(ob.shown, list.length)} of ${list.length}${list.length !== ob.bots.length ? ` matching (${ob.bots.length} online)` : ''}`;
+  $('#lx-online-more').hidden = list.length <= ob.shown;
+}
+
+async function obChallenge(b, who) {
+  const name = obName(b);
+  if (ob.sending) return;
+  ob.sending = true;
+  for (const btn of $('#lx-online-list').querySelectorAll('.acts button')) btn.disabled = true;
+  let ok;
+  if (who === 'engine') {
+    ok = await lichessCommand('lichessChallenge', {
+      username: name, rated: $('#lx-rated').checked, color: $('#lx-color').value,
+      limit: +$('#lx-time').value, increment: +$('#lx-inc').value,
+    });
+  } else {
+    ok = await meCommand('lichessAcctChallenge', {
+      username: name, rated: $('#lx-me-rated').checked, color: $('#lx-me-color').value,
+      limit: +$('#lx-me-time').value, increment: +$('#lx-me-inc').value,
+    });
+  }
+  if (ok) {
+    ob.sent.set(b.id, who === 'engine' ? 'Challenged by your engine' : 'Challenged by you');
+    setTimeout(() => { ob.sent.delete(b.id); renderOnlineBots(); }, 15000);
+  }
+  ob.sending = false;
+  renderOnlineBots();
+}
+
+async function obWatch(name) {
+  $('#lx-watch-user').value = name;
+  $('#lx-watch-form').requestSubmit();
+}
+
+$('#lx-online-load').onclick = loadOnlineBots;
+$('#lx-online-more').onclick = () => { ob.shown += 50; renderOnlineBots(); };
+for (const id of ['#lx-online-q', '#lx-online-min', '#lx-online-max']) {
+  $(id).addEventListener('input', () => { ob.shown = 50; renderOnlineBots(); saveOnlineFilters(); });
+}
+for (const id of ['#lx-online-speed', '#lx-online-sort', '#lx-online-free']) {
+  $(id).addEventListener('change', () => { ob.shown = 50; renderOnlineBots(); saveOnlineFilters(); });
+}
+// The tooltips name the time controls of the two challenge forms.
+for (const id of ['#lx-time', '#lx-inc', '#lx-me-time', '#lx-me-inc']) $(id).addEventListener('change', () => ob.bots && renderOnlineBots());
+
+function saveOnlineFilters() {
+  try {
+    localStorage.setItem('lichessOnline', JSON.stringify({
+      speed: $('#lx-online-speed').value, sort: $('#lx-online-sort').value, free: $('#lx-online-free').checked,
+      min: $('#lx-online-min').value, max: $('#lx-online-max').value,
+    }));
+  } catch { /* ignore */ }
+}
+function loadOnlineFilters() {
+  let f = {};
+  try { f = JSON.parse(localStorage.getItem('lichessOnline') ?? '{}') ?? {}; } catch { /* ignore */ }
+  if (f.speed) $('#lx-online-speed').value = f.speed;
+  else $('#lx-online-speed').value = lxSpeed() === 'ultraBullet' ? 'bullet' : lxSpeed();
+  if (f.sort) $('#lx-online-sort').value = f.sort;
+  $('#lx-online-free').checked = Boolean(f.free);
+  if (f.min) $('#lx-online-min').value = f.min;
+  if (f.max) $('#lx-online-max').value = f.max;
+}
 
 // ---------------------------------------------------------------------------
 // Playing with your own account (Lichess's Board API)
@@ -545,6 +998,7 @@ function lichessAccountStatus(next) {
   const had = offers(prev);
   if ([...offers(next)].some((o) => !had.has(o))) sounds.play('challenge');
   renderMe();
+  if (ob.bots) renderOnlineBots(); // Play needs you signed in
   if (state?.external?.kind === 'play') renderPlayers(); // the bar's buttons follow the offers
   else renderPlayOffer();
 }
@@ -578,6 +1032,7 @@ function renderMe() {
   const count = botCount + (s.incoming?.length ?? 0) + myTurn;
   $('#lichess-count').textContent = count ? String(count) : '';
   $('#tab-lichess').classList.toggle('live', lxLiveGames().length > 0 || (s.games ?? []).some((g) => !g.finished));
+  renderChallengeLocks();
   if (!online) return;
 
   // Quick pairing.
@@ -658,7 +1113,6 @@ async function meSeek(limit, inc) {
     const ok = await confirmDialog('Look for a Lichess game? When one starts, it replaces the game you are playing here.', 'Look for a game');
     if (!ok) return;
   }
-  try { localStorage.setItem('lichessMeRated', $('#lx-me-rated').checked ? '1' : ''); } catch { /* ignore */ }
   await meCommand('lichessAcctSeek', { rated: $('#lx-me-rated').checked, limit, increment: inc, color: 'random' });
 }
 const meStopSeek = () => meCommand('lichessAcctSeekStop');
@@ -681,10 +1135,23 @@ $('#lx-me-challenge').onsubmit = async (e) => {
   const args = { username, rated: $('#lx-me-rated').checked, color: $('#lx-me-color').value, limit: +$('#lx-me-time').value, increment: +$('#lx-me-inc').value };
   const ok = await meCommand('lichessAcctChallenge', args);
   send.disabled = false;
-  if (ok) {
-    try { localStorage.setItem('lichessMeChallenge', JSON.stringify({ ...args, limit: String(args.limit), increment: String(args.increment) })); } catch { /* ignore */ }
-  }
+  renderChallengeLocks();
+  if (ok) saveMeForm(username);
 };
+
+// Your own challenge settings, kept whenever one changes (Rated also goes
+// for the games you look for, and Play in the online bots list uses them all).
+function saveMeForm(username) {
+  try {
+    const before = JSON.parse(localStorage.getItem('lichessMeChallenge') ?? '{}') ?? {};
+    localStorage.setItem('lichessMeChallenge', JSON.stringify({
+      username: username ?? before.username ?? '',
+      limit: $('#lx-me-time').value, increment: $('#lx-me-inc').value, color: $('#lx-me-color').value,
+    }));
+    localStorage.setItem('lichessMeRated', $('#lx-me-rated').checked ? '1' : '');
+  } catch { /* ignore */ }
+}
+for (const id of ['#lx-me-time', '#lx-me-inc', '#lx-me-color', '#lx-me-rated']) $(id).addEventListener('change', () => saveMeForm());
 
 async function meConnect() {
   try {
@@ -719,7 +1186,7 @@ $('#lx-acct-token-link').onclick = (e) => {
   e.preventDefault();
   const base = (lx.settings?.baseUrl || 'https://lichess.org').replace(/\/+$/, '');
   const scopes = ['board:play', 'challenge:read', 'challenge:write'].map((sc) => `scopes[]=${encodeURIComponent(sc)}`).join('&');
-  api.openExternal(`${base}/account/oauth/token/create?${scopes}&description=Board`).catch((err) => meSetNote(errorText(err)));
+  api.openExternal(`${base}/account/oauth/token/create?${scopes}&description=Ponder`).catch((err) => meSetNote(errorText(err)));
 };
 $('#lx-token-form').onsubmit = async (e) => {
   e.preventDefault();
@@ -740,7 +1207,7 @@ async function meSignOut() {
   const live = (me.status.games ?? []).filter((g) => !g.finished).length;
   const ok = await confirmDialog(live
     ? `Sign out of Lichess? Your ${live === 1 ? 'game goes' : `${live} games go`} on there, and the clock keeps running.`
-    : 'Sign out of Lichess? Board forgets your sign-in.', 'Sign out');
+    : 'Sign out of Lichess? Ponder forgets your sign-in.', 'Sign out');
   if (!ok) return;
   try { lx.settings = await api.lichess.signOut(); } catch (err) { meSetNote(errorText(err)); }
 }
@@ -789,6 +1256,7 @@ async function initLichess() {
     $('#lx-watch-user').value = localStorage.getItem('lichessWatchUser') ?? '';
     if (lx.settings.autoConnect && lx.settings.hasToken) lxConnect();
     loadMeForm();
+    loadOnlineFilters();
     lichessAccountStatus(await api.backend('lichessAcctStatus'));
     if (lx.settings.hasAccount) meConnect(); // signed in before: sign in again
   } catch (err) {

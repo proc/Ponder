@@ -1,5 +1,5 @@
 // Command basicengine is a small UCI chess engine bundled with the GUI as
-// "Board Basic". It searches a few moves deep with alpha-beta, a capture
+// "Ponder Basic". It searches a few moves deep with alpha-beta, a capture
 // search and a material and piece-square evaluation: weak, but real, so that
 // analysis and engine games work before another engine is installed.
 //
@@ -53,8 +53,8 @@ func main() {
 		}
 		switch f[0] {
 		case "uci":
-			say("id name Board Basic")
-			say("id author Board")
+			say("id name Ponder Basic")
+			say("id author Ponder")
 			say("option name MultiPV type spin default 1 min 1 max 10")
 			say("uciok")
 		case "isready":

@@ -69,7 +69,7 @@ func TestAnalysis(t *testing.T) {
 		t.Fatal(err)
 	}
 	u := r.waitFor(t, start, func(u Update) bool { return len(u.Lines) == 3 && u.Depth >= 3 })
-	if u.Engine != "Board Basic" || u.State != "running" || u.Lines[0].MultiPV != 1 || len(u.Lines[0].SAN) == 0 {
+	if u.Engine != "Ponder Basic" || u.State != "running" || u.Lines[0].MultiPV != 1 || len(u.Lines[0].SAN) == 0 {
 		t.Fatalf("start position: %+v", u)
 	}
 

@@ -19,6 +19,7 @@ import (
 
 	"board/backend/analysis"
 	"board/backend/chess"
+	"board/backend/epdtest"
 	"board/backend/game"
 	"board/backend/lichess"
 	"board/backend/openings"
@@ -122,10 +123,13 @@ func main() {
 		},
 	})
 	reviewer = review.New(emit)
+	epdRunner = epdtest.NewRunner(emit)
 	defer reviewer.Stop()
+	defer epdRunner.Stop()
 	defer tourney.Wait(5 * time.Second)
 	defer tourney.Stop()
 	mgr.OnFinish(func(text string) { saveToDatabase("local", text) })
+	go watchCollection()
 	defer bot.Disconnect(false)
 	defer spectator.Stop()
 	defer player.Disconnect()
@@ -221,6 +225,76 @@ func appendPGN(path, text string) error {
 	return err
 }
 
+// setCollection makes c the open PGN file (nil: none), and notes how the
+// file stands so that changes made to it from outside are noticed.
+func setCollection(c *pgn.Collection, name, path string) {
+	collection.c, collection.name, collection.path = c, name, path
+	watched.mu.Lock()
+	watched.path, watched.size, watched.mod = path, 0, time.Time{}
+	if info, err := os.Stat(path); path != "" && err == nil {
+		watched.size, watched.mod = info.Size(), info.ModTime()
+	}
+	watched.mu.Unlock()
+}
+
+// reopenCollection indexes the open file again, after it changed.
+func reopenCollection() error {
+	c, err := pgn.Open(collection.path, nil)
+	if err != nil {
+		return err
+	}
+	setCollection(c, collection.name, collection.path)
+	return nil
+}
+
+// watched is the open PGN file as it was last seen. watchCollection tells
+// the UI ("pgnChanged") when it changes: games were added by Ponder, or by
+// another program.
+var watched struct {
+	mu   sync.Mutex
+	path string
+	size int64
+	mod  time.Time
+}
+
+func watchCollection() {
+	for range time.Tick(1500 * time.Millisecond) {
+		watched.mu.Lock()
+		path := watched.path
+		changed := false
+		if path != "" {
+			if info, err := os.Stat(path); err == nil && (info.Size() != watched.size || !info.ModTime().Equal(watched.mod)) {
+				watched.size, watched.mod = info.Size(), info.ModTime()
+				changed = true
+			}
+		}
+		watched.mu.Unlock()
+		if changed {
+			emit("pgnChanged", map[string]any{"path": path})
+		}
+	}
+}
+
+// changeCollection changes the open file with f, while no finished game is
+// being added to it, then indexes it again.
+func changeCollection(f func(c *pgn.Collection) error) error {
+	if collection.c == nil {
+		return fmt.Errorf("no PGN file is open")
+	}
+	database.mu.Lock()
+	defer database.mu.Unlock()
+	if collection.c.Changed() {
+		// Games were added since it was read: work on the file as it is now.
+		if err := reopenCollection(); err != nil {
+			return err
+		}
+	}
+	if err := f(collection.c); err != nil {
+		return err
+	}
+	return reopenCollection()
+}
+
 func loadFromCollection(mgr *game.Manager, i int) error {
 	g, err := collection.c.Read(i)
 	if err != nil {
@@ -261,6 +335,9 @@ var puzzleDB struct {
 
 // reviewer runs the computer analysis of finished games.
 var reviewer *review.Reviewer
+
+// epdRunner tests an engine on a set of positions (Win at Chess, an EPD file).
+var epdRunner *epdtest.Runner
 
 // tourney plays engine tournaments.
 var tourney *tournament.Tournament
@@ -431,7 +508,11 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		// Index every game in the file and show the first one that loads.
 		// Only headers and file positions are kept, so any size works;
 		// games are read from the file when selected.
-		var a struct{ Path string }
+		// With List, the file is only listed: the board keeps what it shows.
+		var a struct {
+			Path string
+			List bool
+		}
 		if err := decode(&a); err != nil {
 			return nil, err
 		}
@@ -445,10 +526,13 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		if c.Len() == 0 {
 			return nil, fmt.Errorf("no games found in %s", name)
 		}
-		collection.c, collection.name, collection.path = c, name, a.Path
-		stopWatching(mgr)
+		setCollection(c, name, a.Path)
 		errs := map[int]string{}
 		loaded := -1
+		if a.List {
+			return map[string]any{"name": name, "total": c.Len(), "index": loaded, "errors": errs}, nil
+		}
+		stopWatching(mgr)
 		for i := 0; i < c.Len(); i++ {
 			if err := loadFromCollection(mgr, i); err != nil {
 				errs[i] = err.Error()
@@ -460,10 +544,14 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		return map[string]any{"name": name, "total": c.Len(), "index": loaded, "errors": errs}, nil
 	case "listGames":
 		// The rows for the Games list: games matching every word of the
-		// filter, at most limit of them, plus how many match in all.
+		// filter and the search, sorted by a column, at most limit of them,
+		// plus how many match in all.
 		var a struct {
 			Filter string
 			Limit  int
+			Query  pgn.Query
+			Sort   string
+			Desc   bool
 		}
 		if err := decode(&a); err != nil {
 			return nil, err
@@ -471,7 +559,8 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		if collection.c == nil {
 			return map[string]any{"total": 0, "matched": 0, "games": []pgn.Entry{}}, nil
 		}
-		matched, rows := collection.c.Find(strings.Fields(a.Filter), a.Limit)
+		a.Query.Words = strings.Fields(a.Filter)
+		matched, rows := collection.c.Search(a.Query, a.Sort, a.Desc, a.Limit)
 		return map[string]any{"total": collection.c.Len(), "matched": matched, "games": rows}, nil
 	case "selectGame":
 		var a struct{ Index int }
@@ -484,7 +573,7 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		stopWatching(mgr)
 		return nil, loadFromCollection(mgr, a.Index)
 	case "closePgn":
-		collection.c, collection.name, collection.path = nil, "", ""
+		setCollection(nil, "", "")
 		return nil, nil
 	case "refreshPgn":
 		// Index the open file again (games were added to it), keeping the
@@ -496,12 +585,151 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		if collection.c == nil || (a.Path != "" && !samePath(a.Path, collection.path)) {
 			return map[string]any{"refreshed": false}, nil
 		}
-		c, err := pgn.Open(collection.path, nil)
+		if err := reopenCollection(); err != nil {
+			return nil, err
+		}
+		return map[string]any{"refreshed": true, "total": collection.c.Len()}, nil
+	case "pgnTags":
+		// A game's tags, to change them.
+		var a struct{ Index int }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		if collection.c == nil {
+			return nil, fmt.Errorf("no PGN file is open")
+		}
+		g, err := collection.c.Read(a.Index)
 		if err != nil {
 			return nil, err
 		}
-		collection.c = c
-		return map[string]any{"refreshed": true, "total": c.Len()}, nil
+		return map[string]any{"tags": g.Tags}, nil
+	case "pgnEdit":
+		// Change a game's tags in the file.
+		var a struct {
+			Index int
+			Tags  []pgn.Tag
+		}
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		err := changeCollection(func(c *pgn.Collection) error {
+			text, err := c.Raw(a.Index)
+			if err != nil {
+				return err
+			}
+			text, err = pgn.SetTags(text, a.Tags)
+			if err != nil {
+				return err
+			}
+			if games, err := pgn.Parse(text); err != nil || len(games) != 1 {
+				return fmt.Errorf("the game could not be written with these values")
+			}
+			return c.Rewrite(map[int]*string{a.Index: &text})
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"total": collection.c.Len()}, nil
+	case "pgnDelete":
+		// Take games out of the file.
+		var a struct{ Indices []int }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		gone := map[int]bool{}
+		edits := map[int]*string{}
+		for _, i := range a.Indices {
+			gone[i], edits[i] = true, nil
+		}
+		if len(edits) == 0 {
+			return nil, fmt.Errorf("no game chosen")
+		}
+		err := changeCollection(func(c *pgn.Collection) error { return c.Rewrite(edits) })
+		if err != nil {
+			return nil, err
+		}
+		// The game on the board, if it is from this file, has moved up.
+		mgr.Reindex(collection.name, func(old int) int {
+			if gone[old] {
+				return -1
+			}
+			n := old
+			for i := range gone {
+				if i < old {
+					n--
+				}
+			}
+			return n
+		})
+		return map[string]any{"total": collection.c.Len(), "deleted": len(edits)}, nil
+	case "pgnImport":
+		// Add every game of another PGN file to the open one.
+		var a struct{ Path string }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		if collection.c != nil && samePath(a.Path, collection.path) {
+			return nil, fmt.Errorf("that is the file already open")
+		}
+		src, err := pgn.Open(a.Path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("could not read %s: %w", filepath.Base(a.Path), err)
+		}
+		if src.Len() == 0 {
+			return nil, fmt.Errorf("no games found in %s", filepath.Base(a.Path))
+		}
+		all := make([]int, src.Len())
+		for i := range all {
+			all[i] = i
+		}
+		err = changeCollection(func(c *pgn.Collection) error {
+			var text strings.Builder
+			if _, err := src.Export(&text, all); err != nil {
+				return err
+			}
+			return appendPGN(c.Path, text.String())
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"total": collection.c.Len(), "imported": src.Len()}, nil
+	case "pgnExport":
+		// Write the games matching the filter and the search (all of them
+		// without either) to a new PGN file.
+		var a struct {
+			Path, Filter string
+			Query        pgn.Query
+		}
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		if collection.c == nil {
+			return nil, fmt.Errorf("no PGN file is open")
+		}
+		if samePath(a.Path, collection.path) {
+			return nil, fmt.Errorf("choose another file: that is the one open")
+		}
+		a.Query.Words = strings.Fields(a.Filter)
+		indices := collection.c.Select(a.Query)
+		if len(indices) == 0 {
+			return nil, fmt.Errorf("no games to export")
+		}
+		f, err := os.Create(a.Path)
+		if err != nil {
+			return nil, err
+		}
+		w := bufio.NewWriter(f)
+		n, err := collection.c.Export(w, indices)
+		if err == nil {
+			err = w.Flush()
+		}
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"exported": n, "name": filepath.Base(a.Path)}, nil
 	case "setDatabase":
 		var a struct {
 			Path                    string
@@ -539,13 +767,16 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		return bot.Connect(cfg)
 	case "lichessConfigure":
 		var a struct {
-			Engine lichess.EngineConfig
-			Policy lichess.Policy
+			Engine   lichess.EngineConfig
+			Policy   lichess.Policy
+			Greeting lichess.Greeting
+			Ponder   bool
+			Draw     lichess.DrawOffer
 		}
 		if err := decode(&a); err != nil {
 			return nil, err
 		}
-		bot.Configure(a.Engine, a.Policy)
+		bot.Configure(a.Engine, a.Policy, a.Greeting, a.Ponder, a.Draw)
 		return nil, nil
 	case "lichessDisconnect":
 		var a struct{ Resign bool }
@@ -700,6 +931,15 @@ func handle(mgr *game.Manager, req request) (any, error) {
 	case "reviewStop":
 		reviewer.Stop()
 		return nil, nil
+	case "epdTestStart":
+		var r epdtest.Request
+		if err := decode(&r); err != nil {
+			return nil, err
+		}
+		return nil, epdRunner.Start(r)
+	case "epdTestStop":
+		epdRunner.Stop()
+		return nil, nil
 	case "tournamentStart":
 		var c tournament.Config
 		if err := decode(&c); err != nil {
@@ -759,16 +999,50 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		return nil, bot.Challenge(p)
 	case "lichessBots":
 		// Works without connecting: the list is public.
-		var a struct{ BaseURL string }
+		var a struct {
+			BaseURL string
+			Max     int // how many (Lichess allows up to 512); default 100
+		}
 		if err := decode(&a); err != nil {
 			return nil, err
 		}
-		if bot.Status().State == "connected" {
+		if a.Max <= 0 {
+			a.Max = 100
+		}
+		if bot.Status().State == "connected" && a.Max == 100 {
 			return bot.OnlineBots()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return lichess.NewClient(a.BaseURL, "").OnlineBots(ctx, min(a.Max, 512))
+	case "lichessPlayers":
+		// Profiles, rating histories, statistics at one speed, and the
+		// crosstable; a token helps (rating histories are public, but only
+		// cached for unauthenticated requests).
+		var a struct {
+			BaseURL string
+			Token   string
+			Users   []string
+			Perf    string
+		}
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return lichess.NewClient(a.BaseURL, a.Token).Players(ctx, a.Users, a.Perf), nil
+	case "lichessUsersStatus":
+		// Online, playing, and the game being played; public.
+		var a struct {
+			BaseURL string
+			IDs     []string
+		}
+		if err := decode(&a); err != nil {
+			return nil, err
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		return lichess.NewClient(a.BaseURL, "").OnlineBots(ctx, 100)
+		return lichess.NewClient(a.BaseURL, "").UsersStatus(ctx, a.IDs)
 	case "lichessSpectate":
 		var a struct{ BaseURL, Username string }
 		if err := decode(&a); err != nil {
@@ -784,6 +1058,27 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		return nil, nil
 	case "lichessSpectateStatus":
 		return spectator.Status(), nil
+	case "lichessChat":
+		var a struct{ ID string }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		if v, ok := player.Chat(a.ID); ok {
+			return v, nil
+		}
+		if v, ok := bot.Chat(a.ID); ok {
+			return v, nil
+		}
+		return nil, nil // not a game whose chat Lichess gives us
+	case "lichessChatSend":
+		var a struct{ ID, Room, Text string }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		if player.Has(a.ID) {
+			return nil, player.Say(a.ID, a.Room, a.Text)
+		}
+		return nil, bot.Say(a.ID, a.Room, a.Text)
 	case "probe":
 		var a struct {
 			Path string

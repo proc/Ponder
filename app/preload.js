@@ -10,10 +10,13 @@ contextBridge.exposeInMainWorld('board', {
     remove: (id) => ipcRenderer.invoke('engines:remove', id),
     update: (id, patch) => ipcRenderer.invoke('engines:update', id, patch),
     probe: (id) => ipcRenderer.invoke('engines:probe', id),
+    choosePath: (kind, title) => ipcRenderer.invoke('engines:choosePath', kind, title),
   },
   loadThemes: () => ipcRenderer.invoke('themes:load'),
   openPgn: () => ipcRenderer.invoke('pgn:open'),
+  openEpd: () => ipcRenderer.invoke('epd:open'),
   savePgn: (pgn) => ipcRenderer.invoke('pgn:save', pgn),
+  exportPgnPath: (name) => ipcRenderer.invoke('pgn:exportPath', name),
   copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   tournament: {
@@ -33,6 +36,7 @@ contextBridge.exposeInMainWorld('board', {
   lichess: {
     explorer: (db, fen, opts) => ipcRenderer.invoke('lichess:explorer', db, fen, opts),
     gamePgn: (db, id) => ipcRenderer.invoke('lichess:gamePgn', db, id),
+    players: (users, perf) => ipcRenderer.invoke('lichess:players', users, perf),
     puzzle: (kind, opts) => ipcRenderer.invoke('lichess:puzzle', kind, opts),
     choosePuzzleFile: () => ipcRenderer.invoke('puzzles:chooseFile'),
     settings: () => ipcRenderer.invoke('lichess:settings'),

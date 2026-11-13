@@ -12,6 +12,7 @@ import (
 
 	"board/backend/game"
 	"board/backend/lichess/fake"
+	"board/backend/uci"
 )
 
 var enginePath string
@@ -37,6 +38,8 @@ type harness struct {
 	shown []game.ExternalView
 	infos int
 	cfg   Config
+	// Every engineInfo event, in order.
+	engineInfos []game.EngineInfo
 }
 
 func newHarness(t *testing.T, policy Policy) *harness {
@@ -53,6 +56,7 @@ func newHarness(t *testing.T, policy Policy) *harness {
 				h.last = data.(Status)
 			case "engineInfo":
 				h.infos++
+				h.engineInfos = append(h.engineInfos, data.(game.EngineInfo))
 			}
 		},
 		Show: func(v game.ExternalView) {
@@ -203,6 +207,51 @@ func TestDeclineUnsupportedAndPolicy(t *testing.T) {
 	}
 }
 
+func TestPolicyGameTypes(t *testing.T) {
+	ch := func(limit, inc, rating int, variant string) *Challenge {
+		c := &Challenge{Variant: Variant{Key: variant}, TimeControl: TimeControl{Type: "clock", Limit: limit, Increment: inc}}
+		c.Challenger.Rating = rating
+		return c
+	}
+	base := Policy{Rated: true, Casual: true, Humans: true, Bots: true, MaxGames: 1}
+	with := func(f func(*Policy)) Policy { p := base; f(&p); return p }
+	onlyBlitzRapid := map[string]bool{"ultraBullet": false, "bullet": false, "classical": false}
+	for _, tc := range []struct {
+		name   string
+		policy Policy
+		ch     *Challenge
+		want   string
+	}{
+		{"any speed", base, ch(60, 0, 1500, "standard"), ""},
+		{"bullet off", with(func(p *Policy) { p.Speeds = onlyBlitzRapid }), ch(60, 0, 1500, "standard"), "tooFast"},
+		{"blitz on", with(func(p *Policy) { p.Speeds = onlyBlitzRapid }), ch(180, 2, 1500, "standard"), ""},
+		{"rapid on", with(func(p *Policy) { p.Speeds = onlyBlitzRapid }), ch(600, 0, 1500, "standard"), ""},
+		{"classical off", with(func(p *Policy) { p.Speeds = onlyBlitzRapid }), ch(1800, 0, 1500, "standard"), "tooSlow"},
+		{"a speed in the middle off", with(func(p *Policy) { p.Speeds = map[string]bool{"blitz": false} }), ch(180, 0, 1500, "standard"), "timeControl"},
+		{"every speed off", with(func(p *Policy) {
+			p.Speeds = map[string]bool{"ultraBullet": false, "bullet": false, "blitz": false, "rapid": false, "classical": false}
+		}), ch(180, 0, 1500, "standard"), "timeControl"},
+		{"increment too small", with(func(p *Policy) { p.MinIncrement = 1 }), ch(180, 0, 1500, "standard"), "timeControl"},
+		{"increment too large", with(func(p *Policy) { p.MaxIncrement = 5 }), ch(180, 10, 1500, "standard"), "timeControl"},
+		{"increment fits", with(func(p *Policy) { p.MinIncrement, p.MaxIncrement = 1, 5 }), ch(180, 2, 1500, "standard"), ""},
+		{"rating too low", with(func(p *Policy) { p.MinRating = 1800 }), ch(180, 0, 1500, "standard"), "generic"},
+		{"rating too high", with(func(p *Policy) { p.MaxRating = 2000 }), ch(180, 0, 2400, "standard"), "generic"},
+		{"rating fits", with(func(p *Policy) { p.MinRating, p.MaxRating = 1400, 2000 }), ch(180, 0, 1500, "standard"), ""},
+		{"rating unknown", with(func(p *Policy) { p.MinRating = 1800 }), ch(180, 0, 0, "standard"), ""},
+		{"from position", base, ch(180, 0, 1500, "fromPosition"), ""},
+		{"no from position", with(func(p *Policy) { p.NoFromPosition = true }), ch(180, 0, 1500, "fromPosition"), "standard"},
+	} {
+		b := NewBot(Hooks{})
+		b.cfg.Policy = tc.policy
+		if got := b.declineReason(tc.ch, true); got != tc.want {
+			t.Errorf("%s: declined with %q, want %q", tc.name, got, tc.want)
+		}
+		if got := b.declineReason(tc.ch, false); got != "" {
+			t.Errorf("%s: declined by hand with %q", tc.name, got)
+		}
+	}
+}
+
 func TestAutoAcceptPlaysAndLimitsGames(t *testing.T) {
 	h := newHarness(t, Policy{Casual: true, Humans: true, MaxGames: 1})
 	h.connect()
@@ -334,7 +383,7 @@ func TestConnectingPlaysNothing(t *testing.T) {
 }
 
 func TestSeekChallengesRandomBotsUntilOneAccepts(t *testing.T) {
-	seekAnswerTimeout, seekPause, seekRetry = 300*time.Millisecond, 20*time.Millisecond, 200*time.Millisecond
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 300*time.Millisecond, 20*time.Millisecond, 200*time.Millisecond, 20*time.Millisecond
 	h := newHarness(t, Policy{})
 	// Only the bots that will not play are in range at first.
 	h.fake.Online = []fake.OnlineBot{{Name: "grumpy", Rating: 1700}, {Name: "picky", Rating: 1750}, {Name: "sleepy", Rating: 1650},
@@ -372,7 +421,7 @@ func TestSeekChallengesRandomBotsUntilOneAccepts(t *testing.T) {
 }
 
 func TestSeekStop(t *testing.T) {
-	seekAnswerTimeout, seekPause, seekRetry = 5*time.Second, 20*time.Millisecond, 200*time.Millisecond
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 5*time.Second, 20*time.Millisecond, 200*time.Millisecond, 20*time.Millisecond
 	h := newHarness(t, Policy{})
 	h.fake.Online = []fake.OnlineBot{{Name: "sleepy", Rating: 1650}}
 	h.connect()
@@ -382,4 +431,258 @@ func TestSeekStop(t *testing.T) {
 	h.waitFor("cancelled", func(s Status) bool {
 		return s.Seek == nil && len(s.Outgoing) == 0 && strings.Contains(strings.Join(h.fake.Calls(), " "), "/cancel")
 	})
+}
+
+func TestOneChallengeAtATime(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 5*time.Second, 20*time.Millisecond, 200*time.Millisecond, 20*time.Millisecond
+	h := newHarness(t, Policy{})
+	h.fake.Online = []fake.OnlineBot{{Name: "sleepy", Rating: 1650}}
+	h.connect()
+	if err := h.bot.Challenge(ChallengeParams{Username: "sleepy", Limit: 60, Color: "random"}); err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitFor("waiting on sleepy", func(s Status) bool { return len(s.Outgoing) == 1 })
+	err := h.bot.Challenge(ChallengeParams{Username: "grumpy", Limit: 60, Color: "random"})
+	if err == nil || !strings.Contains(err.Error(), "waiting for an answer") {
+		t.Fatalf("second challenge: %v", err)
+	}
+	if err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 60, Color: "random"}}); err == nil {
+		t.Fatal("random-bot search started with a challenge waiting")
+	}
+	if strings.Contains(strings.Join(h.fake.Calls(), " "), "/api/challenge/grumpy") {
+		t.Fatal("grumpy was challenged")
+	}
+	if err := h.bot.Cancel(s.Outgoing[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.bot.Challenge(ChallengeParams{Username: "grumpy", Limit: 60, Color: "random"}); err != nil {
+		t.Fatalf("after cancelling: %v", err)
+	}
+}
+
+func TestSeekWaitsAMinuteBetweenChallenges(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 5*time.Second, 20*time.Millisecond, 200*time.Millisecond, 600*time.Millisecond
+	defer func() { seekGap = time.Minute }()
+	h := newHarness(t, Policy{})
+	h.fake.Online = []fake.OnlineBot{{Name: "grumpy", Rating: 1700}, {Name: "picky", Rating: 1750}}
+	h.connect()
+	start := time.Now()
+	if err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2, Color: "random"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitFor("waiting after the first answer", func(s Status) bool { return s.Seek != nil && s.Seek.Tried == 1 && s.Seek.NextAt > 0 })
+	if left := time.Until(time.UnixMilli(s.Seek.NextAt)); left < 300*time.Millisecond {
+		t.Fatalf("next challenge only %v away", left)
+	}
+	if err := h.bot.Challenge(ChallengeParams{Username: "x", Limit: 60}); err == nil {
+		t.Fatal("manual challenge allowed during the search")
+	}
+	h.waitFor("second challenge", func(s Status) bool { return s.Seek != nil && s.Seek.Tried == 2 })
+	if d := time.Since(start); d < 600*time.Millisecond {
+		t.Fatalf("second challenge after %v", d)
+	}
+}
+
+// declines counts the challenges declined with a reason so far.
+func (h *harness) declines(reason string) int {
+	return strings.Count(strings.Join(h.fake.Calls(), "\n")+"\n", "decline-reason "+reason+"\n")
+}
+
+func (h *harness) waitDeclines(reason string, n int) {
+	h.t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for h.declines(reason) < n {
+		if time.Now().After(deadline) {
+			h.t.Fatalf("%d challenges declined with %q, want %d: %v", h.declines(reason), reason, n, h.fake.Calls())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func activeGames(s Status) int {
+	n := 0
+	for _, g := range s.Games {
+		if !g.Finished {
+			n++
+		}
+	}
+	return n
+}
+
+// Challenges that arrive together do not all get in: one accepted, whose
+// game has not started yet, already takes its place under the limit.
+func TestGameLimitWithChallengesAtOnce(t *testing.T) {
+	h := newHarness(t, Policy{Casual: true, Humans: true, Bots: true, MaxGames: 1})
+	h.connect()
+	if err := h.bot.SetAutoAccept(true); err != nil {
+		t.Fatal(err)
+	}
+	h.waitListening()
+	for _, from := range []string{"Alice", "Bob", "Carol"} {
+		h.fake.Challenge(from, false, false, 120, 1, "white", "standard")
+	}
+	h.waitDeclines("later", 2)
+	s := h.waitFor("the game", func(s Status) bool { return len(s.Games) >= 1 })
+	time.Sleep(300 * time.Millisecond)
+	if s = h.bot.Status(); len(s.Games) != 1 || activeGames(s) != 1 {
+		t.Fatalf("games %+v", s.Games)
+	}
+}
+
+// With two games at once allowed, the third of three is declined.
+func TestGameLimitOfTwo(t *testing.T) {
+	h := newHarness(t, Policy{Casual: true, Humans: true, Bots: true, MaxGames: 2})
+	h.connect()
+	if err := h.bot.SetAutoAccept(true); err != nil {
+		t.Fatal(err)
+	}
+	h.waitListening()
+	for _, from := range []string{"Alice", "Bob", "Carol"} {
+		h.fake.Challenge(from, true, false, 120, 1, "white", "standard")
+	}
+	h.waitDeclines("later", 1)
+	h.waitFor("two games", func(s Status) bool { return activeGames(s) == 2 })
+	time.Sleep(300 * time.Millisecond)
+	if s := h.bot.Status(); len(s.Games) != 2 || h.declines("later") != 1 {
+		t.Fatalf("games %+v, %d declined", s.Games, h.declines("later"))
+	}
+}
+
+// Challenges waiting when automatic accepting is turned on are held to the
+// limit too.
+func TestGameLimitWhenTurningAutoAcceptOn(t *testing.T) {
+	h := newHarness(t, Policy{Casual: true, Humans: true, MaxGames: 1})
+	h.connect()
+	h.waitListening()
+	h.fake.Challenge("Alice", false, false, 120, 1, "white", "standard")
+	h.fake.Challenge("Bob", false, false, 120, 1, "white", "standard")
+	h.waitFor("two challenges", func(s Status) bool { return len(s.Incoming) == 2 })
+	if err := h.bot.SetAutoAccept(true); err != nil {
+		t.Fatal(err)
+	}
+	h.waitDeclines("later", 1)
+	h.waitFor("the game", func(s Status) bool { return activeGames(s) == 1 })
+	time.Sleep(300 * time.Millisecond)
+	if s := h.bot.Status(); len(s.Games) != 1 || len(s.Incoming) != 0 {
+		t.Fatalf("status %+v", s)
+	}
+}
+
+// A challenge the engine sent to another bot holds a place while it waits
+// for the answer: accepted, it is a game.
+func TestGameLimitCountsOwnChallenge(t *testing.T) {
+	h := newHarness(t, Policy{Casual: true, Humans: true, Bots: true, MaxGames: 1})
+	h.connect()
+	if err := h.bot.SetAutoAccept(true); err != nil {
+		t.Fatal(err)
+	}
+	h.waitListening()
+	// sleepy never answers.
+	if err := h.bot.Challenge(ChallengeParams{Username: "sleepy", Limit: 120, Increment: 1, Color: "white"}); err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitFor("the challenge to sleepy", func(s Status) bool { return len(s.Outgoing) == 1 })
+	h.fake.Challenge("Robot", true, false, 120, 1, "white", "standard")
+	h.waitDeclines("later", 1)
+	if s = h.bot.Status(); len(s.Games) != 0 {
+		t.Fatalf("games %+v", s.Games)
+	}
+	// Once it is cancelled, the place is free again.
+	if err := h.bot.Cancel(s.Outgoing[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("the cancellation", func(s Status) bool { return len(s.Outgoing) == 0 })
+	h.fake.Challenge("Robot", true, false, 120, 1, "white", "standard")
+	h.waitFor("the game", func(s Status) bool { return activeGames(s) == 1 })
+}
+
+// The moves for the arrows: the engine's line while it thinks, then the
+// move it chose with the reply it expects.
+func TestEngineArrowMoves(t *testing.T) {
+	b := NewBot(Hooks{})
+	r := newRunner(b, "g1", &GameInfo{Color: "white"})
+	r.thinking = 0
+	line := uci.Info{Depth: 9, HasScore: true, ScoreCP: 30, PV: []string{"e2e4", "e7e5", "g1f3"}}
+
+	b.mu.Lock()
+	out := r.infoLocked(line)
+	b.mu.Unlock()
+	if out.Best != "e2e4" || out.Ponder != "e7e5" || out.Played || strings.Join(out.PV, " ") != "e4 e5 Nf3" {
+		t.Fatalf("while thinking: %+v", out)
+	}
+
+	r.onInfo(line) // remembered though the game is not on the board
+	// The engine names its own reply: that one counts.
+	r.onPonder("c7c5")
+	b.mu.Lock()
+	out, ok := r.chosenLocked("e2e4")
+	b.mu.Unlock()
+	if !ok || !out.Played || out.Best != "e2e4" || out.Ponder != "c7c5" || out.Depth != 9 {
+		t.Fatalf("chosen with a ponder move: %+v", out)
+	}
+	// Without one, the next move of its line.
+	r.onPonder("")
+	b.mu.Lock()
+	out, _ = r.chosenLocked("e2e4")
+	b.mu.Unlock()
+	if out.Ponder != "e7e5" {
+		t.Fatalf("chosen without a ponder move: %+v", out)
+	}
+	// A move other than its line's: no reply is guessed.
+	b.mu.Lock()
+	out, _ = r.chosenLocked("d2d4")
+	b.mu.Unlock()
+	if out.Best != "d2d4" || out.Ponder != "" || strings.Join(out.PV, " ") != "d4" {
+		t.Fatalf("chosen off its line: %+v", out)
+	}
+	// An illegal ponder move is dropped, an illegal move reports nothing.
+	r.onPonder("e2e5")
+	b.mu.Lock()
+	out, _ = r.chosenLocked("d2d4")
+	_, bad := r.chosenLocked("e2e5")
+	b.mu.Unlock()
+	if out.Ponder != "" || bad {
+		t.Fatalf("illegal moves: %+v %v", out, bad)
+	}
+}
+
+// A game put on the board after it began brings the engine's score for
+// every move it has played, not only for the moves watched live.
+func TestWatchBringsTheScoresSoFar(t *testing.T) {
+	h := newHarness(t, Policy{Casual: true, Humans: true, MaxGames: 1})
+	h.fake.MaxPlies = 300
+	h.connect()
+	if err := h.bot.SetAutoAccept(true); err != nil {
+		t.Fatal(err)
+	}
+	h.waitListening()
+	id := h.fake.Challenge("Alice", false, false, 120, 1, "black", "standard") // the engine is White
+	h.waitFor("game start", func(s Status) bool { return len(s.Games) == 1 })
+	h.bot.Unwatch()
+	h.waitFor("a few moves", func(s Status) bool { return s.Games[0].Moves >= 7 || s.Games[0].Finished })
+	h.mu.Lock()
+	h.engineInfos = nil
+	h.mu.Unlock()
+	if err := h.bot.Watch(id); err != nil {
+		t.Fatal(err)
+	}
+	moves, _, _, _ := h.fake.Game(id)
+	h.mu.Lock()
+	got := append([]game.EngineInfo(nil), h.engineInfos...)
+	h.mu.Unlock()
+	// One for each move the engine had played when the game was shown, in
+	// order: plies 0, 2, 4, …
+	played := 0
+	for i, in := range got {
+		if !in.Played {
+			continue // the move it is thinking about now, or a live line
+		}
+		if in.Ply != 2*i || in.Side != "white" || !in.HasEval || in.Depth == 0 || in.Ply >= len(moves) || in.Best != moves[in.Ply] {
+			t.Fatalf("score %d is %+v; the moves are %v", i, in, moves)
+		}
+		played++
+	}
+	if played < 3 {
+		t.Fatalf("%d scores came with the game, for moves %v: %+v", played, moves, got)
+	}
 }

@@ -95,6 +95,25 @@ type ExternalInfo struct {
 	Kind string `json:"kind"`
 	// You play Side's moves on the board (sent to Lichess).
 	Playable bool `json:"playable,omitempty"`
+	// How the players' ratings changed, once a rated game is over and
+	// Lichess has worked it out.
+	RatingDiff *RatingDiff `json:"ratingDiff,omitempty"`
+	// The players' Lichess usernames ("" for the computer) and the game's
+	// speed (bullet, blitz, …), to look the players up.
+	Users *Users `json:"users,omitempty"`
+	Speed string `json:"speed,omitempty"`
+}
+
+// Users are the two players' Lichess usernames.
+type Users struct {
+	White string `json:"white"`
+	Black string `json:"black"`
+}
+
+// RatingDiff is the rating each side won or lost in a game.
+type RatingDiff struct {
+	White int `json:"white"`
+	Black int `json:"black"`
 }
 
 // ExternalView is a game played elsewhere, shown on the board read-only.
@@ -103,6 +122,9 @@ type ExternalView struct {
 	Side             string // "white" or "black": the side to show at the bottom
 	Kind             string // bot, play, spectate, tournament
 	Playable         bool   // the person moves Side's pieces on the board
+	RatingDiff       *RatingDiff
+	Users            *Users
+	Speed            string
 	White, Black     PlayerConfig
 	StartFEN         string
 	Moves            []string // UCI
@@ -133,6 +155,20 @@ type EngineInfo struct {
 	NPS     int64    `json:"nps"`
 	PV      []string `json:"pv"`
 	Ply     int      `json:"ply"`
+	// The move the engine means to play and the reply it expects (UCI), for
+	// arrows on the board; Played once it has chosen the move.
+	Best   string `json:"best,omitempty"`
+	Ponder string `json:"ponder,omitempty"`
+	Played bool   `json:"played,omitempty"`
+	// Pondering: the engine is thinking on its opponent's time, about the
+	// reply in Ponder; PV starts with that reply.
+	Pondering bool `json:"pondering,omitempty"`
+	// PonderHit: the opponent played the reply the engine was pondering on,
+	// so this search had a head start.
+	PonderHit bool `json:"ponderHit,omitempty"`
+	// Stats: only the depth and the counts are new (a line of the search
+	// without moves); the rest stays as it was.
+	Stats bool `json:"stats,omitempty"`
 }
 
 type current struct {
@@ -999,7 +1035,7 @@ func (m *Manager) ShowExternal(v ExternalView) error {
 		clocks:       [2]*Clock{NewClock(TimeControl{Kind: "none"}), NewClock(TimeControl{Kind: "none"})},
 		started:      time.Now(),
 		startOpening: bookOpening(&start, ""),
-		external:     &ExternalInfo{ID: v.ID, URL: v.URL, Label: v.Label, Live: !v.Finished, Side: v.Side, Kind: v.Kind, Playable: v.Playable && !v.Finished},
+		external:     &ExternalInfo{ID: v.ID, URL: v.URL, Label: v.Label, Live: !v.Finished, Side: v.Side, Kind: v.Kind, Playable: v.Playable && !v.Finished, RatingDiff: v.RatingDiff, Users: v.Users, Speed: v.Speed},
 		index:        -1,
 	}
 	if same {
@@ -1031,6 +1067,22 @@ func (m *Manager) ShowExternal(v ExternalView) error {
 	m.g = g
 	m.emitStateLocked()
 	return nil
+}
+
+// Reindex gives the loaded game from source its new place in the file
+// after the file changed (f maps the old index to the new one, -1 when the
+// game is no longer in the file).
+func (m *Manager) Reindex(source string, f func(int) int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	g := m.g
+	if g == nil || !g.loaded || g.source != source || g.index < 0 {
+		return
+	}
+	if n := f(g.index); n != g.index {
+		g.index = n
+		m.emitStateLocked()
+	}
 }
 
 // ExternalID is the id of the external game shown, or "".

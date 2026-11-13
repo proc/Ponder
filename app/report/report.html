@@ -556,7 +556,7 @@ $('#subtitle').textContent = [
     v.replaceChildren(h('span', { className: 'icon', textContent: icon }), h('span', { textContent: text }));
   }
 }
-$('#footer').textContent = `Made by Board on ${new Date().toLocaleString()}. Engine 1 is ${N1} (tested), engine 2 is ${N2} (base); results are from ${N1}'s side.`;
+$('#footer').textContent = `Made by Ponder on ${new Date().toLocaleString()}. Engine 1 is ${N1} (tested), engine 2 is ${N2} (base); results are from ${N1}'s side.`;
 
 // Tabs, theme.
 for (const b of document.querySelectorAll('#tabs [data-view]')) {
@@ -1051,7 +1051,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------------------------------------------------------------------------
-// Saving: in Board's report window through the app; in a browser, as a
+// Saving: in Ponder's report window through the app; in a browser, as a
 // download (and PDF through the browser's print dialog).
 // ---------------------------------------------------------------------------
 function renderAll() {

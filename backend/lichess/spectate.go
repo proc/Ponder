@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,8 +26,40 @@ type ExportPlayer struct {
 		Name  string `json:"name"`
 		Title string `json:"title"`
 	} `json:"user"`
-	Rating  int `json:"rating"`
-	AILevel int `json:"aiLevel"`
+	Rating     int  `json:"rating"`
+	RatingDiff *int `json:"ratingDiff"`
+	AILevel    int  `json:"aiLevel"`
+}
+
+// RatingDiffs reads how a finished rated game changed the players' ratings.
+// Lichess works it out a moment after the game ends, so this asks a few
+// times, for up to about ten seconds.
+func (c *Client) RatingDiffs(ctx context.Context, id string) (*game.RatingDiff, error) {
+	wait := 500 * time.Millisecond
+	var last error
+	for try := 0; try < 6; try++ {
+		if !sleepCtx(ctx, wait) {
+			return nil, ctx.Err()
+		}
+		g, err := c.ExportGame(ctx, id)
+		if err == nil && !g.Rated {
+			return nil, nil
+		}
+		if err == nil && g.Players.White.RatingDiff != nil && g.Players.Black.RatingDiff != nil {
+			return &game.RatingDiff{White: *g.Players.White.RatingDiff, Black: *g.Players.Black.RatingDiff}, nil
+		}
+		last = err
+		wait = min(wait*2, 3*time.Second)
+	}
+	return nil, last
+}
+
+// exportUser is a player's username, "" for the computer.
+func exportUser(p ExportPlayer) string {
+	if p.User == nil {
+		return ""
+	}
+	return p.User.Name
 }
 
 func (p ExportPlayer) Name() string {
@@ -201,6 +234,10 @@ type watched struct {
 	// Whether the game was seen being played (finished games only
 	// shown are not saved).
 	seenLive bool
+	// The moves are being read again from the exported game.
+	resyncing bool
+	// How the ratings changed, once the rated game is over.
+	ratingDiff *game.RatingDiff
 }
 
 func NewSpectator(emit func(string, any), show func(game.ExternalView)) *Spectator {
@@ -354,7 +391,7 @@ func (s *Spectator) gameURL(id string) string {
 // load shows an exported game.
 func (s *Spectator) load(gen int, username string, g GameExport) error {
 	if v := g.VariantKey(); v != "" && v != "standard" && v != "fromPosition" {
-		return fmt.Errorf("%s is playing %s, which Board cannot show", username, v)
+		return fmt.Errorf("%s is playing %s, which Ponder cannot show", username, v)
 	}
 	w := &watched{id: g.ID, white: g.Players.White, black: g.Players.Black, side: "white"}
 	if strings.EqualFold(g.Players.Black.ID(), username) {
@@ -450,8 +487,8 @@ func (s *Spectator) stream(ctx context.Context, gen int, id string) {
 }
 
 // syncMoves takes the moves of an exported game when it has more than are
-// shown.
-func (s *Spectator) syncMoves(gen int, g GameExport) {
+// shown (or, with force, whatever it has: the export is the record).
+func (s *Spectator) syncMoves(gen int, g GameExport, force ...bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w := s.g
@@ -476,7 +513,7 @@ func (s *Spectator) syncMoves(gen int, g GameExport) {
 		moves = append(moves, m.UCI())
 		pos = pos.Make(m)
 	}
-	if len(moves) >= len(w.moves) {
+	if len(moves) >= len(w.moves) || len(force) > 0 && force[0] {
 		w.start, w.pos, w.startFEN, w.moves = start, pos, start.FEN(), moves
 	}
 }
@@ -490,6 +527,9 @@ func (s *Spectator) finish(gen int, id, status, winner string) {
 	}
 	w.finished = true
 	w.result, w.reason = resultOf(GameState{Status: status, Winner: winner})
+	if w.rated && w.result != "*" {
+		go s.ratingDiffs(gen, id)
+	}
 	v := s.viewLocked()
 	var save string
 	if s.Save != nil && w.seenLive && w.result != "*" {
@@ -558,6 +598,41 @@ func (s *Spectator) onMove(ctx context.Context, gen int, e MoveEvent) {
 	}
 	w.at = time.Now()
 	target := fenKey(e.Fen)
+	// The ply the position is at, from the FEN's move number: Lichess
+	// replays the game from the start when the stream opens, and sends
+	// positions a few moves late.
+	if ply, known := plyOf(e.Fen); known {
+		if base, ok := plyOf(w.startFEN); ok {
+			n := ply - base
+			switch {
+			case n < 0:
+				s.mu.Unlock()
+				return // before the start shown: nothing to add
+			case n <= len(w.moves):
+				// A position already shown (or the current one).
+				s.mu.Unlock()
+				return
+			case n == len(w.moves)+1 && e.LM != "":
+				m, err := parseMove(&w.pos, e.LM)
+				next := w.pos.Make(m)
+				if err == nil && fenKey(next.FEN()) == target {
+					w.moves = append(w.moves, m.UCI())
+					w.pos = next
+					v := s.viewLocked()
+					s.mu.Unlock()
+					s.show(v)
+					return
+				}
+			}
+			// Moves were missed (or did not fit): read the game again.
+			if !w.resyncing {
+				w.resyncing = true
+				go s.resync(ctx, gen, w.id, e.Fen)
+			}
+			s.mu.Unlock()
+			return
+		}
+	}
 	if fenKey(w.pos.FEN()) != target {
 		ok := false
 		if e.LM != "" {
@@ -569,13 +644,102 @@ func (s *Spectator) onMove(ctx context.Context, gen int, e MoveEvent) {
 				}
 			}
 		}
-		if !ok {
-			// Too far apart: start the move list again from here.
-			if p, err := chess.ParseFEN(e.Fen); err == nil {
-				w.start, w.pos, w.startFEN, w.moves = p, p, p.FEN(), nil
-			}
+		if !ok && w.seen(target) {
+			// A position already shown: Lichess replays the game from the
+			// start when the stream opens, and sends it a few moves late.
+			s.mu.Unlock()
+			return
+		}
+		if !ok && !w.resyncing {
+			// Moves were missed: read the whole game again rather than lose
+			// the moves before this position.
+			w.resyncing = true
+			go s.resync(ctx, gen, w.id, e.Fen)
 		}
 	}
+	v := s.viewLocked()
+	s.mu.Unlock()
+	s.show(v)
+}
+
+// plyOf is the number of moves played before a FEN's position, from its
+// move number and side to move.
+func plyOf(fen string) (int, bool) {
+	f := strings.Fields(fen)
+	if len(f) < 6 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(f[5])
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	ply := (n - 1) * 2
+	if f[1] == "b" {
+		ply++
+	}
+	return ply, true
+}
+
+// seen reports whether the position (placement and side to move) occurred
+// in the game so far.
+func (w *watched) seen(key string) bool {
+	pos := w.start
+	if fenKey(pos.FEN()) == key {
+		return true
+	}
+	for _, u := range w.moves {
+		m, err := pos.ParseUCIMove(u)
+		if err != nil {
+			return false
+		}
+		pos = pos.Make(m)
+		if fenKey(pos.FEN()) == key {
+			return true
+		}
+	}
+	return false
+}
+
+// resync reads a game's moves from its export after the stream skipped
+// some. Only if that fails does the list start again from the position
+// the stream sent (fen).
+func (s *Spectator) resync(ctx context.Context, gen int, id, fen string) {
+	g, err := s.client.ExportGame(ctx, id)
+	if err == nil {
+		s.syncMoves(gen, g, true)
+	}
+	s.mu.Lock()
+	w := s.g
+	if gen != s.gen || w == nil || w.id != id {
+		s.mu.Unlock()
+		return
+	}
+	w.resyncing = false
+	if err != nil && !w.seen(fenKey(fen)) {
+		if p, perr := chess.ParseFEN(fen); perr == nil {
+			w.start, w.pos, w.startFEN, w.moves = p, p, p.FEN(), nil
+		}
+	}
+	v := s.viewLocked()
+	s.mu.Unlock()
+	s.show(v)
+}
+
+// ratingDiffs shows how the finished game changed the ratings.
+func (s *Spectator) ratingDiffs(gen int, id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	d, err := s.client.RatingDiffs(ctx, id)
+	if err != nil || d == nil {
+		return
+	}
+	s.mu.Lock()
+	w := s.g
+	if gen != s.gen || w == nil || w.id != id {
+		s.mu.Unlock()
+		return
+	}
+	w.ratingDiff = d
 	v := s.viewLocked()
 	s.mu.Unlock()
 	s.show(v)
@@ -598,6 +762,8 @@ func (s *Spectator) viewLocked() game.ExternalView {
 		White: player(w.white), Black: player(w.black),
 		StartFEN: w.startFEN, Moves: append([]string(nil), w.moves...),
 		At: w.at, Finished: w.finished, Result: w.result, Reason: w.reason,
+		RatingDiff: w.ratingDiff, Speed: w.speed,
+		Users: &game.Users{White: exportUser(w.white), Black: exportUser(w.black)},
 	}
 	if w.clocked {
 		v.WhiteMs, v.BlackMs = w.wms, w.bms

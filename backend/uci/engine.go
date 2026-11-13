@@ -45,7 +45,10 @@ type Handlers struct {
 	OnInfo     func(Info)
 	OnString   func(text string) // free-text "info string ..." messages
 	OnBestMove func(move string)
-	OnExit     func() // engine process ended without Quit being called
+	// OnPonder, when set, is called just before OnBestMove with the reply
+	// the engine expects ("bestmove e2e4 ponder e7e5"), or "" without one.
+	OnPonder func(move string)
+	OnExit   func() // engine process ended without Quit being called
 }
 
 type Engine struct {
@@ -188,6 +191,13 @@ func (e *Engine) read(r io.Reader) {
 				}
 			}
 		case "bestmove":
+			if e.h.OnPonder != nil {
+				ponder := ""
+				if len(f) > 3 && f[2] == "ponder" {
+					ponder = f[3]
+				}
+				e.h.OnPonder(ponder)
+			}
 			if e.h.OnBestMove != nil {
 				mv := ""
 				if len(f) > 1 {

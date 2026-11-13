@@ -149,3 +149,50 @@ func TestBridgeFillsSkippedMoves(t *testing.T) {
 		}
 	}
 }
+
+// Lichess replays the whole game when the stream opens and sends positions
+// late; a gap in the stream is filled from the exported game. Either way
+// the list keeps every move from the first.
+func TestSpectateKeepsAllMoves(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		lag  int
+		drop map[int]bool
+	}{{"replay", 0, nil}, {"lagging", 3, nil}, {"gap", 0, map[int]bool{16: true, 17: true, 18: true, 19: true, 20: true, 21: true, 22: true}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSpect(t)
+			h.fake.MaxPlies = 40
+			h.fake.StreamLag, h.fake.Drop = tc.lag, tc.drop
+			id := h.fake.AutoGame("maia1", "SlowBot", 60, 0)
+			for {
+				if m, _, _, _ := h.fake.Game(id); len(m) >= 8 {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			h.sp.Start(h.srv.URL, "maia1")
+			// Never fewer moves than when joining, never a list that starts mid-game.
+			end := time.Now().Add(15 * time.Second)
+			for time.Now().Before(end) {
+				v, _, _ := h.last()
+				if v.ID == id && v.StartFEN != "" && fenKey(v.StartFEN) != fenKey(chess.StartFEN) {
+					t.Fatalf("the list restarted mid-game at %s", v.StartFEN)
+				}
+				if v.ID == id && v.Finished {
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			v := h.waitFor("finished", func(v game.ExternalView, _ SpectateStatus) bool { return v.ID == id && v.Finished })
+			moves, _, _, _ := h.fake.Game(id)
+			if len(v.Moves) != len(moves) {
+				t.Fatalf("%d moves shown, %d played", len(v.Moves), len(moves))
+			}
+			for i := range moves {
+				if v.Moves[i] != moves[i] {
+					t.Fatalf("move %d: %s, want %s", i, v.Moves[i], moves[i])
+				}
+			}
+		})
+	}
+}
