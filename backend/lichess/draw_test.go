@@ -164,3 +164,40 @@ func TestEngineKeepsPlayingWithAScore(t *testing.T) {
 	h.bot.Resign(id)
 	h.waitFor("the end", func(s Status) bool { _, ok := finishedGame(s); return ok })
 }
+
+// The opponent's draw offer shows in the game's status, and can be accepted
+// by hand when the engine's own rules would not.
+func TestDrawOfferCanBeAnsweredByHand(t *testing.T) {
+	h, id := drawGame(t, "10", DrawOffer{Enabled: false})
+	h.waitFor("a few moves", func(Status) bool { moves, _, _, _ := h.fake.Game(id); return len(moves) >= 4 })
+	seen := false
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if _, status, _, _ := h.fake.Game(id); status != "started" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the draw was never agreed")
+		}
+		// The engine's next move declines an offer, so offer until one is
+		// still open when it is looked at.
+		h.fake.OfferDraw(id)
+		for _, g := range h.bot.Status().Games {
+			if g.ID == id && g.DrawOffer == "theirs" {
+				seen = true
+				h.bot.Draw(id, true)
+			}
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if !seen {
+		t.Error("the offer never showed in the status")
+	}
+	if _, status, _, _ := h.fake.Game(id); status != "draw" {
+		t.Errorf("the game ended %q, want a draw", status)
+	}
+	s := h.waitFor("the end", func(s Status) bool { _, ok := finishedGame(s); return ok })
+	if g, _ := finishedGame(s); g.Result != "1/2-1/2" || g.DrawOffer != "" {
+		t.Errorf("result %s, offer %q", g.Result, g.DrawOffer)
+	}
+}

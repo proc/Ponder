@@ -90,6 +90,9 @@ type Config struct {
 	Draw DrawOffer `json:"draw"`
 	// The endgame tablebase asked about drawn positions ("": Lichess's).
 	TablebaseURL string `json:"tablebaseUrl"`
+	// A challenge sent to a player is withdrawn when it has had no answer
+	// for this many seconds (0: it waits until answered or cancelled).
+	ChallengeTimeout int `json:"challengeTimeout"`
 }
 
 // ChallengeView and GameView describe challenges and games to the UI.
@@ -106,6 +109,8 @@ type ChallengeView struct {
 	Variant   string `json:"variant"`
 	Supported bool   `json:"supported"`
 	Note      string `json:"note,omitempty"` // why it would be declined automatically
+	// When a challenge sent is withdrawn for want of an answer (Unix ms).
+	ExpiresAt int64 `json:"expiresAt,omitempty"`
 }
 
 type GameView struct {
@@ -123,8 +128,11 @@ type GameView struct {
 	Moves          int    `json:"moves"`
 	MyTurn         bool   `json:"myTurn"`
 	Playing        bool   `json:"playing"` // the engine plays this game
-	Finished       bool   `json:"finished"`
-	Message        string `json:"message,omitempty"`
+	// "theirs" while the opponent's draw offer waits for an answer: the
+	// engine's next move declines it unless its draw rules accept.
+	DrawOffer string `json:"drawOffer,omitempty"`
+	Finished  bool   `json:"finished"`
+	Message   string `json:"message,omitempty"`
 }
 
 // Status is sent to the UI as the "lichess" event.
@@ -166,6 +174,7 @@ type Bot struct {
 
 	incoming map[string]*Challenge
 	outgoing map[string]*Challenge
+	expires  map[string]time.Time // when challenges sent are withdrawn
 	games    map[string]*runner
 	order    []string // game ids, oldest first
 	watching string
@@ -685,8 +694,52 @@ func (b *Bot) Challenge(p ChallengeParams) error {
 		b.sending = false
 		b.mu.Unlock()
 	}()
-	_, err := b.challenge(p)
+	ch, err := b.challenge(p)
+	if err == nil && ch.ID != "" {
+		b.expireLater(ch.ID)
+	}
 	return err
+}
+
+// SetChallengeTimeout changes how long a challenge sent waits for an
+// answer (seconds; 0: for ever). Challenges already out keep their time.
+func (b *Bot) SetChallengeTimeout(secs int) {
+	b.mu.Lock()
+	b.cfg.ChallengeTimeout = secs
+	b.mu.Unlock()
+}
+
+// expireLater withdraws the challenge if it is still waiting for an answer
+// once the time allowed has passed.
+func (b *Bot) expireLater(id string) {
+	b.mu.Lock()
+	secs := b.cfg.ChallengeTimeout
+	_, waiting := b.outgoing[id]
+	if secs <= 0 || !waiting {
+		b.mu.Unlock()
+		return
+	}
+	d := time.Duration(secs) * time.Second
+	if b.expires == nil {
+		b.expires = map[string]time.Time{}
+	}
+	b.expires[id] = time.Now().Add(d)
+	b.mu.Unlock()
+	b.emit()
+	time.AfterFunc(d, func() {
+		b.mu.Lock()
+		ch, waiting := b.outgoing[id]
+		delete(b.expires, id)
+		name := ""
+		if waiting {
+			name = ch.DestName()
+		}
+		b.mu.Unlock()
+		if !waiting || b.Cancel(id) != nil {
+			return
+		}
+		b.note(fmt.Sprintf("%s did not answer in %d s: the challenge was withdrawn.", name, secs))
+	})
 }
 
 // busyLocked says why the engine cannot send a new challenge now, or "".
@@ -769,6 +822,18 @@ func (b *Bot) Resign(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	return client.Resign(ctx, id)
+}
+
+// Draw answers the opponent's draw offer in a game: yes accepts it (the
+// game is drawn), no declines it.
+func (b *Bot) Draw(id string, yes bool) error {
+	client, err := b.connected()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	return client.Draw(ctx, id, yes)
 }
 
 func (b *Bot) Abort(id string) error {
@@ -861,7 +926,11 @@ func (b *Bot) statusLocked() Status {
 		if ch.DestUser != nil {
 			u = *ch.DestUser
 		}
-		s.Outgoing = append(s.Outgoing, challengeView(ch, u))
+		v := challengeView(ch, u)
+		if at, ok := b.expires[ch.ID]; ok {
+			v.ExpiresAt = at.UnixMilli()
+		}
+		s.Outgoing = append(s.Outgoing, v)
 	}
 	sort.Slice(s.Incoming, func(i, j int) bool { return s.Incoming[i].ID < s.Incoming[j].ID })
 	sort.Slice(s.Outgoing, func(i, j int) bool { return s.Outgoing[i].ID < s.Outgoing[j].ID })
@@ -1060,8 +1129,10 @@ func (r *runner) startEngine(cfg EngineConfig) error {
 	if err != nil {
 		return err
 	}
-	for name, value := range cfg.Options {
-		eng.SetOption(name, value)
+	// Its options first, as it is loaded; Ponder is set below.
+	if err := eng.ApplyOptions(cfg.Options, "Ponder"); err != nil {
+		eng.Quit()
+		return err
 	}
 	// An engine that can ponder says so with a Ponder option; setting it
 	// tells the engine it will be asked to (it manages its time for it).
@@ -1576,12 +1647,16 @@ func (r *runner) gameViewLocked() GameView {
 	if status == "" {
 		status = "started"
 	}
+	offer := ""
+	if theirs := (r.color == chess.White && r.state.BDraw) || (r.color == chess.Black && r.state.WDraw); theirs && !r.finished && r.play {
+		offer = "theirs"
+	}
 	return GameView{
 		ID: r.id, URL: r.url(), Opponent: name, OpponentTitle: title, OpponentRating: rating,
 		Color: map[chess.Color]string{chess.White: "white", chess.Black: "black"}[r.color],
 		Rated: r.rated, Speed: r.speed, TC: r.tc, Status: status, Result: r.result,
 		Moves: len(r.moves), MyTurn: !r.finished && r.pos.Turn == r.color, Finished: r.finished, Message: r.message,
-		Playing: r.play,
+		Playing: r.play, DrawOffer: offer,
 	}
 }
 

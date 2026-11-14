@@ -49,8 +49,8 @@ rest holds the moves or game list beside engine analysis and game details.
 - **New game** – choose Human vs Human, Human vs Computer or Computer vs
   Computer, pick engines, and set the time control.
 - **Settings → Engines** – add any UCI engine (Stockfish, Lc0, …) by
-  picking its executable, then set its options (Threads, Hash, Skill Level,
-  …) under **Options**: every option the engine offers, grouped (Basics,
+  picking its executable; its options open as soon as it is added, and
+  later under **Options** (Threads, Hash, Skill Level, …): every option the engine offers, grouped (Basics,
   Evaluation and opening book, Endgame tablebases, Logging, Search and
   tuning), each with its default and range, a slider for small ranges,
   **Browse…** for files and folders (Syzygy path, network, book, log), a
@@ -63,9 +63,20 @@ rest holds the moves or game list beside engine analysis and game details.
   tournaments and Lichess. Two engines are bundled so everything works straight away: **Ponder
   Basic**, a small real engine (alpha-beta search, a few moves deep, MultiPV)
   and **Random Mover**, which plays random legal moves.
+  The options are sent each time the engine is loaded (a game, the
+  analysis, the computer analysis, test positions, a tournament, a Lichess
+  game), right after it starts and before anything else: in the order the
+  engine lists them, under its own names, numbers kept within their range,
+  and the engine is asked to confirm it is ready, so one that stops over an
+  option is reported then.
 - **Analysis** (toolbar) – an engine analyses the position on the board and
   shows its best lines with evaluations, an evaluation bar beside the board
-  and an arrow for the best move (plus a thinner dashed arrow for the reply
+  (a line marks its middle, where the score is level, with the score on a
+  plate just above it, signed from White's side; a face at each end,
+  White's and Black's, smiles as the score favours its
+  side, goes flat when it is level and frowns as it turns against it)
+  and an arrow for the best move, with a small tag of the depth reached
+  (plus a thinner dashed arrow for the reply
   it expects to that move, its ponder move), with the other lines' first moves as
   thinner arrows in their own colours (marked beside each line in the
   Analysis window; turn them off in Settings → Analysis). It follows the board as you play, step
@@ -74,7 +85,14 @@ rest holds the moves or game list beside engine analysis and game details.
   process, separate from engines playing a game, and pauses while an engine
   is playing. **⏸** in the Analysis window (or the **P** key) stops the
   engine thinking and keeps its lines on screen; **▶** analyses the
-  position then on the board.
+  position then on the board. While the analysis is on, the Analysis button
+  shows an activity icon, which turns while the engine is thinking and
+  stands still while it is paused, and a meter marked CPU of the computer's
+  processor load (all cores, every program) with the figure beside it, read once a
+  second. When a game you are
+  watching ends (someone's on Lichess, your engine's, a tournament game),
+  the analysis pauses by itself and takes up again when the next game
+  starts; not if you had paused it yourself, and not once you turn it off.
 - **Moves list** – one row per move number as on Lichess (number, White,
   Black), with the result at the end; click a move to go to it. Each move
   starts with an icon of the piece that moved (in the board's piece theme;
@@ -87,7 +105,36 @@ rest holds the moves or game list beside engine analysis and game details.
   every position (Fast 0.2 s, Normal 0.6 s or Deep 1.5 s a move). Then, as on
   Lichess: an advantage chart (click to jump), inaccuracies **?!**, mistakes
   **?** and blunders **??** in the moves list with the better move, and each
-  player's counts, average centipawn loss and accuracy.
+  player's counts, average centipawn loss and accuracy. **Stop** keeps what
+  was analysed so far: the chart, marks and figures cover the moves reached.
+  **Continue** picks up after the last move analysed, and **Start over**
+  runs it all again. With **Comment the
+  moves** ticked, each inaccuracy, mistake and blunder also gets a written
+  comment (the better move and its line, mates missed or allowed, and how
+  the evaluation moved) and its mark, as annotations you can edit and save;
+  any comment or mark already on a move (yours, the file's, the AI's, an
+  earlier analysis's) is left as it is, an evaluation the file carries is
+  kept, and **Remove its comments** takes the analysis's off again.
+- **Versus screen** – when a game you are watching starts (a Lichess
+  player's, or your engine's), the two players' cards come in from either
+  side of the board to face each other across a **VS**: colour, name,
+  title, flag and rating, with their games, record and recent form once
+  Lichess has answered, the event underneath and their score against each
+  other. After a few seconds they go off the way they came; a click or Esc
+  sends them away at once. A game joined part way through, tournament
+  games and your own games do not show it. Turn it off under **Settings →
+  General**.
+- **Captures** – a captured piece lifts off its square and flies, shrinking
+  and fading, into the captured pieces on the bar of the player who took it,
+  where it lands in its place. It follows the move animation setting (off:
+  no flight).
+- **Pieces under attack** – a piece that more enemy pieces attack than its
+  own side defends wears a red target on its corner with the difference
+  (+1: one more attacker than defenders), for the position shown (live,
+  stepping through a game, or in a variation). A piece defended as often as
+  it is attacked has no mark. It goes by how the pieces move, so a pinned
+  piece still counts and a piece lined up behind another does not. Turn it
+  off under **Settings → General**; zen mode hides it.
 - **Side variations** – once a game is over (or opened from a file), moves
   played on the board become variations, as on Lichess's analysis board:
   they appear under the move they replace, nested lines in parentheses.
@@ -215,19 +262,211 @@ rest holds the moves or game list beside engine analysis and game details.
   name for the position. The bundled Random Mover reports
   common openings this way.
 
-### Tournaments (SPRT)
+### Annotating a game
 
-The **Tournament** tab plays many games between two engines to tell
-whether one is stronger, like cutechess-cli or fastchess:
+**Annotate** under the moves (or **A**) opens a panel for the move shown, in
+the game or in a variation:
 
-- **Engines** – engine 1 is the one tested, engine 2 the base. Each opening
-  is played twice with colours reversed (a pair).
+- **Marks** on the move: `!` `?` `!!` `??` `!?` `?!`. Your mark stands in for
+  the computer analysis's on that move.
+- **Evaluations** of the position: `=` `∞` `⩲` `⩱` `±` `∓` `+−` `−+`.
+- **A comment**, shown under the move; with no move selected (the start
+  position) it is the comment before the first move.
+- **Variations**: once the game is over or opened from a file, play a move
+  on the board to start a line; its moves take marks and comments too.
+
+The annotation of the move shown opens up: larger type, more room and a
+stronger tint, so it reads at a glance as you step through the game.
+
+An annotation written by the AI model (AI annotate, the live commentary)
+wears an **AI** badge in the moves list and its own look: italic, a dashed
+edge and a wash of the accent colour. It is marked `[%ai]` in the saved PGN,
+so it is still known as the AI's when the game is opened again; edit it and
+it becomes yours, without the badge.
+
+In the moves list an annotation takes the colour of its mark: green for
+good and brilliant moves, purple for interesting, blue for inaccuracies and
+dubious moves, amber for mistakes, red for blunders; a comment with no mark
+is grey.
+
+Annotations are **saved by themselves**, a moment after they change:
+comments and marks, and those the computer analysis, AI annotate and the
+live commentary add. Variations do not count: a line you try on the board
+is not saved by itself (the button reads **Save** until you save it by
+hand), though a line the file already had is always kept, and a
+comment or mark on a move of a tried line makes that line the game's, up to
+that move, and saves it. The game is written with all of it (and the
+computer analysis's evaluations, if there is one) over itself in its PGN,
+as standard PGN (`$` glyphs, `{ }` comments, `( )` variations): the file it
+was opened from, or, for a game played or watched here, its entry in the
+game database it was added to when it ended (found by its players and
+moves while that file is the one listed in the Games tab; its tags stay as
+they were). The button in the Annotate panel reads **Saved** when
+everything is saved and **Save** when something is waiting (its tooltip
+names the file), and saving by hand writes every line on the board. A game that is in no open file has **Save as…**
+instead, to save it as a new one. Opening a
+game brings its comments, marks and variations back; `[%clk]` and the like
+are kept as they were.
+
+### AI annotate
+
+**AI annotate** in the Annotate panel sends the game on the board to an AI
+model and turns its commentary into annotations: a summary before the first
+move, and a comment and a mark (`!`, `?`, …) on the moves it picked out.
+They are ordinary annotations, so you can edit them and **Save** writes them
+into the PGN (with an `Annotator "AI (model)"` tag). Your own comments and
+marks are never replaced, and neither is any other annotation already on
+the game (from its file, the computer analysis, or an earlier AI run): the
+AI only fills in moves that have none, and says how many it left as they
+are. To have it annotate afresh, take its earlier ones off first. **Remove the AI's
+annotations** takes them off. There is no time limit: it waits for the
+answer however long the model takes (a local model can need many minutes on
+a long game), showing how long it has waited, until you press **Stop**.
+
+The model is reached through an OpenAI-compatible API, set under **Settings
+→ AI**:
+
+- **Endpoint** – `http://localhost:8000/v1` by default, for a local server
+  such as oMLX, LM Studio, Ollama, llama.cpp or vLLM (`localhost:8000` is
+  enough to type); any other OpenAI-compatible address works too.
+- **Model** – the model to ask; empty uses the first one the endpoint lists.
+  **Check** asks the endpoint for its models.
+- **API key** – only for endpoints that want one; kept encrypted with the
+  system keychain where there is one.
+
+What is sent, only when you press the button: the game's PGN (with any
+annotations and computer-analysis evaluations already on it), its moves
+numbered, and the players' names and the result. With a hosted endpoint
+that leaves your computer.
+
+### AI chat
+
+The AI chat is a panel that floats over the right of the window: open it
+with the spark button in the toolbar or the **AI** handle on the window's
+right edge, and collapse it back to the handle with its ⇥ button, **Esc**,
+the toolbar button again, or a click anywhere outside the panel. The
+**pin** in its top row keeps it open when you click elsewhere (so you can
+work on the board with the chat beside it); the pin is remembered. Drag its left edge to change its width
+(double-click to reset); whether it is open, and its width, are remembered.
+While it is collapsed the handle's spark turns as the model answers and
+shows a dot when an answer has arrived.
+
+It is a conversation with the same model about the game on the
+board: ask why a move was played, what the plan is, where the game turned.
+Each message goes with the game as PGN (annotations and engine evaluations
+included), the position the board shows and whose move it is, and, when
+Analysis is running on that position, the engine's top lines, so "here" and
+"this move" mean what you are looking at. While the model works a spark turns beside *Thinking…*, with
+the last lines of its thinking underneath when it shares them; afterwards
+*Thought for N s* opens the whole of it. The answer flows onto the page
+at an even pace however unevenly the model sends it, each new run of words
+fading in softly, with its lists, bold and code set as such, and a copy button under
+it; **Stop** ends it where it is, **Enter** sends (Shift+Enter for a
+new line), and **+ New chat** opens another conversation in its own tab inside the panel, named
+after its first question. Tabs keep their conversations (and what you were
+typing) until closed with ✕ or the app is closed; one answer is written at
+a time, and its tab shows a dot while it is. A language model can be wrong about tactics; it is told to
+go by the engine's evaluations where there are any.
+
+Hovering a message shows small buttons under it. Under one of yours:
+**copy**, and **go back** (the pencil), which takes that message and
+everything after it out of the conversation and puts its words in the box
+to change and send again. Under an answer: **copy**, and **ask again**,
+which replaces that answer, and what followed it, with a new one.
+
+The conversation's typeface and text size are set under **Settings → AI**:
+**Chat font** (System, Serif, Rounded, Monospace, or **Other…** with the
+name of any font on the computer) and **Chat text size** (80–150%), with a
+sample line showing the choice.
+
+### Live commentary
+
+With **Live commentary** on (the AI panel's **Commentary** view), the AI
+model comments on a game as it is played, like a commentator on a
+broadcast: your own game, an engine's, a Lichess game, or a tournament game
+on the board. Every few moves (**every** move, 2, 3, 5 or 8 moves; 2 to
+begin with) it is sent the players, all the moves so far, the moves since
+its last comment, the position now as FEN, the engine's evaluation when
+there is one, and a couple of its own earlier comments, and answers in one short sentence.
+When the game ends it is asked for a summary of two or three sentences.
+
+The latest comment shows in a **Commentary** card beside the board, written
+as it comes (**All…** opens the whole commentary in the AI panel, **Off**
+turns it off); the panel's Commentary view keeps every comment of the game.
+Above each comment is a row of the moves played since the comment before
+it, the last of them (the move the comment is about) picked out in the
+accent colour; a click on a move shows it on the board. The summary is set
+apart at the end, with the last moves of the game. A new game
+starts a new commentary. It runs beside the chat without interrupting it,
+uses the model from **Settings → AI**, and turns itself off with a
+notification if the endpoint does not answer. Comments are not saved with
+the game.
+
+**Annotate the game with the commentary** (in the Commentary view) puts
+each comment on the move it followed as an annotation, and the summary
+before the first move: they show in the moves list, can be edited under
+**Annotate**, and are in the PGN when you **Save** or **Copy** the game.
+Turning it on part way through a game adds the comments made so far. Your
+own comments, and any other annotation already on a move, are left as
+they are, and **Remove the AI's annotations** (under
+Annotate) takes the commentary off again. When the game ends and is added
+to the game database, the commentary's annotations are saved into it by
+themselves (while the database is the file listed in the Games tab).
+
+**Read aloud** (in the Commentary view, or the speaker on the card) speaks
+each comment and the summary as soon as it is complete, with the
+computer's own speech: choose the **voice** and the **speed**, and **Test**
+to hear it. Moves are said as words ("Nf3" as "knight f3", "O-O" as
+"castles kingside"). A new comment takes over from one still being read,
+so the voice keeps up with the game; ▶ on a comment in the list reads that
+one again. The speech is made on the computer: no audio or text is sent
+anywhere for it.
+
+### Tournaments
+
+The **Tournament** tab plays many games between engines, like cutechess-cli
+or fastchess. **Format** chooses who plays whom:
+
+- **Match** – two engines, to tell whether one is stronger, with Elo and an
+  SPRT (below).
+- **Round robin** – every engine plays a match against every other.
+- **Gauntlet** – the first engine plays a match against each of the others.
+- **Knockout** – the engines are seeded in the order listed (the best first;
+  with a number that is not a power of two the top seeds get byes), and the
+  loser of each match is out. A level match plays on two games at a time;
+  after three such pairs the higher seed goes through.
+- **Swiss** – a set number of rounds (0: enough to sort the field), each
+  engine paired with one on the same points that it has not met. With an odd
+  number of engines one sits each round out, for half the round's points.
+
+For the formats other than a match, list the engines (up to 32; the same
+engine may be listed more than once and is then numbered) and set **Games
+per match** (even: each opening is played twice with colours reversed).
+While they run, and afterwards, the tab shows:
+
+- **Standings** – rank, games, a bar of games won, drawn and lost, points,
+  score, Sonneborn–Berger (which splits ties on points) and the Elo
+  difference the score stands for.
+- **Points as the games went by** – a line for each engine; point at it for
+  the points after any game. Each engine keeps one colour everywhere (the
+  first eight; further engines are grey).
+- **Matches** – every meeting of two engines with its score and a bar of how
+  the games went; for a knockout the bracket round by round, for a Swiss the
+  rounds.
+- **Head to head** – each engine's points against each other, tinted by who
+  is ahead.
+
+The report (below) and the SPRT are for a match of two engines.
+
+- **Engines** (a match) – engine 1 is the one tested, engine 2 the base. Each
+  opening is played twice with colours reversed (a pair).
 - **Time control** – a clock (seconds + increment, e.g. 10+0.1), a fixed
   time per move, or a fixed number of nodes per move. An engine that runs
   over its time (by more than 100 ms) loses on time.
 - **Games** and **Games at once** – how many games (0 plays until the SPRT
   decides) and how many run side by side; each game runs its own pair of
-  engine processes, reused from game to game.
+  engine processes, reused from game to game (with more than two engines,
+  only the two playing are kept running).
 - **Openings** – the built-in book (about 1,900 lines, cut to the plies you
   set), an EPD file (one position per line) or a PGN file (the first plies
   of each game), in random or file order; or the start position.
@@ -268,6 +507,25 @@ themes. **Save…** (Ctrl/⌘+S) in the report saves it anywhere as a web page,
 tab does the same for the last report. Opened in a browser, the saved page
 can save itself too (and print to PDF). Moves are kept for the last 2,000 games of a match.
 
+**Pause** holds a running tournament: the pairs of games being played are
+finished and counted (it shows *Pausing…* meanwhile), then no new game
+starts and the engines sit idle until **Resume**, which carries on from the
+same point. The time paused is not counted in the elapsed time or the
+games-a-minute figure. **Stop** still works while it is paused.
+
+**Engine options** lists the UCI options each engine runs with. Before an
+engine's first game has finished it shows what is set to be sent; after, what
+the engine was sent and confirmed when it was loaded (under its own names,
+numbers within range). Each saved game carries them as `WhiteOptions` and
+`BlackOptions` tags, and the match report's settings list them too.
+
+**Search statistics** under the result give each engine's averages over the
+moves it searched (book moves not counted): depth, selective depth, nodes a
+move, speed in nodes a second and time a move, with the number of moves, and
+the average game's length and thinking time. They fill in as games finish
+and stay after the test ends, for a match (SPRT or a fixed number of games)
+and for the other formats alike; a dash means the engine did not report it.
+
 ### Game database
 
 **Settings → Database** can save finished games to a PGN file (by default
@@ -277,6 +535,10 @@ and engine games that end with a result; aborted games are not saved),
 Lichess games your engine plays, and Lichess games you watch to the end.
 Each game is written with its players, ratings, time control, opening,
 result and how it ended.
+
+**Database** in the Games tab's header (and **Open game database** when no
+file is open) lists the database's games whatever file was open before. The
+board keeps the game it shows; click a game in the list to load it.
 
 The database is listed in the **Games** tab as soon as Ponder starts (when
 the file exists), without taking the board, and from its first game on. The
@@ -386,6 +648,60 @@ Your engine can play on [Lichess](https://lichess.org) through the
    account**. This cannot be undone, so it only happens when you press it and
    confirm.
 
+While your engine's game is live on the board, the side panels turn to
+it: the moves keep a slim column, and the rest goes to the engine's window
+(its lines, depth and speed), the Game card (speed, time control, rated or
+casual, opening), the chat, and an **Opponent** card with the other
+player's ratings, record and bio and both players' rating history. On a
+wide window these sit in two columns. Opening another tab gives it its
+usual room, and the usual layout comes back when the game ends.
+
+On a ponder hit (the opponent plays the reply your engine was thinking
+about) a **Ponder hit** label in the theme's accent colour pops up over the piece that just moved,
+floats upward and fades, with a short rising two-note sound of its own
+(in both sound sets; it follows the Sounds setting and is heard in zen mode
+too).
+
+Under the engine window's header a row of statistics covers the game so
+far: average depth, nodes a move and speed over its moves, **Ponder hits**
+(how often the opponent played the reply it was thinking about, as a
+percentage and a count), and the number of moves searched.
+
+When the opponent offers a draw in one of your engine's games and the
+engine's own draw rules (Settings → Lichess) have not accepted it, a small
+window at the top asks: **Accept draw** ends the game drawn, **Decline**
+turns the offer down. The offer lapses when your engine makes its next move,
+so there may be only a moment to answer.
+
+Once connected, **Engine and bot account** at the top of the bot's part of
+the tab shows what is playing and as whom: the engine's name, what it calls
+itself, its program, command line and UCI options (the ones you changed,
+and all of them with their values; **Options…** edits them), and the bot's
+rating at each speed with its recent change, its record, peak and lowest
+ratings, and its rating history as a chart. The ratings are read again after
+each game.
+
+When a challenge cannot be sent (the bot does not take challenges from
+bots, too many requests, not connected…), or is declined or goes unanswered,
+a notification in the top right corner says why, whichever tab is open. It
+goes by itself after a few seconds; hovering keeps it, ✕ dismisses it.
+
+A challenge you or your engine sent is withdrawn when it has had no answer
+for 30 seconds, so the next one can go out; the waiting challenge counts
+down. Change the time, or set 0 to wait until it is answered or cancelled,
+under **Settings → Lichess**.
+
+When a challenge arrives (to your bot, or to your own account) a window
+floats up in the bottom right corner, leaving the board usable, listing every challenge waiting, each with **Accept** and
+**Decline**, the challenger's ratings at every speed with their recent
+change, games, record and bio (**More…** adds the full record and rating
+history), and **Decline with**, which picks the message Lichess shows the
+challenger (too fast, rated only, no bots, …; Lichess allows only these).
+**Hide** (or ✕) tucks it into a button in that corner showing how many
+are waiting, which brings it back; they also stay in the Lichess tab, and the next new
+challenge brings the window back. Challenges that **Accept automatically**
+answers never show it.
+
 The **Lichess** tab beside the moves lists challenges to your bot (Accept or
 Decline), lets you challenge any player or one of the bots online now
 (time, increment, colour, rated), and lists the bot's games. Each game is
@@ -395,7 +711,8 @@ a game on the board, live, from your engine's side, with **⚑ Resign** and
 are playing one here. Analysis pauses while the bot is playing. While you
 watch your engine's game, arrows on the board show what it is thinking: a
 solid arrow for the move it means to play and a thinner dashed one for the
-reply it expects (its ponder move), following its search as it deepens.
+reply it expects (its ponder move), following its search as it deepens. The
+piece of the ponder move wears a small thought bubble with pulsing dots.
 Once it has moved, the expected reply stays on the board until the opponent
 answers; when the engine names a ponder move with its move, that one is
 shown. The arrows only show on the live position, not while you step back
@@ -504,6 +821,12 @@ is open (or it is playing, or looking for a random bot), its Challenge
 buttons are off until the challenge is answered or you cancel it; the same
 goes for the challenges you send from your own account.
 
+Set **for N games** beside it to have it carry on: when a game ends,
+another random bot is challenged, until that many games have been played (0:
+until you press **Stop**). No challenge goes out while your engine has a
+game in progress, whoever started it; the line under the button says which
+game it is on.
+
 **Challenge random bot** picks a bot online at random whose rating, at the
 speed of the chosen clock (bullet, blitz, rapid…), is within the range you
 set, and challenges it. If it declines or does not answer within 30
@@ -549,10 +872,21 @@ or start a game between two stand-in bots to watch with
 changes the pieces, the board and the rest of the window:
 
 - **Minimalist** (default): flat white and charcoal pieces on a light grey
-  board, light UI.
+  board; a light window with a blue accent.
+- **Obsidian**: pale and amber pieces on a charcoal board; a dark window
+  with an amber accent.
 - **Cyberpunk**: neon-outlined pieces on a navy board, dark UI.
 - **Dusk**: flat teal and coral pieces on a slate-violet board, dark
   blue-grey UI with a lavender accent.
+
+The window follows the look of Apple's apps in every theme: the system
+font, white cards on a soft grey ground, controls as borderless fills,
+segmented controls for the tabs and choices, hairlines instead of boxes, and
+sheets and pop-up cards with large corners. The shared pieces of that look
+(corner sizes, fills, hairlines, the focus ring) are variables at the top of
+`app/renderer/style.css`, made from each theme's own colours. On macOS the
+window has no title bar: its buttons sit over a strip at the top of the
+page, which also drags the window.
 
 A theme's pieces come from its folder in `svg/` (all twelve
 `<color>-<name>.svg` files, e.g. `svg/minimalist/white-king.svg`); its colours

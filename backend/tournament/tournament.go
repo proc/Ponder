@@ -1,7 +1,8 @@
-// Package tournament plays many games between two engines, for testing
-// one against the other: openings in pairs with colours reversed, several
-// games at once, with Elo and an SPRT (sequential probability ratio test)
-// that stops as soon as the result is clear.
+// Package tournament plays many games between engines: openings in pairs
+// with colours reversed, several games at once. Two engines play a match,
+// for testing one against the other, with Elo and an SPRT (sequential
+// probability ratio test) that stops as soon as the result is clear; more
+// play a round robin, a gauntlet, a knockout or a Swiss (formats.go).
 package tournament
 
 import (
@@ -16,6 +17,7 @@ import (
 	"board/backend/chess"
 	"board/backend/game"
 	"board/backend/pgn"
+	"board/backend/uci"
 )
 
 // SPRT tests H0: Elo = Elo0 against H1: Elo = Elo1 (logistic Elo, the
@@ -29,10 +31,13 @@ type SPRT struct {
 }
 
 type Config struct {
-	Engines      [2]EngineSpec `json:"engines"` // the first is the one tested
+	Engines      []EngineSpec  `json:"engines"` // a match: the first is the one tested; a knockout: best seed first
+	Format       string        `json:"format"`  // match (two engines), roundrobin, gauntlet, knockout, swiss
 	TimeControl  TimeControl   `json:"timeControl"`
 	Concurrency  int           `json:"concurrency"`
-	Games        int           `json:"games"` // most games, made even; 0 with SPRT: until it decides
+	Games        int           `json:"games"`     // a match: most games, made even; 0 with SPRT: until it decides
+	PairGames    int           `json:"pairGames"` // the other formats: games each time two engines meet, made even
+	Rounds       int           `json:"rounds"`    // Swiss: rounds, 0 for as many as sort the field
 	Openings     OpeningConfig `json:"openings"`
 	SPRT         SPRT          `json:"sprt"`
 	Adjudication Adjudication  `json:"adjudication"`
@@ -59,37 +64,85 @@ type GameRecord struct {
 	Reason  string `json:"reason"`
 	Plies   int    `json:"plies"`
 	Opening string `json:"opening"`
+	Round   int    `json:"round"` // 0 in a match
 	pgn     string
 }
 
 // Status is sent to the UI as the "tournament" event.
 type Status struct {
-	State     string       `json:"state"` // idle, running, stopping, finished, error
-	Message   string       `json:"message"`
-	Verdict   string       `json:"verdict"` // H0, H1 (SPRT) or ""
-	Names     [2]string    `json:"names"`
-	TC        string       `json:"tc"`
-	Workers   int          `json:"workers"`
-	Total     int          `json:"total"` // planned games, 0: until the SPRT decides
-	Openings  int          `json:"openings"`
-	Stats     Stats        `json:"stats"`
-	Games     int          `json:"games"`
-	Score     float64      `json:"score"`
-	Elo       float64      `json:"elo"`
-	EloMargin float64      `json:"eloMargin"`
-	LOS       float64      `json:"los"`
-	DrawRatio float64      `json:"drawRatio"`
-	SPRT      SPRT         `json:"sprt"`
-	LLR       float64      `json:"llr"`
-	Lower     float64      `json:"lower"`
-	Upper     float64      `json:"upper"`
-	Elapsed   float64      `json:"elapsed"` // seconds
-	TimeLoss  [2]int       `json:"timeLosses"`
-	Crashes   [2]int       `json:"crashes"`
-	Live      []LiveGame   `json:"live"`
-	Recent    []GameRecord `json:"recent"` // newest first
-	PGNPath   string       `json:"pgnPath"`
-	Watching  bool         `json:"watching"`
+	State     string     `json:"state"` // idle, running, stopping, finished, error
+	Message   string     `json:"message"`
+	Verdict   string     `json:"verdict"` // H0, H1 (SPRT) or ""
+	Format    string     `json:"format"`
+	Names     [2]string  `json:"names"`   // the first two engines
+	Players   []Standing `json:"players"` // every engine, best first
+	Cross     [][]Cell   `json:"cross"`   // each engine against each, by index
+	Round     int        `json:"round"`   // the round being played, 0 in a match
+	Rounds    int        `json:"rounds"`
+	Bracket   [][]Tie    `json:"bracket"` // knockout, Swiss: the ties of each round
+	Progress  Progress   `json:"progress"`
+	TC        string     `json:"tc"`
+	Workers   int        `json:"workers"`
+	Total     int        `json:"total"` // planned games, 0: until the SPRT decides
+	Openings  int        `json:"openings"`
+	Stats     Stats      `json:"stats"`
+	Games     int        `json:"games"`
+	Score     float64    `json:"score"`
+	Elo       float64    `json:"elo"`
+	EloMargin float64    `json:"eloMargin"`
+	LOS       float64    `json:"los"`
+	DrawRatio float64    `json:"drawRatio"`
+	SPRT      SPRT       `json:"sprt"`
+	LLR       float64    `json:"llr"`
+	Lower     float64    `json:"lower"`
+	Upper     float64    `json:"upper"`
+	Elapsed   float64    `json:"elapsed"` // seconds, time paused not counted
+	// Paused: no new games start; the pairs being played are finished
+	// first (Live lists them), then it waits to be resumed.
+	Paused bool `json:"paused"`
+	// Search statistics per engine (in the order they were entered), and
+	// the average game: its length in plies and how long it took.
+	Search []SearchStats `json:"search"`
+	// The UCI options each engine runs with (in the order entered).
+	EngineOptions []EngineOptions `json:"engineOptions"`
+	AvgPlies      float64         `json:"avgPlies"`
+	AvgGameMs     float64         `json:"avgGameMs"`
+	TimeLoss      [2]int          `json:"timeLosses"`
+	Crashes       [2]int          `json:"crashes"`
+	Live          []LiveGame      `json:"live"`
+	Recent        []GameRecord    `json:"recent"` // newest first
+	PGNPath       string          `json:"pgnPath"`
+	Watching      bool            `json:"watching"`
+}
+
+// EngineOptions are the options an engine plays the tournament with: as the
+// engine was sent them and confirmed (Confirmed), or as they are set to be
+// sent before its first game has started.
+type EngineOptions struct {
+	Name      string              `json:"name"`
+	Options   []uci.OptionSetting `json:"options"`
+	Confirmed bool                `json:"confirmed"`
+}
+
+// optionsText is the options on one line, for a PGN tag.
+func optionsText(opts []uci.OptionSetting) string {
+	parts := make([]string, len(opts))
+	for i, o := range opts {
+		parts[i] = o.Name + "=" + o.Value
+	}
+	return strings.Join(parts, "; ")
+}
+
+// SearchStats are an engine's averages over the moves it searched: depth,
+// selective depth, nodes and time a move, and its speed.
+type SearchStats struct {
+	Name     string  `json:"name"`
+	Moves    int     `json:"moves"`
+	Depth    float64 `json:"depth"`
+	SelDepth float64 `json:"selDepth"`
+	Nodes    float64 `json:"nodes"`
+	NPS      float64 `json:"nps"`
+	TimeMs   float64 `json:"timeMs"`
 }
 
 // Hooks connect the tournament to the app.
@@ -106,31 +159,53 @@ type Hooks struct {
 const keepRecent = 200
 
 type Tournament struct {
-	mu       sync.Mutex
-	hooks    Hooks
-	cfg      Config
-	ops      []Opening
-	cancel   context.CancelFunc
-	done     chan struct{}
-	st       Status
-	started  time.Time
-	nextPair int
-	pairs    int // pairs to play, 0: no limit
-	live     map[int]*LiveGame
-	recent   []GameRecord
-	games    int // games numbered so far
-	watching bool
-	watched  int // worker shown on the board
-	lastEmit time.Time
-	emitting bool
+	mu     sync.Mutex
+	hooks  Hooks
+	cfg    Config
+	ops    []Opening
+	cancel context.CancelFunc
+	done   chan struct{}
+	st     Status
+	// Sums for the statistics: each engine's searches, and the games'
+	// plies and thinking time.
+	search []searchSum
+	// Pausing: since when, and the time spent paused before.
+	paused      bool
+	pausedAt    time.Time
+	pausedTotal time.Duration
+	applied     map[int][]uci.OptionSetting // by engine: the options it confirmed
+	pliesSum    int
+	gameMsSum   int64
+	gamesSum    int
+	started     time.Time
+	nextPair    int
+	pairs       int // pairs to play, 0: no limit
+	live        map[int]*LiveGame
+	recent      []GameRecord
+	games       int // games numbered so far
+	watching    bool
+	watched     int // worker shown on the board
+	lastEmit    time.Time
+	emitting    bool
 	// For the report.
 	ended       time.Time
 	reportGames []ReportGame
 	pairPoints  []PairPoint
+	// Who plays whom (formats.go).
+	cond     *sync.Cond
+	queue    []unit
+	issued   int // pairs of games being played
+	bracket  [][]*Tie
+	ent      []entrant
+	cross    [][]Cell
+	finished int // games counted
+	progress Progress
 }
 
 func New(h Hooks) *Tournament {
-	return &Tournament{hooks: h, st: Status{State: "idle"}, live: map[int]*LiveGame{}}
+	t := &Tournament{hooks: h, st: Status{State: "idle"}, live: map[int]*LiveGame{}}
+	t.cond = sync.NewCond(&t.mu)
+	return t
 }
 
 // Running reports whether a tournament is being played.
@@ -141,6 +216,26 @@ func (t *Tournament) Running() bool {
 }
 
 func (t *Tournament) validate(c *Config) error {
+	c.Engines = append([]EngineSpec(nil), c.Engines...)
+	n := len(c.Engines)
+	switch c.Format {
+	case "":
+		c.Format = FormatMatch
+	case FormatMatch, FormatRoundRobin, FormatGauntlet, FormatKnockout, FormatSwiss:
+	default:
+		return fmt.Errorf("unknown tournament format %q", c.Format)
+	}
+	if n < 2 {
+		return errors.New("choose at least two engines")
+	}
+	if n > maxEngines {
+		return fmt.Errorf("at most %d engines can play", maxEngines)
+	}
+	if c.Format == FormatMatch && n != 2 {
+		return errors.New("a match is between two engines: choose another format for more")
+	}
+	// The same engine may play more than once: its names are told apart.
+	seen := map[string]int{}
 	for i, e := range c.Engines {
 		if e.Path == "" {
 			return fmt.Errorf("choose engine %d", i+1)
@@ -148,9 +243,24 @@ func (t *Tournament) validate(c *Config) error {
 		if e.Name == "" {
 			c.Engines[i].Name = fmt.Sprintf("Engine %d", i+1)
 		}
+		name := c.Engines[i].Name
+		seen[name]++
+		if k := seen[name]; k > 1 {
+			c.Engines[i].Name = fmt.Sprintf("%s (%d)", name, k)
+		}
 	}
-	if c.Engines[0].Name == c.Engines[1].Name {
-		c.Engines[1].Name += " (2)"
+	if c.Format != FormatMatch {
+		c.SPRT.Enabled = false
+		if c.PairGames < 2 {
+			c.PairGames = 2
+		}
+		if c.PairGames%2 == 1 {
+			c.PairGames++
+		}
+		if c.Format == FormatSwiss && c.Rounds <= 0 {
+			c.Rounds = int(math.Ceil(math.Log2(float64(n))))
+		}
+		c.Games = plannedGames(c.Format, n, c.PairGames, c.Rounds)
 	}
 	tc := &c.TimeControl
 	if tc.clocked() && tc.BaseMs <= 0 && tc.IncMs <= 0 {
@@ -198,6 +308,9 @@ func (t *Tournament) validate(c *Config) error {
 	}
 	if c.Event == "" {
 		c.Event = fmt.Sprintf("%s vs %s", c.Engines[0].Name, c.Engines[1].Name)
+		if c.Format != FormatMatch {
+			c.Event = fmt.Sprintf("%s, %d engines", FormatName(c.Format), n)
+		}
 	}
 	return nil
 }
@@ -221,10 +334,14 @@ func (t *Tournament) Start(c Config) error {
 	t.pairs = (c.Games + 1) / 2
 	t.live, t.recent = map[int]*LiveGame{}, nil
 	t.reportGames, t.pairPoints, t.ended = nil, nil, time.Time{}
+	t.search, t.pliesSum, t.gameMsSum, t.gamesSum = make([]searchSum, len(c.Engines)), 0, 0, 0
+	t.applied = map[int][]uci.OptionSetting{}
+	t.paused, t.pausedAt, t.pausedTotal = false, time.Time{}, 0
 	t.st = Status{
-		State: "running", Names: [2]string{c.Engines[0].Name, c.Engines[1].Name}, TC: c.TimeControl.String(),
+		State: "running", Format: c.Format, Names: [2]string{c.Engines[0].Name, c.Engines[1].Name}, TC: c.TimeControl.String(),
 		Workers: c.Concurrency, Total: t.pairs * 2, Openings: len(ops), SPRT: c.SPRT, PGNPath: c.PGNPath,
 	}
+	t.setupLocked()
 	if c.SPRT.Enabled {
 		t.st.Lower, t.st.Upper = Bounds(c.SPRT.Alpha, c.SPRT.Beta)
 	}
@@ -254,6 +371,9 @@ func (t *Tournament) Start(c Config) error {
 			t.st.State = "finished"
 			if t.st.Message == "" {
 				t.st.Message = fmt.Sprintf("All %d games played", t.st.Games)
+				if w := t.winnerLocked(); w != "" && t.cfg.Format != FormatMatch {
+					t.st.Message = fmt.Sprintf("%s · %d games played", w, t.st.Games)
+				}
 			}
 		}
 		t.live = map[int]*LiveGame{}
@@ -282,9 +402,59 @@ func (t *Tournament) Stop() {
 	t.st.State = "stopping"
 	t.st.Message = "Stopped"
 	cancel := t.cancel
+	t.cond.Broadcast() // workers waiting for a round to end
 	t.mu.Unlock()
 	cancel()
 	t.emit(true)
+}
+
+// elapsedLocked is how long the tournament has run, pauses left out.
+func (t *Tournament) elapsedLocked() time.Duration {
+	end := time.Now()
+	if !t.ended.IsZero() {
+		end = t.ended
+	}
+	d := end.Sub(t.started) - t.pausedTotal
+	if t.paused {
+		d -= end.Sub(t.pausedAt)
+	}
+	if d < 0 {
+		d = 0
+	}
+	return d
+}
+
+// Pause holds the tournament: the pairs of games being played are finished
+// and counted, and no new one starts until Resume.
+func (t *Tournament) Pause() error {
+	t.mu.Lock()
+	if t.st.State != "running" {
+		t.mu.Unlock()
+		return errors.New("no tournament is running")
+	}
+	if !t.paused {
+		t.paused, t.pausedAt = true, time.Now()
+	}
+	t.mu.Unlock()
+	t.emit(true)
+	return nil
+}
+
+// Resume carries a paused tournament on from where it was.
+func (t *Tournament) Resume() error {
+	t.mu.Lock()
+	if t.st.State != "running" {
+		t.mu.Unlock()
+		return errors.New("no tournament is running")
+	}
+	if t.paused {
+		t.pausedTotal += time.Since(t.pausedAt)
+		t.paused = false
+		t.cond.Broadcast()
+	}
+	t.mu.Unlock()
+	t.emit(true)
+	return nil
 }
 
 // Wait waits for a stopped or finished tournament's engines to close.
@@ -337,8 +507,36 @@ func (t *Tournament) statusLocked() Status {
 	s := t.st
 	s.Watching = t.watching
 	if !t.started.IsZero() {
-		s.Elapsed = time.Since(t.started).Seconds()
+		s.Elapsed = t.elapsedLocked().Seconds()
 	}
+	s.Paused = t.paused && s.State == "running"
+	s.Players, s.Cross, s.Bracket, s.Progress = t.standingsLocked(), t.crossLocked(), t.bracketLocked(), t.progressLocked()
+	s.EngineOptions = make([]EngineOptions, len(t.cfg.Engines))
+	for i, e := range t.cfg.Engines {
+		eo := EngineOptions{Name: e.Name, Options: []uci.OptionSetting{}}
+		if a, ok := t.applied[i]; ok {
+			eo.Confirmed = true
+			eo.Options = append(eo.Options, a...)
+		} else {
+			eo.Options = append(eo.Options, uci.PlanOptions(nil, e.Options)...)
+		}
+		s.EngineOptions[i] = eo
+	}
+	s.Search = make([]SearchStats, len(t.search))
+	avg := func(sum float64, n int64) float64 {
+		if n == 0 {
+			return 0
+		}
+		return sum / float64(n)
+	}
+	for i, x := range t.search {
+		s.Search[i] = SearchStats{
+			Name: t.cfg.Engines[i].Name, Moves: x.Moves,
+			Depth: avg(float64(x.DepthSum), int64(x.DepthN)), SelDepth: avg(float64(x.SelSum), int64(x.SelN)),
+			Nodes: avg(float64(x.Nodes), x.NodesN), NPS: avg(float64(x.NPS), x.NPSN), TimeMs: avg(float64(x.TimeMs), int64(x.Moves)),
+		}
+	}
+	s.AvgPlies, s.AvgGameMs = avg(float64(t.pliesSum), int64(t.gamesSum)), avg(float64(t.gameMsSum), int64(t.gamesSum))
 	s.Live = []LiveGame{}
 	for w := 0; w < t.cfg.Concurrency; w++ {
 		if g := t.live[w]; g != nil {
@@ -381,38 +579,40 @@ func (t *Tournament) emit(force bool) {
 	t.hooks.Emit("tournament", s)
 }
 
-// takePair gives a worker the next pair to play, or false when done.
-func (t *Tournament) takePair() (int, bool) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.st.State != "running" || (t.pairs > 0 && t.nextPair >= t.pairs) {
-		return 0, false
-	}
-	p := t.nextPair
-	t.nextPair++
-	return p, true
-}
-
 func (t *Tournament) work(ctx context.Context, w int) {
-	players := [2]*player{{spec: t.cfg.Engines[0]}, {spec: t.cfg.Engines[1]}}
+	// The worker's engines, by index: only the two playing are kept running.
+	players := map[int]*player{}
 	defer func() {
 		for _, p := range players {
 			p.stop()
 		}
 	}()
 	for ctx.Err() == nil {
-		pair, ok := t.takePair()
+		u, ok := t.takeUnit()
 		if !ok {
 			return
 		}
-		op := t.ops[pair%len(t.ops)]
-		var points float64 // the first engine's, in this pair
+		for i, p := range players {
+			if i != u.a && i != u.b {
+				p.stop()
+				delete(players, i)
+			}
+		}
+		for _, i := range [2]int{u.a, u.b} {
+			if players[i] == nil {
+				players[i] = &player{spec: t.cfg.Engines[i]}
+			}
+		}
+		op := t.ops[u.opening%len(t.ops)]
+		var points float64 // engine a's, in this pair
 		complete := true
 		for g := 0; g < 2; g++ {
-			// Game 1: the first engine has white; game 2: the second.
-			seats := [2]*player{players[0], players[1]}
+			// Game 1: engine a has white; game 2: engine b.
+			seats := [2]*player{players[u.a], players[u.b]}
+			idx := [2]int{u.a, u.b}
 			if g == 1 {
-				seats = [2]*player{players[1], players[0]}
+				seats = [2]*player{players[u.b], players[u.a]}
+				idx = [2]int{u.b, u.a}
 			}
 			began := time.Now()
 			res, number, err := t.playOne(ctx, w, op, seats, g == 1)
@@ -425,11 +625,12 @@ func (t *Tournament) work(ctx context.Context, w int) {
 				p = 1 - p
 			}
 			points += p
-			t.record(number, op, seats, res, g == 1, p)
-			t.addReportGame(number, pair, op, seats, res, g == 1, p, time.Since(began))
+			t.record(number, op, seats, idx, u.round, res, g == 1, p)
+			t.addReportGame(number, u.opening, op, seats, res, g == 1, p, time.Since(began))
 		}
-		if complete {
-			t.recordPair(pair, points)
+		t.finishUnit(u, complete, points)
+		if complete && t.cfg.Format == FormatMatch {
+			t.recordPair(u.opening, points)
 		}
 	}
 }
@@ -516,18 +717,35 @@ func (t *Tournament) show(number int, op Opening, seats [2]*player, start chess.
 	}
 }
 
-// record counts a finished game; points are the first engine's.
-func (t *Tournament) record(number int, op Opening, seats [2]*player, res gameResult, swapped bool, points float64) {
-	text, _ := t.gamePGN(number, op, seats, res)
+// record counts a finished game; points are the pair's first engine's, and
+// idx are the engines with white and black.
+func (t *Tournament) record(number int, op Opening, seats [2]*player, idx [2]int, round int, res gameResult, swapped bool, points float64) {
+	text, _ := t.gamePGN(number, op, seats, round, res)
 	t.mu.Lock()
-	s := &t.st.Stats
-	switch points {
-	case 1:
-		s.Wins++
-	case 0:
-		s.Losses++
-	default:
-		s.Draws++
+	t.countLocked(idx[0], idx[1], res)
+	for seat, i := range idx {
+		if i < len(t.search) {
+			t.search[i].merge(res.Data.search[seat])
+		}
+		if seats[seat].started {
+			t.applied[i] = seats[seat].applied
+		}
+	}
+	t.pliesSum += len(res.Moves)
+	t.gamesSum++
+	for _, ms := range res.Data.TimesMs {
+		t.gameMsSum += ms
+	}
+	match := t.cfg.Format == FormatMatch
+	if s := &t.st.Stats; match {
+		switch points {
+		case 1:
+			s.Wins++
+		case 0:
+			s.Losses++
+		default:
+			s.Draws++
+		}
 	}
 	loser := -1
 	if res.Result == "1-0" {
@@ -535,7 +753,7 @@ func (t *Tournament) record(number int, op Opening, seats [2]*player, res gameRe
 	} else if res.Result == "0-1" {
 		loser = 0
 	}
-	if loser >= 0 {
+	if loser >= 0 && match {
 		engine := loser
 		if swapped {
 			engine = 1 - loser
@@ -549,7 +767,7 @@ func (t *Tournament) record(number int, op Opening, seats [2]*player, res gameRe
 	}
 	t.recent = append(t.recent, GameRecord{
 		Number: number, White: seats[0].spec.Name, Black: seats[1].spec.Name,
-		Result: res.Result, Reason: res.Reason, Plies: len(res.Moves), Opening: op.Name, pgn: text,
+		Result: res.Result, Reason: res.Reason, Plies: len(res.Moves), Opening: op.Name, Round: round, pgn: text,
 	})
 	if len(t.recent) > keepRecent {
 		t.recent = t.recent[len(t.recent)-keepRecent:]
@@ -576,7 +794,7 @@ func (t *Tournament) recordPair(pair int, points float64) {
 	t.updateLocked()
 	t.pairPoints = append(t.pairPoints, PairPoint{
 		Pair: pair + 1, Games: t.st.Games, Points: points, LLR: t.st.LLR, Elo: t.st.Elo, Margin: t.st.EloMargin,
-		Score: t.st.Score, At: time.Since(t.started).Seconds(),
+		Score: t.st.Score, At: t.elapsedLocked().Seconds(),
 	})
 	decided := false
 	if c := t.cfg.SPRT; c.Enabled && t.st.State == "running" {
@@ -598,6 +816,7 @@ func (t *Tournament) recordPair(pair int, points float64) {
 	if decided {
 		t.st.State = "stopping"
 		cancel = t.cancel
+		t.cond.Broadcast()
 	}
 	t.mu.Unlock()
 	if cancel != nil {
@@ -608,6 +827,17 @@ func (t *Tournament) recordPair(pair int, points float64) {
 
 func (t *Tournament) updateLocked() {
 	s := &t.st
+	if t.cfg.Format != FormatMatch {
+		s.Games = t.finished
+		draws := 0
+		for _, e := range t.ent {
+			draws += e.draws
+		}
+		if s.Games > 0 {
+			s.DrawRatio = float64(draws) / 2 / float64(s.Games)
+		}
+		return
+	}
 	s.Games = s.Stats.Games()
 	s.Score = s.Stats.Score()
 	s.Elo, s.EloMargin, s.LOS = s.Stats.Elo()
@@ -619,13 +849,24 @@ func (t *Tournament) updateLocked() {
 	}
 }
 
-func (t *Tournament) gamePGN(number int, op Opening, seats [2]*player, res gameResult) (string, error) {
+func (t *Tournament) gamePGN(number int, op Opening, seats [2]*player, round int, res gameResult) (string, error) {
+	// A match numbers its games as rounds; the others have real rounds.
+	roundTag := fmt.Sprint(number)
+	if round > 0 {
+		roundTag = fmt.Sprintf("%d.%d", round, number)
+	}
 	tags := []pgn.Tag{
 		{Name: "Event", Value: t.cfg.Event}, {Name: "Site", Value: "Ponder"},
-		{Name: "Date", Value: time.Now().Format("2006.01.02")}, {Name: "Round", Value: fmt.Sprint(number)},
+		{Name: "Date", Value: time.Now().Format("2006.01.02")}, {Name: "Round", Value: roundTag},
 		{Name: "White", Value: seats[0].spec.Name}, {Name: "Black", Value: seats[1].spec.Name},
 		{Name: "Result", Value: res.Result}, {Name: "TimeControl", Value: t.cfg.TimeControl.PGN()},
 		{Name: "Termination", Value: res.Reason},
+	}
+	// The UCI options each engine played with, when it had any set.
+	for i, colour := range []string{"White", "Black"} {
+		if text := optionsText(seats[i].applied); text != "" {
+			tags = append(tags, pgn.Tag{Name: colour + "Options", Value: text})
+		}
 	}
 	return game.FormatPGN(tags, op.FEN, res.Moves, res.Result)
 }

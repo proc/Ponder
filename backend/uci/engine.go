@@ -8,6 +8,7 @@ import (
 	"io"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,6 +56,9 @@ type Engine struct {
 	Name    string
 	Author  string
 	Options []Option
+	// Applied is what ApplyOptions sent, in order, once the engine has
+	// confirmed it took them.
+	Applied []OptionSetting
 
 	cmd      *exec.Cmd
 	stdin    io.WriteCloser
@@ -253,6 +257,98 @@ func (e *Engine) SetOption(name, value string) {
 		}
 	}
 	e.Send("setoption name " + name + " value " + value)
+}
+
+// OptionSetting is one option to set, as it is sent.
+type OptionSetting struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// PlanOptions puts the options to set in the order and form the engine
+// takes them: in the order the engine listed its options (so that one an
+// engine reads when another changes, such as Threads before Hash or a
+// strength limit before its rating, is in place first), under the names
+// the engine uses, with values made to fit (a spin within its range, a
+// check as true or false, a combo as the engine spells the choice). Options
+// the engine did not list follow, by name. Those in skip (any case) are
+// left out.
+func PlanOptions(listed []Option, opts map[string]string, skip ...string) []OptionSetting {
+	left := map[string]string{} // lower-case name -> the name given
+	for name := range opts {
+		left[strings.ToLower(name)] = name
+	}
+	for _, s := range skip {
+		delete(left, strings.ToLower(s))
+	}
+	var out []OptionSetting
+	for _, o := range listed {
+		given, ok := left[strings.ToLower(o.Name)]
+		if !ok {
+			continue
+		}
+		delete(left, strings.ToLower(o.Name))
+		value := strings.TrimSpace(opts[given])
+		switch o.Type {
+		case "button":
+			continue // pressed, not set: never as part of loading
+		case "check":
+			switch strings.ToLower(value) {
+			case "true", "1", "on", "yes":
+				value = "true"
+			default:
+				value = "false"
+			}
+		case "spin":
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				continue // not a number: the engine keeps its own value
+			}
+			if o.Min != nil && n < *o.Min {
+				n = *o.Min
+			}
+			if o.Max != nil && n > *o.Max {
+				n = *o.Max
+			}
+			value = strconv.Itoa(n)
+		case "combo":
+			found := false
+			for _, v := range o.Vars {
+				if strings.EqualFold(v, value) {
+					value, found = v, true
+				}
+			}
+			if !found && len(o.Vars) > 0 {
+				continue // not one of the choices
+			}
+		}
+		out = append(out, OptionSetting{o.Name, value})
+	}
+	var rest []string
+	for _, given := range left {
+		rest = append(rest, given)
+	}
+	sort.Strings(rest)
+	for _, given := range rest {
+		out = append(out, OptionSetting{given, strings.TrimSpace(opts[given])})
+	}
+	return out
+}
+
+// ApplyOptions sets the options as the engine is loaded, in the order
+// PlanOptions gives, and waits until the engine has taken them in: an
+// engine that stops over one (a hash too large, a file not found) is
+// reported here rather than at its first search.
+func (e *Engine) ApplyOptions(opts map[string]string, skip ...string) error {
+	plan := PlanOptions(e.Options, opts, skip...)
+	for _, s := range plan {
+		e.Send("setoption name " + s.Name + " value " + s.Value)
+	}
+	if err := e.IsReady(); err != nil {
+		return fmt.Errorf("the engine did not take its options: %w", err)
+	}
+	e.Applied = plan
+	return nil
 }
 
 // NewGame tells the engine a new game starts and waits until it is ready.

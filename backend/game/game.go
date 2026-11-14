@@ -285,10 +285,9 @@ func (m *Manager) NewGame(cfg Config) error {
 			OnExit:     func() { m.onEngineExit(gen, side) },
 		})
 		if err == nil {
-			for name, value := range p.Options {
-				e.SetOption(name, value)
+			if err = e.ApplyOptions(p.Options); err == nil {
+				err = e.NewGame()
 			}
-			err = e.NewGame()
 			if err != nil {
 				e.Quit()
 			}
@@ -765,7 +764,7 @@ func (m *Manager) PGN() (string, error) {
 // first move): numeric glyphs, comments, and variations (PGN text, in
 // parentheses) given after the move they replace.
 type Annotations struct {
-	NAGs       map[int]int    `json:"nags"`
+	NAGs       map[int][]int  `json:"nags"`
 	Comments   map[int]string `json:"comments"`
 	Variations map[int]string `json:"variations"`
 	Before     string         `json:"before"` // a comment before the first move
@@ -797,6 +796,9 @@ func (m *Manager) pgnLocked() (string, error) {
 		for _, t := range g.tags {
 			if t.Name == "Result" {
 				t.Value, hasResult = g.result, true
+			}
+			if t.Name == "Annotator" && m.ann != nil && m.ann.Annotator != "" {
+				continue // written anew below
 			}
 			tag(t.Name, t.Value)
 		}
@@ -865,8 +867,12 @@ func writeMovetextAnnotated(b *strings.Builder, g *current, ann *Annotations) {
 	clean := strings.NewReplacer("{", "(", "}", ")")
 	b.WriteString("\n")
 	var tokens []string
+	// A comment word by word, so long ones wrap with the moves.
+	comment := func(text string) []string {
+		return append(append([]string{"{"}, strings.Fields(clean.Replace(text))...), "}")
+	}
 	if ann.Before != "" {
-		tokens = append(tokens, "{ "+clean.Replace(ann.Before)+" }")
+		tokens = append(tokens, comment(ann.Before)...)
 	}
 	num, white := g.start.Fullmove, g.start.Turn == chess.White
 	renumber := false // Black's move needs its number after a comment or variation
@@ -879,11 +885,13 @@ func writeMovetextAnnotated(b *strings.Builder, g *current, ann *Annotations) {
 		}
 		renumber = false
 		tokens = append(tokens, mv.SAN)
-		if n := ann.NAGs[ply]; n > 0 {
-			tokens = append(tokens, fmt.Sprintf("$%d", n))
+		for _, n := range ann.NAGs[ply] {
+			if n > 0 {
+				tokens = append(tokens, fmt.Sprintf("$%d", n))
+			}
 		}
 		if c := ann.Comments[ply]; c != "" {
-			tokens = append(tokens, "{ "+clean.Replace(c)+" }")
+			tokens = append(tokens, comment(c)...)
 			renumber = true
 		}
 		if v := ann.Variations[ply]; v != "" {
@@ -896,7 +904,7 @@ func writeMovetextAnnotated(b *strings.Builder, g *current, ann *Annotations) {
 		white = !white
 	}
 	if ann.After != "" {
-		tokens = append(tokens, "{ "+clean.Replace(ann.After)+" }")
+		tokens = append(tokens, comment(ann.After)...)
 	}
 	tokens = append(tokens, g.result)
 	line := 0

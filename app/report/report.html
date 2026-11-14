@@ -695,9 +695,17 @@ function renderSummary() {
   const ops = C.openings;
   const engineLine = (e) => [e.name, e.args?.length ? `command line: ${e.args.join(' ')}` : '',
     Object.keys(e.options ?? {}).length ? 'options: ' + Object.entries(e.options).map(([k, v]) => `${k}=${v}`).join(', ') : ''].filter(Boolean).join(' · ');
+  // The options as each engine confirmed them when it was loaded, when known.
+  const sent = (i) => {
+    const eo = S.engineOptions?.[i];
+    if (!eo?.confirmed) return engineLine(C.engines[i]);
+    const e = C.engines[i];
+    return [e.name, e.args?.length ? `command line: ${e.args.join(' ')}` : '',
+      eo.options.length ? 'options set at load: ' + eo.options.map((o) => `${o.name}=${o.value}`).join(', ') : 'options: the engine’s defaults'].filter(Boolean).join(' · ');
+  };
   const rowsSet = [
-    ['Engine 1 (tested)', engineLine(C.engines[0])],
-    ['Engine 2 (base)', engineLine(C.engines[1])],
+    ['Engine 1 (tested)', sent(0)],
+    ['Engine 2 (base)', sent(1)],
     ['Time control', tc.nodes ? `${int(tc.nodes)} nodes per move` : tc.moveTimeMs ? `${tc.moveTimeMs / 1000}s per move` : `${tc.baseMs / 1000}s + ${tc.incMs / 1000}s`],
     ['Games', C.games ? int(C.games) : 'until the SPRT decides'],
     ['Games at once', C.concurrency],

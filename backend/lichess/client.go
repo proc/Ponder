@@ -472,7 +472,6 @@ func yesNo(yes bool) string {
 }
 
 // Draw offers or accepts a draw (yes), or declines the opponent's offer (no).
-// Board API only.
 func (c *Client) Draw(ctx context.Context, gameID string, yes bool) error {
 	return c.call(ctx, "POST", c.gamePath(gameID)+"/draw/"+yesNo(yes), url.Values{}, nil)
 }

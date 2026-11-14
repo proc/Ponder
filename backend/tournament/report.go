@@ -109,6 +109,7 @@ func (t *Tournament) Report() (Report, error) {
 	}
 	r := Report{Status: t.statusLocked(), Config: t.cfg, Started: t.started, Ended: t.ended,
 		Games: append([]ReportGame(nil), t.reportGames...), Pairs: append([]PairPoint(nil), t.pairPoints...)}
+	r.Config.Engines = append([]EngineSpec(nil), t.cfg.Engines...)
 	t.mu.Unlock()
 	for i := range r.Config.Engines {
 		r.Config.Engines[i].Path = "" // not needed, and may be private

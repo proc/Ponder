@@ -69,6 +69,8 @@ type Player struct {
 
 	incoming map[string]*Challenge
 	outgoing map[string]*Challenge
+	expires  map[string]time.Time // when challenges sent are withdrawn
+	timeout  int                  // seconds a challenge sent waits (0: for ever)
 	games    map[string]*pgame
 	order    []string
 	current  string
@@ -462,17 +464,49 @@ func (p *Player) Challenge(cp ChallengeParams) error {
 		p.outgoing[ch.ID] = &ch
 	}
 	p.message = ""
+	secs := p.timeout
+	if ch.ID != "" && secs > 0 {
+		if p.expires == nil {
+			p.expires = map[string]time.Time{}
+		}
+		d := time.Duration(secs) * time.Second
+		p.expires[ch.ID] = time.Now().Add(d)
+		id, name := ch.ID, ch.DestName()
+		time.AfterFunc(d, func() {
+			p.mu.Lock()
+			_, waiting := p.outgoing[id]
+			delete(p.expires, id)
+			p.mu.Unlock()
+			if !waiting || p.Cancel(id) != nil {
+				return
+			}
+			p.mu.Lock()
+			p.message = fmt.Sprintf("%s did not answer in %d s: the challenge was withdrawn.", name, secs)
+			p.mu.Unlock()
+			p.emit()
+		})
+	}
 	p.mu.Unlock()
 	p.emit()
 	return nil
+}
+
+// SetChallengeTimeout changes how long a challenge sent waits for an
+// answer (seconds; 0: for ever). Challenges already out keep their time.
+func (p *Player) SetChallengeTimeout(secs int) {
+	p.mu.Lock()
+	p.timeout = secs
+	p.mu.Unlock()
 }
 
 func (p *Player) Accept(id string) error {
 	return p.call(func(ctx context.Context, c *Client) error { return c.Accept(ctx, id) })
 }
 
-func (p *Player) Decline(id string) error {
-	err := p.call(func(ctx context.Context, c *Client) error { return c.Decline(ctx, id, "") })
+// Decline turns a challenge down; reason is one of Lichess's decline
+// reasons ("" for the plain one), which the challenger is shown.
+func (p *Player) Decline(id, reason string) error {
+	err := p.call(func(ctx context.Context, c *Client) error { return c.Decline(ctx, id, reason) })
 	if err == nil {
 		p.mu.Lock()
 		delete(p.incoming, id)
@@ -665,7 +699,11 @@ func (p *Player) Status() PlayStatus {
 		if ch.DestUser != nil {
 			u = *ch.DestUser
 		}
-		st.Outgoing = append(st.Outgoing, challengeView(ch, u))
+		v := challengeView(ch, u)
+		if at, ok := p.expires[ch.ID]; ok {
+			v.ExpiresAt = at.UnixMilli()
+		}
+		st.Outgoing = append(st.Outgoing, v)
 	}
 	for i := len(p.order) - 1; i >= 0; i-- {
 		if g := p.games[p.order[i]]; g != nil {

@@ -22,18 +22,80 @@ function reviewMoveTime() {
   return REVIEW_TIMES.some(([ms]) => ms === saved) ? saved : 600;
 }
 
-async function startReview() {
+// Comments from the analysis: with "Comment the moves" on, each inaccuracy,
+// mistake and blunder gets a comment (what was better, the line, and how
+// the evaluation moved) and its mark, as annotations you can edit and save.
+// A comment or mark already on a move is left alone, whoever made it.
+const reviewComments = () => localStorage.getItem('reviewComments') === '1';
+const hasReviewComments = () => [...notes.moves.values()].some((a) => a.auto);
+
+function reviewCommentText(result, j) {
+  const before = result.positions[j.ply - 1];
+  const after = result.positions[j.ply];
+  const { white } = plyNumber(j.ply);
+  const mover = white ? 1 : -1;
+  const kind = { inaccuracy: 'Inaccuracy', mistake: 'Mistake', blunder: 'Blunder' }[j.kind];
+  const parts = [`${kind}.`];
+  // Mates won or thrown away, from the mover's side.
+  const mateFor = (p) => (p?.mate ? p.mate * mover : 0);
+  if (mateFor(before) > 0 && mateFor(after) <= 0) parts.push(`Missed mate in ${mateFor(before)}.`);
+  else if (mateFor(after) < 0 && mateFor(before) >= 0) parts.push(`Allows mate in ${-mateFor(after)}.`);
+  if (j.best) {
+    // The better line, numbered from the move it replaces.
+    const line = (before.pv ?? []).slice(0, 5).map((san, i) => {
+      const { n, white: w } = plyNumber(j.ply + i);
+      return w ? `${n}. ${san}` : i === 0 ? `${n}... ${san}` : san;
+    }).join(' ');
+    parts.push(line && before.pv[0] === j.best && before.pv.length > 1 ? `${j.best} was best: ${line}.` : `${j.best} was best.`);
+  }
+  if (before && after) parts.push(`The evaluation went from ${evalText(before)} to ${evalText(after)}.`);
+  return parts.join(' ');
+}
+
+function removeReviewComments() {
+  for (const [ply, a] of [...notes.moves]) {
+    if (!a.auto && !a.autoNag) continue;
+    if (a.auto) { a.comment = ''; a.auto = false; }
+    if (a.autoNag) { a.nag = 0; a.autoNag = false; }
+    if (annEmpty(a)) notes.moves.delete(ply);
+  }
+}
+
+// Fills in only what is not there: a move that already has a comment keeps
+// it, and one that already has a mark keeps that, wherever they came from
+// (you, the file, the AI, an earlier analysis). Nothing is taken off first;
+// "Remove its comments" does that when asked.
+function applyReviewComments(result) {
+  const NAG = { inaccuracy: 6, mistake: 2, blunder: 4 };
+  let n = 0;
+  for (const j of result.judgments ?? []) {
+    if (!j.kind) continue;
+    const a = notes.moves.get(j.ply) ?? annBlank();
+    let used = false;
+    if (!a.comment) { a.comment = reviewCommentText(result, j); a.auto = true; used = true; }
+    if (!a.nag) { a.nag = NAG[j.kind]; a.autoNag = true; used = true; }
+    if (used) { notes.moves.set(j.ply, a); n++; }
+  }
+  if (n) notes.dirty = true;
+  renderMoves();
+  return n;
+}
+
+// resume: a stopped analysis of this game to carry on from.
+async function startReview(resume = null) {
   const s = analysisSettings();
   const engine = engines.find((e) => e.id === s.engineId) ?? engines[0];
   if (!engine) return;
   const key = reviewKey();
   rv.error = '';
-  rv.running = { key, done: 0, total: state.moves.length + 1 };
+  const kept = resume?.partial ? resume.positions : null;
+  rv.running = { key, done: kept?.length ?? 0, total: state.moves.length + 1 };
   renderReview();
   syncAnalysis();
   try {
     await api.backend('reviewStart', {
       key, startFen: state.startFen, moves: state.moves.map((m) => m.uci), moveTimeMs: reviewMoveTime(),
+      ...(kept ? { resume: kept } : {}),
       engine: { name: engine.name, path: engine.path, args: engine.args ?? [], options: engine.options ?? {} },
     });
   } catch (err) {
@@ -49,9 +111,14 @@ function onReviewEvent(p) {
     rv.running = { key: p.key, done: p.done, total: p.total };
   } else {
     if (rv.running?.key === p.key) rv.running = null;
-    if (p.state === 'done') {
-      rv.cache.set(p.key, { ...p, moveTimeMs: reviewMoveTime() });
-      if (p.key === reviewKey()) renderMoves();
+    if (p.state === 'done' || (p.state === 'stopped' && p.positions?.length >= 2)) {
+      // Stopped early: the moves analysed so far are kept and shown.
+      const partial = p.state === 'stopped' && p.positions.length < p.total;
+      rv.cache.set(p.key, { ...p, partial, moveTimeMs: reviewMoveTime() });
+      if (p.key === reviewKey()) {
+        if (reviewComments()) applyReviewComments(rv.cache.get(p.key));
+        else renderMoves();
+      }
     } else if (p.state === 'error') {
       rv.error = p.error;
       rv.errorKey = p.key;
@@ -109,7 +176,10 @@ function renderReview() {
   go.onclick = startReview;
   const s = analysisSettings();
   const engine = engines.find((e) => e.id === s.engineId) ?? engines[0];
-  const parts = [go, time, el('span', { className: 'hint', textContent: `with ${engine?.name ?? 'the analysis engine'}` })];
+  const box2 = el('input', { type: 'checkbox', checked: reviewComments() });
+  box2.onchange = () => localStorage.setItem('reviewComments', box2.checked ? '1' : '');
+  const comments = el('label', { className: 'check review-comments', title: 'Write a comment on each inaccuracy, mistake and blunder: the better move and line, and how the evaluation moved. They become annotations you can edit and save.' }, [box2, ' Comment the moves']);
+  const parts = [go, time, comments, el('span', { className: 'hint', textContent: `with ${engine?.name ?? 'the analysis engine'}` })];
   box.replaceChildren(el('div', { className: 'review-ask' }, parts));
   if (rv.error && rv.errorKey === key) box.append(el('p', { className: 'error', textContent: rv.error }));
   box.hidden = false;
@@ -119,7 +189,10 @@ function renderReview() {
 // is White's, the dark Black's. Mistakes are dots in their colour.
 function advantageChart(result) {
   const pos = result.positions;
-  const n = pos.length - 1;
+  // A stopped analysis covers the first moves only: the chart keeps the
+  // whole game's width and the rest stays empty.
+  const n = result.partial ? Math.max(pos.length - 1, state.moves.length) : pos.length - 1;
+  const last = pos.length - 1;
   const W = 600, H = 80;
   const X = (i) => (n ? (i / n) * W : 0);
   const Y = (c) => H / 2 - c * (H / 2 - 2);
@@ -132,7 +205,8 @@ function advantageChart(result) {
   };
   const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, preserveAspectRatio: 'none', class: 'adv-svg', role: 'img', 'aria-label': 'Advantage chart' });
   svg.append(svgEl('rect', { x: 0, y: 0, width: W, height: H, class: 'adv-black' }));
-  svg.append(svgEl('polygon', { points: `0,${H} ${pts.join(' ')} ${W},${H}`, class: 'adv-white' }));
+  svg.append(svgEl('polygon', { points: `0,${H} ${pts.join(' ')} ${X(last).toFixed(1)},${H}`, class: 'adv-white' }));
+  if (last < n) svg.append(svgEl('rect', { x: X(last), y: 0, width: W - X(last), height: H, class: 'adv-todo' }));
   svg.append(svgEl('line', { x1: 0, x2: W, y1: H / 2, y2: H / 2, class: 'adv-mid' }));
   svg.append(svgEl('polyline', { points: pts.join(' '), class: 'adv-line' }));
   const cur = svgEl('line', { x1: X(shownPly()), x2: X(shownPly()), y1: 0, y2: H, class: 'adv-cur' });
@@ -154,7 +228,7 @@ function advantageChart(result) {
   };
   wrap.addEventListener('mousemove', (ev) => {
     const ply = plyAt(ev);
-    tip.textContent = `${ply ? moveLabel(ply) : 'Start'}  ${evalText(pos[ply])}`;
+    tip.textContent = `${ply ? moveLabel(ply) : 'Start'}  ${pos[ply] ? evalText(pos[ply]) : 'not analysed'}`;
     tip.hidden = false;
     const r = wrap.getBoundingClientRect();
     tip.style.left = `${Math.min(r.width - tip.offsetWidth, Math.max(0, ev.clientX - r.left - tip.offsetWidth / 2))}px`;
@@ -189,10 +263,24 @@ function reviewSummary(result) {
     className: i ? 'n' : '', textContent: t,
     title: ['', 'Inaccuracies', 'Mistakes', 'Blunders', 'Average centipawn loss', 'Accuracy'][i],
   })));
-  const again = el('button', { type: 'button', className: 'link', textContent: 'Analyse again' });
+  const again = el('button', { type: 'button', className: 'link', textContent: result.partial ? 'Start over' : 'Analyse again' });
   again.onclick = () => { rv.cache.delete(reviewKey()); startReview(); };
+  // A stopped analysis carries on after the moves it has.
+  const go = el('button', { type: 'button', className: 'small primary', textContent: 'Continue' });
+  go.title = 'Analyse the rest of the game, keeping what is done';
+  go.onclick = () => startReview(result);
+  const done = result.positions.length - 1;
+  const commented = hasReviewComments();
+  const comment = el('button', { type: 'button', className: 'link', textContent: commented ? 'Remove its comments' : 'Comment the moves' });
+  comment.title = commented ? 'Take the analysis’s comments off the moves; yours stay' : 'Write a comment on each inaccuracy, mistake and blunder';
+  comment.onclick = () => {
+    if (commented) { removeReviewComments(); notes.dirty = true; renderMoves(); } else applyReviewComments(result);
+  };
   return el('div', { className: 'review-sum' }, [
+    ...(result.partial ? [el('div', { className: 'review-partial' }, [
+      el('span', { textContent: `Stopped early: ${done} of ${state.moves.length} moves analysed (up to ${moveLabel(done)}). The figures cover those moves only.` }), go])] : []),
     el('table', {}, [el('thead', {}, [head]), el('tbody', {}, [row('white'), row('black')])]),
-    el('div', { className: 'hint' }, [`${result.engine} · ${(result.moveTimeMs ?? 0) / 1000}s a move · `, again]),
+    el('div', { className: 'hint' }, [`${result.engine} · ${(result.moveTimeMs ?? 0) / 1000}s a move · `, again,
+      ...(result.judgments?.some((j) => j.kind) || commented ? [' · ', comment] : [])]),
   ]);
 }

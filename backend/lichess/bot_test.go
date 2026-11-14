@@ -1,6 +1,7 @@
 package lichess
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -684,5 +685,83 @@ func TestWatchBringsTheScoresSoFar(t *testing.T) {
 	}
 	if played < 3 {
 		t.Fatalf("%d scores came with the game, for moves %v: %+v", played, moves, got)
+	}
+}
+
+// A challenge sent is withdrawn when it has had no answer for the time set.
+func TestSentChallengeExpires(t *testing.T) {
+	h := newHarness(t, Policy{Casual: true, Humans: true, MaxGames: 1})
+	h.cfg.ChallengeTimeout = 1
+	h.connect()
+	h.waitListening()
+	if err := h.bot.Challenge(ChallengeParams{Username: "sleepy", Limit: 60, Color: "random"}); err != nil {
+		t.Fatal(err)
+	}
+	s := h.bot.Status()
+	if len(s.Outgoing) != 1 || s.Outgoing[0].ExpiresAt == 0 {
+		t.Fatalf("outgoing %+v", s.Outgoing)
+	}
+	s = h.waitFor("the challenge to be withdrawn", func(s Status) bool { return len(s.Outgoing) == 0 && s.Message != "" })
+	if !strings.Contains(s.Message, "did not answer in 1 s") {
+		t.Errorf("message %q", s.Message)
+	}
+	// And another can go out.
+	if err := h.bot.Challenge(ChallengeParams{Username: "sleepy", Limit: 60, Color: "random"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// With several games asked for, the search challenges another bot after each
+// game ends, never while one is being played, and stops at the number set.
+func TestSeekPlaysGamesOneAfterAnother(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap, seekPoll = 2*time.Second, 20*time.Millisecond, 100*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
+	h := newHarness(t, Policy{})
+	h.fake.MaxPlies = 8 // short games
+	h.fake.Online = []fake.OnlineBot{{Name: "SlowBot", Rating: 1700}, {Name: "FastBot", Rating: 1710}, {Name: "OtherBot", Rating: 1720}}
+	h.connect()
+	err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2, Color: "random"}, Games: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Watch every status: a challenge must never be out while a game is on.
+	overlap := ""
+	seen := 0
+	s := h.waitFor("three games played", func(s Status) bool {
+		live := 0
+		for _, g := range s.Games {
+			if !g.Finished {
+				live++
+			}
+		}
+		if live > 1 || (live > 0 && len(s.Outgoing) > 0) {
+			overlap = fmt.Sprintf("%d games in progress with %d challenges out", live, len(s.Outgoing))
+		}
+		if s.Seek != nil && s.Seek.Played > seen {
+			seen = s.Seek.Played
+			if s.Seek.Games != 3 {
+				overlap = fmt.Sprintf("the search says %d games, want 3", s.Seek.Games)
+			}
+		}
+		done := 0
+		for _, g := range s.Games {
+			if g.Finished {
+				done++
+			}
+		}
+		return s.Seek == nil && done == 3
+	})
+	if overlap != "" {
+		t.Error(overlap)
+	}
+	if seen != 2 {
+		t.Errorf("the search counted %d games before its last, want 2", seen)
+	}
+	if len(s.Games) != 3 || len(s.Outgoing) != 0 {
+		t.Errorf("%d games, %d challenges out", len(s.Games), len(s.Outgoing))
+	}
+	// No fourth challenge.
+	time.Sleep(300 * time.Millisecond)
+	if n := strings.Count(strings.Join(h.fake.Calls(), "\n"), "POST /api/challenge/"); n != 3 {
+		t.Errorf("%d challenges sent, want 3:\n%s", n, strings.Join(h.fake.Calls(), "\n"))
 	}
 }

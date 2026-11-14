@@ -25,8 +25,12 @@ type EngineSpec struct {
 type player struct {
 	spec EngineSpec
 	eng  *uci.Engine
-	best chan string
-	dead chan struct{}
+	// The options the engine was sent and confirmed, when it was last
+	// started; started says it has been.
+	applied []uci.OptionSetting
+	started bool
+	best    chan string
+	dead    chan struct{}
 
 	mu   sync.Mutex
 	info uci.Info // the last main-line info of the current search
@@ -63,9 +67,11 @@ func (p *player) start() error {
 	if err != nil {
 		return err
 	}
-	for name, value := range p.spec.Options {
-		eng.SetOption(name, value)
+	if err := eng.ApplyOptions(p.spec.Options); err != nil {
+		eng.Quit()
+		return err
 	}
+	p.applied, p.started = eng.Applied, true
 	p.eng = eng
 	return nil
 }
@@ -170,6 +176,54 @@ type moveData struct {
 	Evals   []int   `json:"evals"`
 	Depths  []int   `json:"depths"`
 	TimesMs []int64 `json:"times"`
+	// What each side's engine reported for the moves it searched (White,
+	// Black), summed for the statistics.
+	search [2]searchSum
+}
+
+// searchSum adds up an engine's searches: how many moves, and the depth,
+// selective depth, nodes, speed and time of each that reported them.
+type searchSum struct {
+	Moves            int
+	DepthSum, DepthN int
+	SelSum, SelN     int
+	Nodes, NodesN    int64
+	NPS, NPSN        int64
+	TimeMs           int64
+}
+
+func (s *searchSum) add(in uci.Info, ms int64) {
+	s.Moves++
+	s.TimeMs += ms
+	if in.Depth > 0 {
+		s.DepthSum += in.Depth
+		s.DepthN++
+	}
+	if in.SelDepth > 0 {
+		s.SelSum += in.SelDepth
+		s.SelN++
+	}
+	if in.Nodes > 0 {
+		s.Nodes += in.Nodes
+		s.NodesN++
+	}
+	if in.NPS > 0 {
+		s.NPS += in.NPS
+		s.NPSN++
+	}
+}
+
+func (s *searchSum) merge(o searchSum) {
+	s.Moves += o.Moves
+	s.DepthSum += o.DepthSum
+	s.DepthN += o.DepthN
+	s.SelSum += o.SelSum
+	s.SelN += o.SelN
+	s.Nodes += o.Nodes
+	s.NodesN += o.NodesN
+	s.NPS += o.NPS
+	s.NPSN += o.NPSN
+	s.TimeMs += o.TimeMs
 }
 
 func (d *moveData) add(eval, depth int, ms int64) {
@@ -366,6 +420,7 @@ func playGame(ctx context.Context, op Opening, seats [2]*player, tc TimeControl,
 			}
 		}
 		data.add(eval, in.Depth, elapsed)
+		data.search[side].add(in, elapsed)
 		if update != nil {
 			update(moveUpdate{moves: moves, clocks: clocks, turnAt: time.Now(), info: in, side: side})
 		}

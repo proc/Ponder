@@ -275,6 +275,72 @@ func watchCollection() {
 	}
 }
 
+// errNotInFile says the game on the board has no entry in the open file.
+var errNotInFile = fmt.Errorf("this game is not in the open PGN file")
+
+// findGame is the entry of the open file that is the game on the board: the
+// same players, start and moves. The newest such entry, looked for among
+// the file's last games (a game played here is added at the end). -1: none.
+func findGame(c *pgn.Collection, st game.State) int {
+	if len(st.Moves) == 0 {
+		return -1
+	}
+	clean := func(san string) string { return strings.TrimRight(san, "+#!?") }
+	name := func(side, fallback string) string {
+		if p, ok := st.Players[side]; ok && p.Name != "" {
+			return p.Name
+		}
+		return fallback
+	}
+	for i := c.Len() - 1; i >= 0 && i >= c.Len()-200; i-- {
+		g, err := c.Read(i)
+		if err != nil || len(g.Moves) != len(st.Moves) {
+			continue
+		}
+		if g.Tag("White") != name("white", "White") || g.Tag("Black") != name("black", "Black") {
+			continue
+		}
+		if fen := g.Tag("FEN"); (fen != "" && fen != st.StartFEN) || (fen == "" && st.StartFEN != chess.StartFEN) {
+			continue
+		}
+		same := true
+		for k, m := range g.Moves {
+			if clean(m) != clean(st.Moves[k].SAN) {
+				same = false
+				break
+			}
+		}
+		if same {
+			return i
+		}
+	}
+	return -1
+}
+
+// withTagsOf is the game in text with the tag section of raw (the entry as
+// it stands in the file) in place of its own.
+func withTagsOf(raw, text string) string {
+	var tags []string
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n") {
+		t := strings.TrimSpace(line)
+		if t == "" {
+			if len(tags) > 0 {
+				break
+			}
+			continue
+		}
+		if !strings.HasPrefix(t, "[") {
+			break
+		}
+		tags = append(tags, t)
+	}
+	_, moves, found := strings.Cut(text, "\n\n")
+	if !found || len(tags) == 0 {
+		return text
+	}
+	return strings.Join(tags, "\n") + "\n\n" + moves
+}
+
 // changeCollection changes the open file with f, while no finished game is
 // being added to it, then indexes it again.
 func changeCollection(f func(c *pgn.Collection) error) error {
@@ -630,6 +696,66 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			return nil, err
 		}
 		return map[string]any{"total": collection.c.Len()}, nil
+	case "pgnAnnotations":
+		// The comments, glyphs and variations a game in the file came with.
+		var a struct{ Index int }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		if collection.c == nil {
+			return nil, fmt.Errorf("no PGN file is open")
+		}
+		text, err := collection.c.Raw(a.Index)
+		if err != nil {
+			return nil, err
+		}
+		return pgn.Annotations(text)
+	case "pgnAnnotate":
+		// Write the game on the board, with its annotations, over itself in
+		// the open PGN file: the file it was opened from, or, for a game
+		// played or watched here, its entry in the open file (the game
+		// database it was added to when it ended).
+		var a struct{ Annotations *game.Annotations }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		st := mgr.State()
+		if collection.c == nil {
+			return nil, fmt.Errorf("this game is not in the open PGN file")
+		}
+		fromFile := st.Loaded && st.Index >= 0 && st.Source == collection.name
+		if st.Loaded && !fromFile {
+			return nil, fmt.Errorf("this game is not in the open PGN file")
+		}
+		text, err := mgr.AnnotatedPGN(a.Annotations)
+		if err != nil {
+			return nil, err
+		}
+		index := st.Index
+		err = changeCollection(func(c *pgn.Collection) error {
+			if !fromFile {
+				// Its entry in the file: the tags stay as they were written
+				// there, the moves are written again with the annotations.
+				index = findGame(c, st)
+				if index < 0 {
+					return errNotInFile
+				}
+				raw, err := c.Raw(index)
+				if err != nil {
+					return err
+				}
+				text = withTagsOf(raw, text)
+			}
+			if games, err := pgn.Parse(text); err != nil || len(games) != 1 {
+				return fmt.Errorf("the game could not be written with these annotations")
+			}
+			text += "\n" // the blank line before the next game
+			return c.Rewrite(map[int]*string{index: &text})
+		})
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"total": collection.c.Len(), "file": collection.name, "index": index}, nil
 	case "pgnDelete":
 		// Take games out of the file.
 		var a struct{ Indices []int }
@@ -764,6 +890,7 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		if err := decode(&cfg); err != nil {
 			return nil, err
 		}
+		player.SetChallengeTimeout(cfg.ChallengeTimeout)
 		return bot.Connect(cfg)
 	case "lichessConfigure":
 		var a struct {
@@ -772,11 +899,16 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			Greeting lichess.Greeting
 			Ponder   bool
 			Draw     lichess.DrawOffer
+			// Seconds a challenge sent waits for an answer (0: for ever),
+			// for the engine's account and the person's own.
+			ChallengeTimeout int
 		}
 		if err := decode(&a); err != nil {
 			return nil, err
 		}
 		bot.Configure(a.Engine, a.Policy, a.Greeting, a.Ponder, a.Draw)
+		bot.SetChallengeTimeout(a.ChallengeTimeout)
+		player.SetChallengeTimeout(a.ChallengeTimeout)
 		return nil, nil
 	case "lichessDisconnect":
 		var a struct{ Resign bool }
@@ -816,6 +948,16 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			spectator.Stop()
 			return nil, bot.Watch(a.ID)
 		}
+	case "lichessDraw":
+		// Answer a draw offer in one of the engine's games.
+		var a struct {
+			ID  string
+			Yes bool
+		}
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		return nil, bot.Draw(a.ID, a.Yes)
 	case "lichessPlay":
 		var a struct{ ID string }
 		if err := decode(&a); err != nil {
@@ -823,10 +965,14 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		}
 		return nil, bot.Play(a.ID)
 	case "lichessAcctConnect":
-		var a struct{ BaseURL, Token string }
+		var a struct {
+			BaseURL, Token   string
+			ChallengeTimeout int
+		}
 		if err := decode(&a); err != nil {
 			return nil, err
 		}
+		player.SetChallengeTimeout(a.ChallengeTimeout)
 		return player.Connect(a.BaseURL, a.Token)
 	case "lichessAcctDisconnect":
 		player.Disconnect()
@@ -853,8 +999,9 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		return nil, player.Challenge(a)
 	case "lichessAcctAccept", "lichessAcctDecline", "lichessAcctCancel", "lichessAcctShow", "lichessAcctResign", "lichessAcctAbort", "lichessAcctDraw", "lichessAcctTakeback":
 		var a struct {
-			ID  string
-			Yes bool
+			ID     string
+			Yes    bool
+			Reason string
 		}
 		if err := decode(&a); err != nil {
 			return nil, err
@@ -863,7 +1010,7 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		case "lichessAcctAccept":
 			return nil, player.Accept(a.ID)
 		case "lichessAcctDecline":
-			return nil, player.Decline(a.ID)
+			return nil, player.Decline(a.ID, a.Reason)
 		case "lichessAcctCancel":
 			return nil, player.Cancel(a.ID)
 		case "lichessAcctShow":
@@ -949,6 +1096,10 @@ func handle(mgr *game.Manager, req request) (any, error) {
 	case "tournamentStop":
 		tourney.Stop()
 		return nil, nil
+	case "tournamentPause":
+		return nil, tourney.Pause()
+	case "tournamentResume":
+		return nil, tourney.Resume()
 	case "tournamentStatus":
 		return tourney.Status(), nil
 	case "tournamentReport":

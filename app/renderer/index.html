@@ -23,6 +23,8 @@
       <div class="board-row">
         <div id="evalbar" hidden title="Evaluation (White's view)">
           <div class="fill"></div>
+          <svg class="face white" id="face-white" viewBox="0 0 24 24" aria-hidden="true"><circle class="head" cx="12" cy="12" r="10.5"/><path class="brow l" d="M6.6 8.2 9.8 8.2"/><path class="brow r" d="M14.2 8.2 17.4 8.2"/><ellipse class="eye" cx="8.3" cy="10.6" rx="1.25" ry="1.25"/><ellipse class="eye" cx="15.7" cy="10.6" rx="1.25" ry="1.25"/><path class="mouth" d="M7 16 Q12 16 17 16"/></svg>
+          <svg class="face black" id="face-black" viewBox="0 0 24 24" aria-hidden="true"><circle class="head" cx="12" cy="12" r="10.5"/><path class="brow l" d="M6.6 8.2 9.8 8.2"/><path class="brow r" d="M14.2 8.2 17.4 8.2"/><ellipse class="eye" cx="8.3" cy="10.6" rx="1.25" ry="1.25"/><ellipse class="eye" cx="15.7" cy="10.6" rx="1.25" ry="1.25"/><path class="mouth" d="M7 16 Q12 16 17 16"/></svg>
           <span class="label"></span>
         </div>
         <div class="board-wrap">
@@ -49,6 +51,14 @@
             <g id="shapes"></g>
           </svg>
           <div id="promotion" hidden></div>
+          <div id="versus" hidden aria-live="polite" title="Click to go to the game">
+            <div class="vs-shade"></div>
+            <div class="vs-slash"></div>
+            <div class="vs-side white" id="vs-white"></div>
+            <div class="vs-side black" id="vs-black"></div>
+            <div class="vs-badge" aria-hidden="true"><span>VS</span></div>
+            <div class="vs-foot"><span class="vs-event" id="vs-event"></span><span class="vs-h2h" id="vs-h2h" hidden></span></div>
+          </div>
           <div id="game-over" hidden role="alertdialog" aria-labelledby="go-title" aria-describedby="go-reason">
             <div class="go-card">
               <div class="go-badge" id="go-badge"></div>
@@ -73,6 +83,7 @@
         <span class="clock"></span>
         <span class="board-tools">
           <button type="button" id="btn-flip" class="tool" title="Flip the board (F)" aria-label="Flip the board"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M5 13V3M5 3 2.5 5.5M5 3l2.5 2.5M11 3v10M11 13l-2.5-2.5M11 13l2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+          <button type="button" id="btn-sound" class="tool" title="Sounds are on: click to mute (M)" aria-label="Sounds" aria-pressed="true"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path class="snd-on" d="M15.5 8.5a5 5 0 0 1 0 7M18.6 5.4a9 9 0 0 1 0 13.2"/><path class="snd-off" d="M22 9l-6 6M16 9l6 6"/></g></svg></button>
           <button type="button" id="btn-zen" class="tool" title="Zen mode: only the board and the players (Z)" aria-label="Zen mode" aria-pressed="false"><svg class="zen-in" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="zen-out" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M13.5 6.5h-4v-4M9.5 6.5 14 2M2.5 9.5h4v4M6.5 9.5 2 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </span>
       </div>
@@ -85,8 +96,9 @@
           <button id="btn-positions" title="Test positions to analyse: Win at Chess, or an EPD file">Positions…</button>
         </div>
         <div class="group end">
-          <button id="btn-analysis" aria-pressed="false" title="Analyse the position on the board (set the engine in Settings → Analysis)">Analysis</button>
-          <button id="btn-settings">Settings</button>
+          <button id="btn-analysis" aria-pressed="false" aria-label="Analysis" title="Analysis: have the engine analyse the position on the board (set the engine in Settings → Analysis)"><svg class="working" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M8 1.6v2.9"/><path d="M12.5 3.5l-2 2" opacity=".86"/><path d="M14.4 8h-2.9" opacity=".72"/><path d="M12.5 12.5l-2-2" opacity=".58"/><path d="M8 14.4v-2.9" opacity=".46"/><path d="M3.5 12.5l2-2" opacity=".36"/><path d="M1.6 8h2.9" opacity=".28"/><path d="M3.5 3.5l2 2" opacity=".2"/></g></svg><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></g></svg><span class="cpu" id="analysis-cpu" role="meter" aria-valuemin="0" aria-valuemax="100" hidden><span class="cpu-label">CPU</span><span class="meter"><span class="fill" id="analysis-cpu-fill"></span></span><span class="pct" id="analysis-cpu-pct"></span></span></button>
+          <button id="btn-ai" class="icon-btn" title="AI chat: ask a model about the game (opens a panel on the right)" aria-label="AI chat" aria-pressed="false"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v18"/><path d="M3 12h18"/><path d="M5.6 5.6l12.8 12.8"/><path d="M18.4 5.6L5.6 18.4"/></g></svg></button>
+          <button id="btn-settings" class="icon-btn" title="Settings" aria-label="Settings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></g></svg></button>
           <button id="btn-keys" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
         </div>
       </div>
@@ -104,7 +116,7 @@
             <button type="button" role="tab" class="tab active" id="tab-moves" aria-controls="pane-moves" aria-selected="true">Moves</button>
             <button type="button" role="tab" class="tab" id="tab-explorer" aria-controls="pane-explorer" aria-selected="false">Explorer</button>
             <button type="button" role="tab" class="tab" id="tab-puzzles" aria-controls="pane-puzzles" aria-selected="false">Puzzles</button>
-            <button type="button" role="tab" class="tab" id="tab-games" aria-controls="pane-games" aria-selected="false">Games <span class="count" id="games-count"></span></button>
+            <button type="button" role="tab" class="tab" id="tab-games" aria-controls="pane-games" aria-selected="false">Games</button>
             <button type="button" role="tab" class="tab" id="tab-lichess" aria-controls="pane-lichess" aria-selected="false">Lichess <span class="count" id="lichess-count"></span></button>
             <button type="button" role="tab" class="tab" id="tab-tournament" aria-controls="pane-tournament" aria-selected="false">Tournament <span class="count" id="tournament-count"></span></button>
             <button type="button" class="tab tab-more" id="tab-more" aria-haspopup="menu" aria-expanded="false" title="More tabs" hidden>More ▾</button>
@@ -114,7 +126,22 @@
             <div class="tp-bar" id="tp-bar" hidden></div>
             <div class="review" id="review" hidden></div>
             <div id="moves"></div>
+            <div class="annotate" id="annotate" hidden>
+              <div class="an-head">
+                <span class="an-target" id="an-target"></span>
+                <span class="an-actions">
+                  <button type="button" class="small" id="an-ai" title="Ask an AI model for commentary on this game and add it as annotations (the endpoint is set in Settings → AI)">AI annotate</button>
+                  <button type="button" class="small" id="an-save" title="Write the game with its comments, marks and variations into its PGN file">Save</button>
+                </span>
+              </div>
+              <p class="hint an-ai-state" id="an-ai-state" hidden></p>
+              <div class="an-glyphs" id="an-glyphs" role="group" aria-label="Mark the move"></div>
+              <div class="an-glyphs" id="an-pos" role="group" aria-label="Evaluate the position"></div>
+              <textarea id="an-comment" rows="2" spellcheck="true" placeholder="Comment on this move"></textarea>
+              <p class="hint an-note" id="an-note"></p>
+            </div>
             <div class="moves-file">
+              <button type="button" class="small" id="btn-annotate" aria-pressed="false" aria-controls="annotate" title="Add comments, marks such as ! and ?, and variations to the game (A)">Annotate</button>
               <button type="button" class="small" id="btn-open" title="Open a PGN file (Ctrl/⌘+O)">Open…</button>
               <button type="button" class="small" id="btn-export" title="Save the game as a PGN file (Ctrl/⌘+S)">Save…</button>
               <button type="button" class="small" id="btn-pgn" title="Copy the game to the clipboard as PGN">Copy</button>
@@ -124,13 +151,14 @@
             <div class="games-empty" id="games-empty">
               <p class="hint">No PGN file is open. Every game in the file you open is listed here.</p>
               <button type="button" id="games-open">Open PGN…</button>
-              <button type="button" id="games-open-db" hidden>Open game database</button>
+              <button type="button" id="games-open-db" title="List the games in your game database, where finished games are kept">Open game database</button>
             </div>
             <div class="games-head" id="games-head" hidden>
               <span class="name" id="games-file"></span>
               <input type="search" id="games-filter" placeholder="Filter by player, event, date or result" spellcheck="false">
               <button type="button" class="small" id="games-search-toggle" aria-expanded="false" aria-controls="games-search" title="Search the games by player, result, event, date or length">Search <span class="count" id="games-search-count"></span></button>
               <button type="button" class="small icon" id="games-reload" title="Read the file again and show its games as they are now" aria-label="Reload the games"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+              <button type="button" class="small" id="games-db" title="List the games in your game database, where finished games are kept">Database</button>
               <button type="button" class="small" id="games-close" title="Close the file and clear this list">Close</button>
             </div>
             <form class="games-search" id="games-search" autocomplete="off" hidden>
@@ -219,10 +247,25 @@
           </div>
           <div class="pane" id="pane-tournament" role="tabpanel" hidden>
             <form class="tn-setup" id="tn-setup" autocomplete="off" novalidate>
-              <p class="hint">Play many games between two engines, in pairs from the same opening with colours reversed, several at a time. The SPRT stops as soon as it can tell whether the first engine is stronger by the Elo you set.</p>
               <div class="tn-grid">
-                <label>Engine 1 <span class="hint">(tested)</span></label><select id="tn-e1"></select>
-                <label>Engine 2 <span class="hint">(base)</span></label><select id="tn-e2"></select>
+                <label for="tn-format">Format</label>
+                <select id="tn-format">
+                  <option value="match">Match: two engines</option>
+                  <option value="roundrobin">Round robin: everyone plays everyone</option>
+                  <option value="gauntlet">Gauntlet: the first engine plays the others</option>
+                  <option value="knockout">Knockout: the loser of each tie is out</option>
+                  <option value="swiss">Swiss: a few rounds, like scores meet</option>
+                </select>
+              </div>
+              <p class="hint" id="tn-format-note"></p>
+              <div class="tn-grid">
+                <label class="tn-only-match">Engine 1 <span class="hint">(tested)</span></label><select id="tn-e1" class="tn-only-match"></select>
+                <label class="tn-only-match">Engine 2 <span class="hint">(base)</span></label><select id="tn-e2" class="tn-only-match"></select>
+                <label class="tn-only-multi tn-top">Engines</label>
+                <div class="tn-only-multi tn-entrants">
+                  <div id="tn-entrants"></div>
+                  <span class="tn-inline"><button type="button" class="small" id="tn-add-engine">Add engine</button> <span class="hint" id="tn-entrants-note"></span></span>
+                </div>
                 <label>Time control</label>
                 <span class="tn-inline">
                   <select id="tn-tckind"><option value="clock">Clock</option><option value="movetime">Time per move</option><option value="nodes">Nodes per move</option></select>
@@ -230,8 +273,12 @@
                   <span id="tn-tc-movetime" hidden><input type="number" id="tn-movetime" min="0.01" step="0.01" value="0.1"> s</span>
                   <span id="tn-tc-nodes" hidden><input type="number" id="tn-nodes" min="1" step="1" value="20000"></span>
                 </span>
-                <label>Games</label>
-                <span class="tn-inline"><input type="number" id="tn-games" min="0" step="2" value="1000"> <span class="hint">0: until the SPRT decides</span></span>
+                <label class="tn-only-match">Games</label>
+                <span class="tn-inline tn-only-match"><input type="number" id="tn-games" min="0" step="2" value="1000"> <span class="hint">0: until the SPRT decides</span></span>
+                <label class="tn-only-multi">Games per match</label>
+                <span class="tn-inline tn-only-multi"><input type="number" id="tn-pairgames" min="2" step="2" value="2"> <span class="hint" id="tn-plan"></span></span>
+                <label class="tn-only-swiss">Rounds</label>
+                <span class="tn-inline tn-only-swiss"><input type="number" id="tn-rounds" min="0" step="1" value="0"> <span class="hint">0: as many as sort the field</span></span>
                 <label>Games at once</label>
                 <span class="tn-inline"><input type="number" id="tn-concurrency" min="1" max="128" step="1" value="2"> <span class="hint" id="tn-cores"></span></span>
                 <label>Openings</label>
@@ -242,7 +289,7 @@
                   <span>up to <input type="number" id="tn-plies" min="0" step="1" value="8"> plies</span>
                 </span>
               </div>
-              <fieldset class="tn-sprt">
+              <fieldset class="tn-sprt tn-only-match">
                 <legend><label class="check"><input type="checkbox" id="tn-sprt" checked> SPRT</label></legend>
                 <span class="tn-inline">Elo0 <input type="number" id="tn-elo0" step="0.5" value="0"> Elo1 <input type="number" id="tn-elo1" step="0.5" value="5"> α <input type="number" id="tn-alpha" step="0.01" min="0.001" max="0.5" value="0.05"> β <input type="number" id="tn-beta" step="0.01" min="0.001" max="0.5" value="0.05"></span>
               </fieldset>
@@ -260,36 +307,80 @@
               <div class="tn-actions"><button type="submit" class="primary" id="tn-start">Start tournament</button></div>
             </form>
             <div class="tn-run" id="tn-run" hidden>
-              <div class="tn-head">
-                <span class="tn-title" id="tn-title"></span>
-                <span class="lx-spacer"></span>
-                <label class="check" title="Show one of the games on the board as it is played"><input type="checkbox" id="tn-watch"> Show on board</label>
-                <button type="button" class="small" id="tn-report" title="A detailed report of the match, with charts of the SPRT, Elo, engines, openings and every game, saved as a web page next to the games file">Report</button>
-                <button type="button" class="small" id="tn-stop">Stop</button>
-                <button type="button" class="small" id="tn-new" hidden>New tournament</button>
-              </div>
+              <header class="tn-head">
+                <div class="tn-head-text">
+                  <div class="tn-title" id="tn-title"></div>
+                  <div class="tn-sub"><span class="tn-state" id="tn-state"></span><span id="tn-subtitle"></span></div>
+                </div>
+                <div class="tn-head-actions">
+                  <label class="check" title="Show one of the games on the board as it is played"><input type="checkbox" id="tn-watch"> Show on board</label>
+                  <button type="button" class="small" id="tn-report" title="A detailed report of the match, with charts of the SPRT, Elo, engines, openings and every game, saved as a web page next to the games file">Report</button>
+                  <button type="button" class="small" id="tn-pause" hidden>Pause</button>
+                  <button type="button" class="small danger" id="tn-stop">Stop</button>
+                  <button type="button" class="small primary" id="tn-new" hidden>New tournament</button>
+                </div>
+              </header>
+              <div class="tn-progress"><div id="tn-progress-bar"></div></div>
               <p class="tn-verdict" id="tn-verdict" hidden></p>
               <p class="hint tn-report-line" id="tn-report-line" hidden></p>
-              <div class="tn-progress"><div id="tn-progress-bar"></div></div>
-              <div class="tn-numbers">
-                <div><span class="tn-k">Games</span><span class="tn-v" id="tn-games-v"></span></div>
-                <div><span class="tn-k">W – L – D</span><span class="tn-v" id="tn-wld"></span></div>
-                <div><span class="tn-k">Score</span><span class="tn-v" id="tn-score"></span></div>
-                <div><span class="tn-k">Elo</span><span class="tn-v" id="tn-elo"></span></div>
-                <div><span class="tn-k">LOS</span><span class="tn-v" id="tn-los"></span></div>
-                <div><span class="tn-k">Draws</span><span class="tn-v" id="tn-draws"></span></div>
+              <div class="tn-stats" id="tn-numbers-multi" hidden>
+                <div><span class="tn-k">Games</span><span class="tn-v" id="tn-m-games"></span></div>
+                <div><span class="tn-k">Round</span><span class="tn-v" id="tn-m-round"></span></div>
+                <div><span class="tn-k" id="tn-m-leader-k">Leader</span><span class="tn-v" id="tn-m-leader"></span></div>
+                <div><span class="tn-k">Draws</span><span class="tn-v" id="tn-m-draws"></span></div>
               </div>
-              <div class="tn-llr" id="tn-llr-box">
-                <div class="tn-llr-text" id="tn-llr-text"></div>
-                <div class="tn-llr-bar"><span class="tn-llr-zero"></span><span class="tn-llr-mark" id="tn-llr-mark"></span></div>
-                <div class="tn-llr-ends"><span>H0</span><span>H1</span></div>
+              <div class="tn-multi" id="tn-multi" hidden>
+                <section class="tn-card"><h4>Standings</h4><div id="tn-standings"></div></section>
+                <section class="tn-card"><h4>Points as the games went by</h4><div id="tn-progress-chart"></div></section>
+                <section class="tn-card"><h4 id="tn-matches-title">Matches</h4><div id="tn-matches"></div></section>
+                <section class="tn-card"><h4>Head to head <span class="hint">(the row's points against the column)</span></h4><div id="tn-cross"></div></section>
               </div>
-              <div class="tn-penta" id="tn-penta"></div>
-              <p class="hint" id="tn-meta"></p>
-              <h4>Playing now</h4>
-              <div class="tn-live" id="tn-live"></div>
-              <h4>Finished games <span class="hint">(click to view)</span></h4>
-              <div class="tn-recent" id="tn-recent"></div>
+              <!-- A match of two engines: the score, then what it says about their strength. -->
+              <section class="tn-card tn-scorecard" id="tn-numbers-match">
+                <div class="tn-versus">
+                  <div class="tn-vs-side"><span class="tn-vs-name" id="tn-n1"></span><span class="tn-vs-role">tested</span></div>
+                  <div class="tn-vs-score" title="Points"><b id="tn-p1"></b><i>–</i><b id="tn-p2"></b></div>
+                  <div class="tn-vs-side right"><span class="tn-vs-name" id="tn-n2"></span><span class="tn-vs-role">base</span></div>
+                </div>
+                <div id="tn-wdl-bar"></div>
+                <div class="tn-wdl-key" id="tn-wld"></div>
+                <div class="tn-stats">
+                  <div><span class="tn-k">Games</span><span class="tn-v" id="tn-games-v"></span></div>
+                  <div title="The rating difference the score stands for, with its 95% margin"><span class="tn-k">Elo</span><span class="tn-v" id="tn-elo"></span></div>
+                  <div title="Likelihood of superiority: how likely the first engine is the stronger"><span class="tn-k">LOS</span><span class="tn-v" id="tn-los"></span></div>
+                  <div><span class="tn-k">Score</span><span class="tn-v" id="tn-score"></span></div>
+                  <div><span class="tn-k">Draws</span><span class="tn-v" id="tn-draws"></span></div>
+                </div>
+              </section>
+              <div class="tn-pair" id="tn-pair">
+                <section class="tn-card tn-llr" id="tn-llr-box">
+                  <div class="tn-card-head"><h4>SPRT</h4><span class="tn-llr-now" id="tn-llr-now"></span></div>
+                  <div class="tn-llr-bar"><span class="tn-llr-fill" id="tn-llr-fill"></span><span class="tn-llr-zero"></span><span class="tn-llr-mark" id="tn-llr-mark"></span></div>
+                  <div class="tn-llr-ends"><span id="tn-llr-lo"></span><span id="tn-llr-hi"></span></div>
+                  <div class="tn-llr-text" id="tn-llr-text"></div>
+                </section>
+                <section class="tn-card" id="tn-penta-card">
+                  <div class="tn-card-head"><h4>Pairs of games</h4><span class="hint" id="tn-penta-note"></span></div>
+                  <div class="tn-penta" id="tn-penta"></div>
+                </section>
+              </div>
+              <section class="tn-card" id="tn-search-card" hidden>
+                <div class="tn-card-head"><h4>Search statistics</h4><span class="hint" id="tn-search-note"></span></div>
+                <div id="tn-search"></div>
+              </section>
+              <section class="tn-card" id="tn-options-card" hidden>
+                <div class="tn-card-head"><h4>Engine options</h4><span class="hint" id="tn-options-note"></span></div>
+                <div class="tn-options" id="tn-options"></div>
+              </section>
+              <p class="hint tn-meta" id="tn-meta"></p>
+              <section class="tn-card" id="tn-live-card">
+                <h4>Playing now</h4>
+                <div class="tn-live" id="tn-live"></div>
+              </section>
+              <section class="tn-card">
+                <h4>Finished games <span class="hint">(click one to view it)</span></h4>
+                <div class="tn-recent" id="tn-recent"></div>
+              </section>
             </div>
           </div>
           <div class="pane" id="pane-lichess" role="tabpanel" hidden>
@@ -385,10 +476,17 @@
               <span class="lx-account" id="lx-account">Not connected</span>
               <span class="lx-spacer"></span>
               <button type="button" class="small" id="lx-connect">Connect</button>
-              <button type="button" class="small" id="lx-settings" title="Lichess settings: token, engine, server">Settings…</button>
+              <button type="button" class="small icon-btn" id="lx-settings" title="Lichess settings: token, engine, server" aria-label="Lichess settings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></g></svg></button>
             </div>
             <p class="lx-message" id="lx-message" hidden></p>
             <div class="lx-body" id="lx-body">
+              <details class="lx-about" id="lx-about">
+                <summary><span class="lx-about-title">Engine and bot account</span> <span class="lx-about-summary" id="lx-about-summary"></span></summary>
+                <div class="lx-about-body">
+                  <div class="lx-about-card" id="lx-about-engine"></div>
+                  <div class="lx-about-card" id="lx-about-bot"></div>
+                </div>
+              </details>
               <section class="lx-section">
                 <h4>Challenges to you <span class="count" id="lx-incoming-count"></span>
                   <label class="check lx-auto" title="Accept challenges that match the rules below, and decline the rest. Off whenever you connect."><input type="checkbox" id="lx-auto"> Accept automatically</label></h4>
@@ -460,6 +558,7 @@
                   <span>Or a random bot online, <span id="lx-seek-speed">blitz</span> rating</span>
                   <input type="number" id="lx-seek-min" min="0" max="4000" step="50" placeholder="any"> –
                   <input type="number" id="lx-seek-max" min="0" max="4000" step="50" placeholder="any">
+                  <label class="lx-seek-games" title="How many games to play, one after another: when a game ends, another random bot is challenged. 0: keep going until you press Stop.">for <input type="number" id="lx-seek-games" min="0" max="999" step="1" value="5"> <span id="lx-seek-games-unit">game</span></label>
                   <button type="button" class="small primary" id="lx-seek-go" title="Challenge a random bot in this rating range with the time control above; if it declines or does not answer, try another until one accepts">Challenge random bot</button>
                   <button type="button" class="small" id="lx-seek-stop" hidden>Stop</button>
                 </div>
@@ -488,6 +587,16 @@
 
         <!-- Engine windows. Each resizable panel has a handle below it. -->
         <div class="info" id="info">
+          <section class="panel card" id="commentary" hidden>
+            <div class="cm-head">
+              <h3>Commentary</h3>
+              <span class="cm-at" id="cm-at"></span>
+              <button type="button" class="small icon-btn cm-speak-btn" id="cm-speak-btn" aria-pressed="false" title="Read the commentary aloud"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path class="spk-waves" d="M15.5 8.5a5 5 0 0 1 0 7M18.6 5.4a9 9 0 0 1 0 13.2"/><path class="spk-off" d="M22 9l-6 6M16 9l6 6"/></g></svg></button>
+              <button type="button" class="small" id="cm-open" title="Show all of the commentary in the AI panel">All…</button>
+              <button type="button" class="small" id="cm-off" title="Turn live commentary off">Off</button>
+            </div>
+            <p class="cm-text" id="cm-text"></p>
+          </section>
           <section class="panel card" id="analysis" hidden>
             <div class="analysis-head">
               <h3>Analysis</h3>
@@ -516,6 +625,10 @@
             <p class="error" id="chat-error" hidden></p>
           </section>
           <div class="splitter h" title="Drag to resize · double-click to reset"></div>
+          <section class="panel card" id="opponent" hidden>
+            <h3>Opponent</h3>
+            <div id="opponent-body"></div>
+          </section>
           <section class="panel card" id="game-info">
             <h3>Game</h3>
             <div id="game-details"></div>
@@ -524,6 +637,57 @@
       </div>
     </aside>
   </main>
+
+  <!-- The AI chat: a panel floating on the right, collapsing to a handle on the edge. -->
+  <aside id="ai-panel" class="collapsed" aria-label="AI chat">
+    <div class="ai-resize" id="ai-resize" title="Drag to make the panel wider or narrower · double-click to reset"></div>
+    <div id="pane-ai" data-view="chat">
+      <div class="ai-top">
+        <div class="ai-views" id="ai-views" role="tablist" aria-label="AI panel">
+          <button type="button" role="tab" data-view="chat" class="on">Chat</button>
+          <button type="button" role="tab" data-view="commentary">Commentary<i class="cm-dot" title="Commentary is on for the game being played"></i></button>
+        </div>
+        <span class="lx-spacer"></span>
+        <button type="button" class="aic-tool" id="ai-pin" aria-pressed="false" title="Pin the panel: keep it open when you click elsewhere" aria-label="Pin the AI panel"><svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6z"/><path d="M12 15v6"/></g></svg></button>
+        <button type="button" class="aic-tool" id="aic-settings" title="AI settings: the endpoint and the model" aria-label="AI settings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></g></svg></button>
+        <button type="button" class="aic-tool" id="ai-collapse" title="Collapse the panel to the edge (Esc)" aria-label="Collapse the AI panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 3v10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+      </div>
+      <div class="aic-head">
+        <div class="aic-tabs" id="aic-tabs" role="tablist" aria-label="Chats"></div>
+        <button type="button" class="aic-tool" id="aic-new" title="New chat, in its own tab" aria-label="New chat"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.2v9.6M3.2 8h9.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
+      </div>
+      <div class="aic-log" id="aic-log" role="log" aria-live="polite" tabindex="0"></div>
+      <form class="aic-form" id="aic-form" autocomplete="off">
+        <textarea id="aic-text" rows="1" placeholder="Ask about this game or position…" aria-label="Message to the AI"></textarea>
+        <button type="submit" id="aic-send" aria-label="Send"></button>
+      </form>
+      <p class="hint aic-note" id="aic-note">Each message goes to the AI endpoint with the game on the board and the position shown.</p>
+      <div class="cm-view" id="cm-view">
+        <div class="cm-controls">
+          <label class="check" title="While a game is played, the AI model comments on it every few moves, and sums it up when it ends"><input type="checkbox" id="cm-on"> Live commentary</label>
+          <label class="cm-every" title="How often a comment is asked for">every <select id="cm-every">
+            <option value="1">move</option><option value="2">2 moves</option><option value="3">3 moves</option><option value="5">5 moves</option><option value="8">8 moves</option>
+          </select></label>
+        </div>
+        <div class="cm-controls cm-annotate-row">
+          <label class="check" title="Each comment is put on the move it follows as an annotation, and the summary before the first move: they show in the moves list, can be edited under Annotate, and are saved with the game. Your own comments are left alone."><input type="checkbox" id="cm-annotate"> Annotate the game with the commentary</label>
+        </div>
+        <div class="cm-controls cm-voice-row">
+          <label class="check" title="Each comment and the summary are read aloud when they are complete, in a voice of this computer"><input type="checkbox" id="cm-speak"> Read aloud</label>
+          <span class="cm-voice">
+            <select id="cm-voice" title="The voice that reads" aria-label="Voice"></select>
+            <select id="cm-rate" title="How fast it reads" aria-label="Reading speed">
+              <option value="0.85">Slow</option><option value="1">Normal</option><option value="1.2">Fast</option><option value="1.45">Faster</option>
+            </select>
+            <button type="button" class="small" id="cm-test" title="Hear the voice">Test</button>
+          </span>
+        </div>
+        <div class="cm-feed" id="cm-feed" role="log" aria-live="polite" tabindex="0"></div>
+        <p class="hint cm-note" id="cm-note"></p>
+      </div>
+    </div>
+  </aside>
+  <button type="button" id="ai-handle" title="Open the AI chat" aria-label="Open the AI chat" aria-expanded="false" aria-controls="ai-panel"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v18"/><path d="M3 12h18"/><path d="M5.6 5.6l12.8 12.8"/><path d="M18.4 5.6L5.6 18.4"/></g></svg><span>AI</span><i class="ai-handle-dot"></i></button>
 
   <dialog id="dlg-new">
     <form method="dialog" id="form-new">
@@ -603,6 +767,7 @@
         <button type="button" role="tab" class="tab active" data-pane="general">General</button>
         <button type="button" role="tab" class="tab" data-pane="engines">Engines</button>
         <button type="button" role="tab" class="tab" data-pane="analysis">Analysis</button>
+        <button type="button" role="tab" class="tab" data-pane="ai">AI</button>
         <button type="button" role="tab" class="tab" data-pane="database">Database</button>
         <button type="button" role="tab" class="tab" data-pane="lichess">Lichess</button>
       </div>
@@ -628,7 +793,9 @@
             <option value="normal">Normal</option><option value="slow">Slow</option>
           </select></label>
           <label class="check"><input type="checkbox" id="result-card"> Show the result on the board when a game ends</label>
-          <p class="hint">Pieces slide to their new square and a captured piece fades out, for every move: yours, the engine's, a Lichess opponent's, and stepping through a game one move at a time.</p>
+          <label class="check" title="When a game you are watching starts, the two players' cards come in to face each other for a moment before the game"><input type="checkbox" id="versus-on"> Show the versus screen when a watched game starts</label>
+          <label class="check" title="A red mark on the corner of each piece that more enemy pieces attack than its own side defends, with the difference"><input type="checkbox" id="attack-marks"> Mark pieces with more attackers than defenders</label>
+          <p class="hint">Pieces slide to their new square and a captured piece lifts off and flies into the captured pieces of the player who took it, for every move: yours, the engine's, a Lichess opponent's, and stepping through a game one move at a time.</p>
         </div>
         <div>
           <div class="setting-label">Moves list</div>
@@ -657,6 +824,29 @@
         <p class="hint">Turn analysis on with the Analysis button in the toolbar. It follows the position on the board, including when you step back through the moves or browse games from a file, and uses its own copy of the engine. It pauses while an engine is playing a game.</p>
       </div>
 
+      <div class="settings-pane ai-settings" data-pane="ai" hidden>
+        <p class="hint">The AI model used for <b>AI annotate</b> (under Annotate in the Moves tab) and the <b>AI</b> panel's chat. It is reached through an OpenAI-compatible API: a local server such as oMLX, LM Studio, Ollama, llama.cpp or vLLM, or a hosted one.</p>
+        <label class="row" title="An OpenAI-compatible API. localhost:8000 is enough for a local server.">Endpoint <input type="text" id="ai-url" spellcheck="false" autocomplete="off" placeholder="http://localhost:8000/v1"></label>
+        <label class="row" title="The model to ask. Empty: the first model the endpoint lists.">Model
+          <span class="ai-model"><input type="text" id="ai-model" spellcheck="false" autocomplete="off" list="ai-models" placeholder="The endpoint's first model">
+            <datalist id="ai-models"></datalist>
+            <button type="button" class="small" id="ai-check" title="Ask the endpoint which models it has">Check</button></span></label>
+        <label class="row" title="Only for endpoints that ask for one; local servers usually do not. Kept encrypted on this computer, never shown again.">API key <input type="password" id="ai-key" autocomplete="off" placeholder="Not needed for most local servers"></label>
+        <label class="row" title="The typeface of the conversation in the AI panel">Chat font
+          <span class="ai-font"><select id="aic-font">
+            <option value="system">System</option>
+            <option value="serif">Serif</option>
+            <option value="rounded">Rounded</option>
+            <option value="mono">Monospace</option>
+            <option value="custom">Other…</option>
+          </select>
+          <input type="text" id="aic-font-name" spellcheck="false" autocomplete="off" placeholder="A font on this computer, e.g. Avenir Next" hidden></span></label>
+        <label class="row" title="How large the conversation's text is">Chat text size
+          <span class="range"><input type="range" id="aic-font-size" min="80" max="150" step="5"> <output id="aic-font-size-value"></output></span></label>
+        <p class="aic-font-sample" id="aic-font-sample">The knight on f3 is well placed: 12. Nf3 e5 13. dxe5 keeps the pressure.</p>
+        <p class="hint" id="ai-note">Nothing is sent until you press AI annotate or send a message in the AI panel: then the game on the board goes to this endpoint, as PGN, with the position shown. It waits for the answer as long as the model takes; Stop cancels it.</p>
+      </div>
+
       <div class="settings-pane" data-pane="database" hidden>
         <label class="check"><input type="checkbox" id="db-on"> Save finished games to a PGN database</label>
         <div class="row db-file">File
@@ -681,6 +871,7 @@
         <p class="hint" id="ls-token-note"></p>
         <label class="row">Engine <select id="ls-engine"></select></label>
         <label class="check" title="After its move the engine keeps thinking, about the reply it expects (UCI pondering). Engines that cannot ponder are left idle."><input type="checkbox" id="ls-ponder"> Think on the opponent's time (ponder)</label>
+        <label class="row" title="A challenge you or your engine sent is withdrawn when it has had no answer for this long. 0: it waits until it is answered or you cancel it.">Withdraw a sent challenge after <input type="number" id="ls-challenge-timeout" min="0" max="3600" step="5" class="narrow"> seconds without an answer</label>
         <label class="check"><input type="checkbox" id="ls-autoconnect"> Connect when Ponder starts</label>
         <div class="ls-status">
           <span class="lx-dot" id="ls-dot"></span><span id="ls-state">Not connected</span>
@@ -802,6 +993,34 @@
     </form>
   </dialog>
 
+  <dialog id="dlg-challenges" aria-labelledby="challenges-title">
+    <form method="dialog" id="form-challenges">
+      <div class="ch-head">
+        <h2 id="challenges-title">Challenge</h2>
+        <button type="submit" class="ch-close" aria-label="Hide" title="Hide (the challenges stay waiting)">✕</button>
+      </div>
+      <div class="lx-list ch-list" id="challenges-list"></div>
+      <p class="error" id="challenges-error" hidden></p>
+      <div class="actions">
+        <button type="button" id="challenges-decline-all">Decline all</button>
+        <button type="submit" id="challenges-later" title="Tuck the window away: the challenges stay waiting, a button in this corner brings them back">Hide</button>
+      </div>
+    </form>
+  </dialog>
+  <button type="button" id="challenges-pill" hidden title="Show the challenges waiting for an answer"></button>
+
+  <dialog id="dlg-draw" aria-labelledby="draw-title">
+    <form method="dialog">
+      <div class="ch-head">
+        <h2 id="draw-title">Draw offer</h2>
+        <button type="submit" class="ch-close" aria-label="Hide" title="Hide: the offer stands until your engine moves">✕</button>
+      </div>
+      <div class="lx-list" id="draw-list"></div>
+      <p class="hint" id="draw-note"></p>
+      <p class="error" id="draw-error" hidden></p>
+    </form>
+  </dialog>
+
   <dialog id="dlg-confirm">
     <form method="dialog" id="form-confirm">
       <p id="confirm-text"></p>
@@ -821,6 +1040,7 @@
         <tr><td><kbd>↑</kbd> <kbd>↓</kbd> or <kbd>Home</kbd> <kbd>End</kbd></td><td>First / last move</td></tr>
         <tr><td><kbd>F</kbd></td><td>Flip the board</td></tr>
         <tr><td><kbd>Z</kbd></td><td>Zen mode: only the board and the players</td></tr>
+        <tr><td><kbd>M</kbd></td><td>Sounds on or off</td></tr>
         <tr><td><kbd>L</kbd></td><td>Analysis on / off</td></tr>
         <tr><td><kbd>P</kbd></td><td>Pause / resume the analysis</td></tr>
         <tr><td><kbd>B</kbd></td><td>Takeback</td></tr>
@@ -856,5 +1076,10 @@
   <script src="wac.js"></script>
   <script src="positions.js"></script>
   <script src="tournament.js"></script>
+  <script src="tournament-table.js"></script>
+  <script src="versus.js"></script>
+  <script src="annotate.js"></script>
+  <script src="ai-chat.js"></script>
+  <script src="commentary.js"></script>
 </body>
 </html>

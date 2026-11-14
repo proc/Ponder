@@ -31,6 +31,9 @@ type Request struct {
 	StartFEN   string   `json:"startFen"`
 	Moves      []string `json:"moves"` // UCI
 	MoveTimeMs int      `json:"moveTimeMs"`
+	// Resume holds the positions an analysis stopped early got through:
+	// the new one starts after them and reports them with its own.
+	Resume []Position `json:"resume,omitempty"`
 }
 
 // Position is the engine's view of one position: before any move (ply 0)
@@ -116,6 +119,9 @@ func (r *Reviewer) Start(req Request) error {
 	if req.MoveTimeMs <= 0 {
 		req.MoveTimeMs = 500
 	}
+	if len(req.Resume) > len(req.Moves) {
+		req.Resume = nil // nothing left to do: analyse it again
+	}
 	start, err := chess.ParseFEN(req.StartFEN)
 	if err != nil {
 		return err
@@ -145,7 +151,12 @@ func (r *Reviewer) Start(req Request) error {
 		r.mu.Unlock()
 		switch {
 		case ctx.Err() != nil:
-			r.emit("review", Progress{Key: req.Key, State: "stopped"})
+			// Stopped early: what was analysed so far still counts.
+			p := Progress{Key: req.Key, State: "stopped", Done: len(res.Positions), Total: len(req.Moves) + 1}
+			if len(res.Positions) >= 2 {
+				p.Result = &res
+			}
+			r.emit("review", p)
 		case err != nil:
 			r.emit("review", Progress{Key: req.Key, State: "error", Error: err.Error()})
 		default:
@@ -197,22 +208,25 @@ func run(ctx context.Context, req Request, start chess.Position, progress func(i
 		return Result{}, err
 	}
 	defer eng.Quit()
-	for k, v := range req.Engine.Options {
-		if strings.EqualFold(k, "MultiPV") {
-			continue
-		}
-		eng.SetOption(k, v)
+	if err := eng.ApplyOptions(req.Engine.Options, "MultiPV"); err != nil {
+		return Result{}, err
 	}
 	if err := eng.NewGame(); err != nil {
 		return Result{}, err
 	}
-	res := Result{Key: req.Key, Engine: req.Engine.Name}
+	res := Result{Key: req.Key, Engine: req.Engine.Name, Positions: append([]Position(nil), req.Resume...)}
+	if len(res.Positions) > 0 {
+		progress(len(res.Positions))
+	}
 	pos := start
 	startFEN := start.FEN()
 	for ply := 0; ply <= len(req.Moves); ply++ {
 		if ply > 0 {
 			mv, _ := pos.ParseUCIMove(req.Moves[ply-1])
 			pos = pos.Make(mv)
+		}
+		if ply < len(res.Positions) {
+			continue // analysed before the stop
 		}
 		var p Position
 		if len(pos.LegalMoves()) == 0 {
@@ -254,7 +268,11 @@ func run(ctx context.Context, req Request, start chess.Position, progress func(i
 			}
 		case <-ctx.Done():
 			eng.Stop()
-			return Result{}, ctx.Err()
+			// The moves analysed so far are judged as a game that ended there.
+			if n := len(res.Positions); n >= 2 {
+				judge(&res, start, req.Moves[:n-1])
+			}
+			return res, ctx.Err()
 		}
 		mu.Lock()
 		in := last

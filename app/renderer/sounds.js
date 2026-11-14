@@ -105,6 +105,8 @@ const sounds = (() => {
       lowtime: () => { tone(1568, 0, 0.07, { gain: 0.16 }); tone(1568, 0.16, 0.07, { gain: 0.16 }); },
       illegal: () => tone(196, 0, 0.12, { type: 'triangle', gain: 0.22, slideTo: 160 }),
       challenge: () => { tone(784, 0, 0.18, { gain: 0.16 }); tone(1175, 0.12, 0.3, { gain: 0.16 }); },
+      // A ponder hit: a bright two-note rise, just after the move's own sound.
+      ponderhit: () => { tone(1319, 0.1, 0.12, { gain: 0.15 }); tone(1976, 0.19, 0.3, { gain: 0.17 }); },
     },
     synth: {
       move: () => tone(660, 0, 0.07, { type: 'square', gain: 0.09, slideTo: 880 }),
@@ -120,6 +122,7 @@ const sounds = (() => {
       lowtime: () => { tone(2000, 0, 0.04, { type: 'square', gain: 0.07 }); tone(2000, 0.12, 0.04, { type: 'square', gain: 0.07 }); },
       illegal: () => tone(110, 0, 0.12, { type: 'sawtooth', gain: 0.12 }),
       challenge: () => { tone(988, 0, 0.08, { type: 'square', gain: 0.08 }); tone(1480, 0.1, 0.12, { type: 'square', gain: 0.08 }); },
+      ponderhit: () => { tone(880, 0.1, 0.06, { type: 'square', gain: 0.07, slideTo: 1760 }); tone(2637, 0.18, 0.14, { type: 'square', gain: 0.06 }); },
     },
   };
 

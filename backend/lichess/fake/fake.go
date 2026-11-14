@@ -207,7 +207,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ok(nil)
-	case len(parts) == 6 && parts[1] == "board" && parts[2] == "game" && (parts[4] == "draw" || parts[4] == "takeback"):
+	case len(parts) == 6 && (parts[1] == "board" || (parts[1] == "bot" && parts[4] == "draw")) && parts[2] == "game" && (parts[4] == "draw" || parts[4] == "takeback"):
 		if err := s.boardOffer(parts[3], parts[4], parts[5] == "yes"); err != nil {
 			bad(err.Error())
 			return

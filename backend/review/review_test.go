@@ -51,3 +51,78 @@ func TestReview(t *testing.T) {
 	}
 	t.Logf("white %+v black %+v; Nf6: %+v", res.White, res.Black, nf6)
 }
+
+// An analysis stopped early reports the moves it got through.
+func TestStoppedReviewKeepsResults(t *testing.T) {
+	dir := t.TempDir()
+	eng := filepath.Join(dir, "basicengine")
+	if out, err := exec.Command("go", "build", "-o", eng, "../cmd/basicengine").CombinedOutput(); err != nil {
+		t.Fatal(string(out))
+	}
+	events := make(chan Progress, 100)
+	r := New(func(ev string, d any) { events <- d.(Progress) })
+	moves := []string{"e2e4", "e7e5", "g1f3", "b8c6", "f1b5", "a7a6", "b5a4", "g8f6"}
+	err := r.Start(Request{Key: "k", Engine: Engine{Name: "Basic", Path: eng}, StartFEN: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", Moves: moves, MoveTimeMs: 300})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(30 * time.Second)
+	for {
+		var p Progress
+		select {
+		case p = <-events:
+		case <-deadline:
+			t.Fatal("timeout")
+		}
+		if p.State == "running" && p.Done == 3 {
+			r.Stop()
+			continue
+		}
+		if p.State == "running" {
+			continue
+		}
+		if p.State != "stopped" || p.Result == nil {
+			t.Fatalf("%+v", p)
+		}
+		n := len(p.Result.Positions)
+		if n < 3 || n >= len(moves)+1 || len(p.Result.Judgments) != n-1 || p.Done != n || p.Total != len(moves)+1 {
+			t.Fatalf("%d positions, %d judgments, done %d of %d", n, len(p.Result.Judgments), p.Done, p.Total)
+		}
+		if p.Result.White.Moves+p.Result.Black.Moves != n-1 {
+			t.Fatalf("sides cover %d moves, want %d", p.Result.White.Moves+p.Result.Black.Moves, n-1)
+		}
+		// Continuing picks up after the positions it had.
+		kept := p.Result.Positions
+		err = r.Start(Request{Key: "k", Engine: Engine{Name: "Basic", Path: eng}, StartFEN: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", Moves: moves, MoveTimeMs: 100, Resume: kept})
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := 0
+		for {
+			select {
+			case p = <-events:
+			case <-deadline:
+				t.Fatal("timeout")
+			}
+			if p.State == "running" {
+				if first == 0 {
+					first = p.Done
+				}
+				continue
+			}
+			break
+		}
+		if first != n {
+			t.Fatalf("resumed at %d, want %d", first, n)
+		}
+		if p.State != "done" || len(p.Result.Positions) != len(moves)+1 || len(p.Result.Judgments) != len(moves) {
+			t.Fatalf("%+v", p)
+		}
+		for i := range kept {
+			if p.Result.Positions[i].CP != kept[i].CP || p.Result.Positions[i].Best != kept[i].Best {
+				t.Fatalf("position %d was analysed again", i)
+			}
+		}
+		return
+	}
+}

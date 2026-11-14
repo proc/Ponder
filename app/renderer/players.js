@@ -23,10 +23,40 @@ function plUsers() {
   return u;
 }
 
+// Your engine's live Lichess game: the side panels turn to the engine, the
+// game, the chat and the opponent, and the moves keep a slim column.
+const opp = { key: '', on: false };
+const botWatching = () => Boolean(state?.external?.kind === 'bot' && state.external.live);
+
+function renderOpponent() {
+  const box = $('#opponent');
+  const users = plUsers();
+  const on = botWatching();
+  if (on !== opp.on) {
+    opp.on = on;
+    workspace.classList.toggle('botwatch', on);
+    if (on) showTab('moves'); // the slim column is the moves'
+    placeInfo();
+  }
+  const side = state?.external?.side === 'black' ? 'white' : 'black';
+  const name = on ? users?.[side] : '';
+  if (box.hidden !== !name) box.hidden = !name;
+  if (!name) { opp.key = ''; return; }
+  const speed = state.external.speed || 'blitz';
+  const key = JSON.stringify([pl.key, name, Boolean(pl.data), pl.loading, pl.error, pl.chartSpeed, pl.range, document.documentElement.dataset.theme]);
+  if (key === opp.key) return;
+  opp.key = key;
+  const body = $('#opponent-body');
+  if (!pl.data && pl.error) body.replaceChildren(el('p', { className: 'error', textContent: pl.error }));
+  else if (!pl.data) body.replaceChildren(el('p', { className: 'hint', textContent: `Looking ${name} up on Lichess…` }));
+  else body.replaceChildren(playerCard(side, name, speed), historyChart(users, speed));
+}
+
 // Called whenever the state changes: loads the players of a new game.
 function syncPlayersInfo() {
   const users = plUsers();
   markPlayerNames();
+  renderOpponent();
   if (!users) { pl.key = ''; hidePlayerPop(); return; }
   const speed = state.external.speed || 'blitz';
   const key = `${users.white}|${users.black}|${speed}`;
@@ -85,6 +115,10 @@ function markPlayerNames() {
 // Redraws the open card (data arrived, a setting changed).
 function renderPlayersInfo() {
   markPlayerNames();
+  window.renderLichessAbout?.(); // the bot's own card in the Lichess tab
+  window.updateVersus?.(); // the versus screen's cards fill in
+  renderOpponent();
+  if ($('#dlg-challenges').open) window.renderChallengePop?.(); // a challenger's profile arrived
   if ($('#player-pop').hidden) return;
   if (pop.bot) fillBotPop();
   else if (pop.side) fillPlayerPop(pop.side);
@@ -104,7 +138,7 @@ function botLookup(name, speed) {
     .finally(() => {
       entry.loading = false;
       entry.at = Date.now();
-      if (pop.bot && pop.bot.name === name && pop.bot.speed === speed) renderPlayersInfo();
+      renderPlayersInfo();
     });
   return entry;
 }
@@ -132,7 +166,7 @@ function attachPlayerHover(nameEl, name, speed) {
     pop.bot = { name, speed: speed() };
     pop.anchor = nameEl;
     fillBotPop();
-    $('#player-pop').hidden = false;
+    revealPlayerPop();
     placePlayerPop(nameEl);
   };
   nameEl.addEventListener('pointerenter', () => {
@@ -200,10 +234,19 @@ function showPlayerPop(nameEl) {
   pop.side = side;
   pop.bot = null;
   pop.anchor = nameEl;
-  const box = $('#player-pop');
   fillPlayerPop(side);
-  box.hidden = false;
+  revealPlayerPop();
   placePlayerPop(nameEl);
+}
+
+// The card fades in when it comes and out when it goes. While it fades out
+// it still counts as shown; shown again meanwhile, it comes straight back.
+const PL_FADE = 170; // ms, as in the stylesheet
+function revealPlayerPop() {
+  const box = $('#player-pop');
+  clearTimeout(pop.fadeTimer);
+  box.classList.remove('leaving');
+  box.hidden = false;
 }
 
 function hidePlayerPop() {
@@ -213,7 +256,11 @@ function hidePlayerPop() {
   pop.bot = null;
   pop.anchor = null;
   const box = $('#player-pop');
-  if (box) box.hidden = true;
+  if (!box || box.hidden || box.classList.contains('leaving')) return;
+  // It fades out, then goes.
+  box.classList.add('leaving');
+  clearTimeout(pop.fadeTimer);
+  pop.fadeTimer = setTimeout(() => { box.hidden = true; box.classList.remove('leaving'); }, PL_FADE);
 }
 
 for (const bar of document.querySelectorAll('.player')) {

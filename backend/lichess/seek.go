@@ -10,7 +10,10 @@ import (
 )
 
 // Challenging random bots: pick an online bot rated within a range, send a
-// challenge, and try the next one until a challenge is accepted.
+// challenge, and try the next one until a challenge is accepted. With more
+// than one game asked for it then waits for that game to end and challenges
+// another bot, until the number of games is reached. No challenge goes out
+// while the engine has a game in progress.
 
 // SeekParams is the challenge to send, without a username, and the rating
 // range (0: no bound) at the time control's speed.
@@ -18,6 +21,9 @@ type SeekParams struct {
 	ChallengeParams
 	MinRating int `json:"minRating"`
 	MaxRating int `json:"maxRating"`
+	// Games to play, one after another: 0 or 1 is one game, below 0 means
+	// keep going until stopped.
+	Games int `json:"games"`
 }
 
 // SeekStatus describes the search to the UI.
@@ -32,6 +38,11 @@ type SeekStatus struct {
 	Message   string `json:"message"`
 	GameID    string `json:"gameId"`           // the accepted challenge's game
 	NextAt    int64  `json:"nextAt,omitempty"` // when the next challenge goes out (Unix ms), while waiting
+	// Games started so far, of Games (0: no limit); Playing while one of
+	// them is in progress and the next challenge waits for it to end.
+	Played  int  `json:"played"`
+	Games   int  `json:"games"`
+	Playing bool `json:"playing"`
 }
 
 type seeker struct {
@@ -47,7 +58,24 @@ var (
 	seekPause         = 3 * time.Second  // after a failed request
 	seekGap           = time.Minute      // at least this long from one challenge to the next
 	seekRetry         = 30 * time.Second // when no bot is left to try
+	seekPoll          = time.Second      // how often a game in progress is looked at
 )
+
+// playingLocked reports whether the engine has a game in progress, or one
+// about to start: no challenge is sent meanwhile.
+func (b *Bot) playingLocked() bool {
+	for _, r := range b.games {
+		if !r.finished {
+			return true
+		}
+	}
+	for id, at := range b.accepted {
+		if b.games[id] == nil && time.Since(at) <= acceptedWait {
+			return true
+		}
+	}
+	return false
+}
 
 func (b *Bot) seekStatusLocked() *SeekStatus {
 	if b.seek == nil {
@@ -72,10 +100,16 @@ func (b *Bot) StartSeek(p SeekParams) error {
 		return errors.New(busy)
 	}
 	b.StopSeek()
+	limit := p.Games // 0 in the status: no limit
+	if limit == 0 {
+		limit = 1
+	} else if limit < 0 {
+		limit = 0
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	sk := &seeker{params: p, cancel: cancel, status: SeekStatus{
 		Active: true, Speed: SpeedOf(p.Limit, p.Increment), MinRating: p.MinRating, MaxRating: p.MaxRating,
-		Message: "Looking for bots online…",
+		Message: "Looking for bots online…", Games: limit,
 	}}
 	b.mu.Lock()
 	b.seek = sk
@@ -122,7 +156,34 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 	speed := sk.status.Speed
 	tried := map[string]bool{}
 	var lastSent time.Time
+	limit := sk.status.Games
+	played := 0
+	waiting := false // said that it waits for a game to end
 	for ctx.Err() == nil {
+		// Never while the engine is playing: the next challenge goes out
+		// once its game is over.
+		b.mu.Lock()
+		playing := b.playingLocked()
+		b.mu.Unlock()
+		if playing {
+			if !waiting {
+				waiting = true
+				msg := "Your engine is playing: the next challenge goes out when the game ends."
+				if !b.seekUpdate(sk, func(st *SeekStatus) { st.Playing, st.Current, st.Rating, st.NextAt, st.Message = true, "", 0, 0, msg }) {
+					return
+				}
+			}
+			if !sleepCtx(ctx, seekPoll) {
+				return
+			}
+			continue
+		}
+		if waiting {
+			waiting = false
+			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Playing, st.Message = false, "The game is over: looking for the next bot…" }) {
+				return
+			}
+		}
 		client, err := b.connected()
 		if err != nil {
 			b.seekUpdate(sk, func(st *SeekStatus) { st.Message = "Not connected to Lichess" })
@@ -190,9 +251,47 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 		u := pool[rand.Intn(len(pool))]
 		tried[strings.ToLower(u.ID)] = true
 		lastSent = time.Now()
-		accepted, retryAfter := b.seekOne(ctx, sk, client, u, speed)
-		if accepted || ctx.Err() != nil {
+		accepted, id, retryAfter := b.seekOne(ctx, sk, client, u, speed)
+		if ctx.Err() != nil {
 			return
+		}
+		if accepted {
+			played++
+			name := u.DisplayName()
+			if limit > 0 && played >= limit {
+				// The last game asked for: the search is done.
+				b.mu.Lock()
+				if b.seek == sk {
+					b.seek = nil
+				}
+				b.message = fmt.Sprintf("%s accepted the challenge.", name)
+				b.mu.Unlock()
+				sk.cancel()
+				b.emit() // the game itself starts from the event stream
+				return
+			}
+			of := ""
+			if limit > 0 {
+				of = fmt.Sprintf(" of %d", limit)
+			}
+			msg := fmt.Sprintf("%s accepted: game %d%s. The next challenge goes out when it ends.", name, played, of)
+			if !b.seekUpdate(sk, func(st *SeekStatus) {
+				st.Played, st.Playing, st.Current, st.Rating, st.Message = played, true, "", 0, msg
+			}) {
+				return
+			}
+			waiting = true
+			// The game starts from the event stream: give it a moment to
+			// show up, so that it is seen as in progress.
+			for end := time.Now().Add(acceptedWait); time.Now().Before(end); {
+				b.mu.Lock()
+				_, started := b.games[id]
+				b.mu.Unlock()
+				if started || !sleepCtx(ctx, 50*time.Millisecond) {
+					break
+				}
+			}
+			continue
 		}
 		if !sleepCtx(ctx, retryAfter) {
 			return
@@ -201,7 +300,7 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 }
 
 // seekOne challenges one bot and waits for the answer.
-func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, speed string) (accepted bool, next time.Duration) {
+func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, speed string) (accepted bool, id string, next time.Duration) {
 	name := u.DisplayName()
 	rating := u.RatingFor(speed)
 	if !b.seekUpdate(sk, func(st *SeekStatus) {
@@ -210,7 +309,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		st.Current, st.Rating = name, rating
 		st.Message = fmt.Sprintf("Challenging %s (%d)…", name, rating)
 	}) {
-		return false, 0
+		return false, "", 0
 	}
 	p := sk.params.ChallengeParams
 	p.Username = u.ID
@@ -224,7 +323,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 			wait = time.Minute
 		}
 		b.seekUpdate(sk, func(st *SeekStatus) { st.Message = fmt.Sprintf("Could not challenge %s: %v", name, err) })
-		return false, wait
+		return false, "", wait
 	}
 	answer := make(chan string, 1)
 	b.mu.Lock()
@@ -251,15 +350,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		got = "stopped"
 	}
 	if got == "accepted" {
-		b.mu.Lock()
-		if b.seek == sk {
-			b.seek = nil
-		}
-		b.message = fmt.Sprintf("%s accepted the challenge.", name)
-		b.mu.Unlock()
-		sk.cancel()
-		b.emit() // the game itself starts from the event stream
-		return true, 0
+		return true, ch.ID, 0
 	}
 	if got == "timeout" || got == "stopped" {
 		cctx, c := context.WithTimeout(context.Background(), 10*time.Second)
@@ -271,7 +362,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		b.emit()
 	}
 	if got == "stopped" {
-		return false, 0
+		return false, "", 0
 	}
 	why := "did not answer"
 	if got != "timeout" {
@@ -280,5 +371,5 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 	b.seekUpdate(sk, func(st *SeekStatus) {
 		st.Message = fmt.Sprintf("%s %s.", name, why)
 	})
-	return false, seekPause
+	return false, "", seekPause
 }

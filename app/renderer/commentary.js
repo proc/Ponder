@@ -1,0 +1,418 @@
+'use strict';
+// Live commentary: while a game is being played (yours, an engine's, a
+// Lichess game, a tournament game on the board), every few moves the AI
+// model is sent the position and all the moves that led to it and asked to
+// comment as a chess commentator would; when the game ends it is asked for
+// a summary. The comments show in a card beside the board and, in full, in
+// the AI panel's Commentary view. The model is the one set in Settings → AI.
+
+const cm = {
+  on: false,
+  every: 2,        // a comment every so many moves (a move: White's and Black's)
+  feed: [],        // { ply, label, text, kind: 'comment' | 'summary', live, error }
+  game: null,      // the game the feed is about
+  lastPly: 0,      // the ply of the last comment asked for
+  wasLive: false,  // the game was in progress when last looked at
+  summed: false,
+  busy: false,
+  seq: 0,
+  id: '',
+  note: '',
+  // Reading aloud: on or off, the voice by name ('' the computer's own
+  // choice), and how fast.
+  speak: false,
+  voice: '',
+  rate: 1,
+  // Annotating: each comment goes on its move as an annotation of the game.
+  annotate: false,
+};
+try {
+  const saved = JSON.parse(localStorage.getItem('commentary') ?? '{}') ?? {};
+  cm.on = Boolean(saved.on);
+  if ([1, 2, 3, 5, 8].includes(+saved.every)) cm.every = +saved.every;
+  cm.annotate = Boolean(saved.annotate);
+  cm.speak = Boolean(saved.speak);
+  cm.voice = String(saved.voice ?? '');
+  if (+saved.rate >= 0.5 && +saved.rate <= 2) cm.rate = +saved.rate;
+} catch { /* as new */ }
+const saveCommentary = () => { try { localStorage.setItem('commentary', JSON.stringify({ on: cm.on, every: cm.every, speak: cm.speak, voice: cm.voice, rate: cm.rate, annotate: cm.annotate })); } catch { /* not kept */ } };
+
+// --- Annotating the game ----------------------------------------------------
+// A comment becomes the annotation of the move it followed; the summary,
+// the comment before the first move. They are the AI's annotations: yours
+// are never replaced, "Remove the AI's annotations" (under Annotate) takes
+// them off, and Save writes them into the PGN.
+function annotateFromComment(entry, { draw = true } = {}) {
+  if (!cm.annotate || !entry || entry.error || entry.live || !entry.text || state?.game !== cm.game) return false;
+  if (typeof annBlank !== 'function') return false;
+  let used = false;
+  if (entry.kind === 'summary') {
+    // Only where there is none: an annotation already there is never replaced.
+    if (!notes.before?.comment) { notes.before = { ...annBlank(), comment: entry.text, ai: true }; used = true; }
+  } else if (entry.ply >= 1 && entry.ply <= state.moves.length) {
+    const a = notes.moves.get(entry.ply) ?? annBlank();
+    if (!a.comment) {
+      a.comment = entry.text;
+      a.ai = true;
+      notes.moves.set(entry.ply, a);
+      used = true;
+    }
+  }
+  if (used) {
+    notes.dirty = true;
+    if (cm.model) notes.aiModel = cm.model;
+    if (draw) renderMoves();
+  }
+  return used;
+}
+function setAnnotate(on) {
+  cm.annotate = Boolean(on);
+  saveCommentary();
+  // Turned on with comments already made: they go on the game now.
+  if (cm.annotate) {
+    let any = false;
+    for (const entry of cm.feed) any = annotateFromComment(entry, { draw: false }) || any;
+    if (any) renderMoves();
+  }
+  renderCommentary();
+}
+
+// --- Reading aloud ----------------------------------------------------------
+// The computer's own speech (its installed voices): nothing is sent anywhere.
+const cmCanSpeak = typeof window.speechSynthesis !== 'undefined' && typeof window.SpeechSynthesisUtterance !== 'undefined';
+const cmVoices = () => (cmCanSpeak ? window.speechSynthesis.getVoices() : []);
+
+// Chess notation as it is said: "Nf3" is "knight f3", "O-O" castles.
+function cmSpoken(text) {
+  const piece = { K: 'king', Q: 'queen', R: 'rook', B: 'bishop', N: 'knight' };
+  return String(text)
+    .replace(/\bO-O-O\b/g, 'castles queenside').replace(/\bO-O\b/g, 'castles kingside')
+    .replace(/\b(\d+)\.{3}\s*/g, '').replace(/\b(\d+)\.\s*(?=[KQRBNa-hO])/g, '')
+    .replace(/\b([KQRBN])([a-h]?[1-8]?)(x?)([a-h][1-8])(=[QRBN])?([+#]?)/g, (_m, p, from, x, to, promo, end) =>
+      `${piece[p]} ${from ? from + ' ' : ''}${x ? 'takes ' : ''}${to}${end === '#' ? ', checkmate' : end === '+' ? ', check' : ''}`)
+    .replace(/\b([a-h])x([a-h][1-8])(=[QRBN])?([+#]?)/g, (_m, f, to, promo, end) =>
+      `${f} takes ${to}${promo ? `, promoting to a ${piece[promo[1]]}` : ''}${end === '#' ? ', checkmate' : end === '+' ? ', check' : ''}`)
+    .replace(/\b([a-h][1-8])=([QRBN])/g, (_m, sq, p) => `${sq}, promoting to a ${piece[p]}`)
+    .replace(/\b([a-h][1-8])\+/g, '$1, check').replace(/\b([a-h][1-8])#/g, '$1, checkmate')
+    .replace(/½-½|1\/2-1\/2/g, 'a draw').replace(/\b1-0\b/g, 'White wins').replace(/\b0-1\b/g, 'Black wins');
+}
+
+// Says a comment. A comment still being read gives way to the new one: the
+// commentary keeps up with the game rather than falling behind it.
+function speakCommentary(text, { force = false } = {}) {
+  if (!cmCanSpeak || (!cm.speak && !force) || !String(text ?? '').trim()) return;
+  const synth = window.speechSynthesis;
+  synth.cancel();
+  const u = new SpeechSynthesisUtterance(cmSpoken(text));
+  const voice = cmVoices().find((v) => v.name === cm.voice);
+  if (voice) { u.voice = voice; u.lang = voice.lang; }
+  u.rate = cm.rate;
+  u.onstart = () => { cm.speaking = true; renderCommentary(); };
+  u.onend = u.onerror = () => { cm.speaking = false; renderCommentary(); };
+  synth.speak(u);
+}
+function stopSpeaking() {
+  if (cmCanSpeak) window.speechSynthesis.cancel();
+  cm.speaking = false;
+}
+function setSpeak(on) {
+  cm.speak = Boolean(on) && cmCanSpeak;
+  saveCommentary();
+  if (!cm.speak) stopSpeaking();
+  else {
+    // Turned on mid-game: the latest comment is read at once.
+    const last = cm.feed.at(-1);
+    if (last && !last.live && !last.error) speakCommentary(last.text);
+  }
+  renderCommentary();
+}
+// The voices arrive a little after the page: the list is filled when they do.
+function fillCommentaryVoices() {
+  const sel = $('#cm-voice');
+  const voices = cmVoices();
+  // The voices of the app's language first, then the rest.
+  const lang = (navigator.language || 'en').slice(0, 2).toLowerCase();
+  const sorted = [...voices].sort((a, b) => (b.lang.toLowerCase().startsWith(lang) - a.lang.toLowerCase().startsWith(lang)) || a.name.localeCompare(b.name));
+  sel.replaceChildren(el('option', { value: '', textContent: 'The computer’s voice' }), ...sorted.map((v) => el('option', { value: v.name, textContent: `${v.name} (${v.lang})` })));
+  sel.value = sorted.some((v) => v.name === cm.voice) ? cm.voice : '';
+}
+
+const CM_SYSTEM = `You are a chess commentator calling a game live for viewers, the way a grandmaster does on a broadcast: knowledgeable, lively, clear.
+You are given the players, every move played so far, the moves played since your last comment, the position now, and your earlier comments.
+Make one point about what has just happened: the idea behind a move, a threat, a mistake, a fine move, or what to watch for next. The single most telling thing, not everything.
+ONE sentence, at most 25 words, in the present tense, in plain text: no Markdown, no lists, no move-by-move recital, no greeting, no preamble. Answer at once, without thinking it over at length.
+Do not repeat your earlier comments. Only speak of moves that have been played or are legal now. Where an engine evaluation is given, let it guide who stands better (positive favours White), without quoting numbers at length.`;
+
+const CM_SUMMARY = `You are a chess commentator wrapping up a game that has just ended, for viewers who watched it.
+You are given the players, every move, the final position, the result and how it ended, and the comments you made during the game.
+Sum the game up in two or three sentences, at most 60 words, in plain text (no Markdown, no lists): how the game was shaped, the turning point, and how it was decided. Answer at once, without thinking it over at length.
+Only speak of moves that were played. Where engine evaluations are given, let them guide your judgment.`;
+
+const cmLive = () => Boolean(state?.players && (state.active || state.external?.live));
+
+// The moves as text: "1. e4 e5 2. Nf3 …", from a ply (0: all of them).
+function cmMoves(from = 0) {
+  const out = [];
+  for (let i = from; i < state.moves.length; i++) {
+    const { n, white } = plyNumber(i + 1);
+    if (white) out.push(`${n}.`);
+    else if (i === from) out.push(`${n}...`);
+    out.push(state.moves[i].san);
+  }
+  return out.join(' ');
+}
+
+// What the engines think, when something is known: the playing engine's
+// own score after its last move, or the analysis of the position.
+function cmEval() {
+  const n = state.moves.length;
+  for (let p = n; p >= Math.max(1, n - 1); p--) {
+    const e = typeof engineScores !== 'undefined' ? engineScores[p] : null;
+    if (e) return `${e.isMate ? `mate in ${Math.abs(e.mate)} for ${e.mate > 0 ? 'White' : 'Black'}` : `${(e.cp / 100).toFixed(2)} pawns`} (${e.name || 'engine'}, depth ${e.depth}, from White's side)`;
+  }
+  const data = typeof analysis !== 'undefined' ? analysis.data : null;
+  if (data?.state === 'running' && data.fen === state.fen && data.lines?.[0]) {
+    const l = data.lines[0];
+    return `${formatScore(l)} (analysis, depth ${l.depth}, from White's side); best line ${(l.san ?? []).slice(0, 6).join(' ')}`;
+  }
+  return '';
+}
+
+function cmMessages(kind, from) {
+  const white = state.players.white?.name || 'White';
+  const black = state.players.black?.name || 'Black';
+  const n = state.moves.length;
+  const fen = n ? state.moves[n - 1].fen : state.startFen;
+  const turn = fen.split(' ')[1] === 'w' ? 'White' : 'Black';
+  const rated = (side) => { const r = state.players[side]?.rating; return r ? ` (${r})` : ''; };
+  const parts = [`White: ${white}${rated('white')}\nBlack: ${black}${rated('black')}`];
+  if (state.external?.label) parts.push(`Event: ${state.external.label}`);
+  if (state.opening) parts.push(`Opening: ${state.opening}`);
+  if (state.startFen && !/^rnbqkbnr\/pppppppp\/8\/8\/8\/8\/PPPPPPPP\/RNBQKBNR w KQkq/.test(state.startFen)) parts.push(`The game started from this position (FEN): ${state.startFen}`);
+  parts.push(`All the moves so far:\n${cmMoves(0) || '(none yet)'}`);
+  if (kind === 'comment' && from > 0 && from < n) parts.push(`Played since your last comment:\n${cmMoves(from)}`);
+  parts.push(`${kind === 'summary' ? 'The final position' : 'The position now'} (FEN): ${fen}`);
+  if (kind === 'summary') parts.push(`Result: ${state.result}${state.reason ? ` (${state.reason})` : ''}.`);
+  else parts.push(`${turn} is to move.`);
+  const ev = cmEval();
+  if (ev) parts.push(`Engine evaluation: ${ev}`);
+  // A few of its own comments, so as not to repeat them: the fewer, the
+  // less there is to read before it answers.
+  const said = cm.feed.filter((c) => c.kind === 'comment' && c.text && !c.error).slice(kind === 'summary' ? -8 : -2);
+  if (said.length) parts.push(`Your earlier comments:\n${said.map((c) => `- (${c.label}) ${c.text}`).join('\n')}`);
+  parts.push(kind === 'summary' ? 'Now sum the game up, in two or three sentences.' : 'Now give your one-sentence comment on the latest moves.');
+  return [{ role: 'system', content: kind === 'summary' ? CM_SUMMARY : CM_SYSTEM }, { role: 'user', content: parts.join('\n\n') }];
+}
+
+async function askCommentary(kind) {
+  if (!api.ai?.chat) return;
+  const n = state.moves.length;
+  const from = cm.lastPly;
+  const { n: num, white } = n ? plyNumber(n) : { n: 1, white: true };
+  // The moves played since the last comment: the last of them is the move
+  // this comment is about.
+  const moves = [];
+  for (let p = Math.max(0, Math.min(from, n)) + 1; p <= n; p++) {
+    const at = plyNumber(p);
+    moves.push({ ply: p, san: state.moves[p - 1].san, n: at.n, white: at.white });
+  }
+  const entry = {
+    ply: n, kind, text: '', live: true, moves,
+    label: kind === 'summary' ? `Summary · ${state.result.replace('1/2-1/2', '½-½')}` : n ? `After ${num}${white ? '.' : '…'} ${state.moves[n - 1].san}` : 'Before the first move',
+  };
+  cm.feed.push(entry);
+  cm.lastPly = n;
+  const id = cm.id = `c${++cm.seq}`;
+  const game = state.game;
+  cm.busy = true;
+  cm.entry = entry;
+  cm.note = '';
+  renderCommentary();
+  try {
+    const reply = await api.ai.chat(id, cmMessages(kind, from), 'commentary');
+    entry.text = String(reply.text ?? '').replace(/\s+/g, ' ').trim();
+    cm.model = reply.model ?? cm.model;
+    entry.live = false;
+    annotateFromComment(entry); // on its move, when annotating is on
+    speakCommentary(entry.text); // read aloud, when that is on
+  } catch (err) {
+    const msg = errorText(err);
+    if (msg === 'Stopped') {
+      // Overtaken (the game ended, a new game, turned off): what there is stays.
+      if (!entry.text) cm.feed.splice(cm.feed.indexOf(entry), 1);
+    } else {
+      entry.text = msg;
+      entry.error = true;
+      // An endpoint that does not answer is not asked again move after move.
+      cm.on = false;
+      saveCommentary();
+      cm.note = 'Commentary was turned off: the AI endpoint did not answer. Check Settings → AI, then turn it on again.';
+      if (typeof notify === 'function') notify(msg, { title: 'Live commentary stopped' });
+    }
+  } finally {
+    entry.live = false;
+    if (cm.id === id) { cm.busy = false; cm.entry = null; }
+    renderCommentary();
+    // Moves played while it was speaking may already call for the next one.
+    if (cm.id === id && state?.game === game) syncCommentary();
+  }
+}
+
+// A piece of a comment as it is written.
+window.onAiCommentary = ({ id, delta }) => {
+  if (id !== cm.id || !cm.entry || !delta) return;
+  cm.entry.text += delta;
+  renderCommentary();
+};
+
+// Called whenever the game changes: asks for a comment when it is due.
+function syncCommentary() {
+  if (!state) return;
+  const live = cmLive();
+  const n = state.moves?.length ?? 0;
+  if (state.game !== cm.game) {
+    // Another game: its own commentary, starting from where it stands.
+    if (cm.busy) api.ai.chatCancel?.('commentary');
+    stopSpeaking(); // the last game's commentary is over
+    Object.assign(cm, { game: state.game, feed: [], lastPly: n, wasLive: live, summed: false, note: '' });
+    renderCommentary();
+  }
+  if (n < cm.lastPly) cm.lastPly = n; // a takeback
+  if (!cm.on) { cm.wasLive = live; renderCommentary(); return; }
+  if (live) {
+    cm.wasLive = true;
+    if (!cm.busy && n - cm.lastPly >= cm.every * 2) askCommentary('comment');
+  } else if (cm.wasLive && !cm.summed && n > 0 && state.result && state.result !== '*') {
+    // The game has just ended: the summary takes over from any comment in the air.
+    cm.summed = true;
+    cm.wasLive = false;
+    askCommentary('summary');
+  } else cm.wasLive = false;
+  renderCommentary();
+}
+window.syncCommentary = syncCommentary;
+
+function setCommentary(on) {
+  cm.on = Boolean(on);
+  cm.note = '';
+  saveCommentary();
+  if (!cm.on && cm.busy) api.ai.chatCancel?.('commentary');
+  if (!cm.on) stopSpeaking();
+  if (cm.on && state) {
+    // From here on: the first comment comes after the next few moves.
+    cm.wasLive = cmLive();
+    if (!cm.feed.length) cm.lastPly = Math.max(0, (state.moves?.length ?? 0) - Math.max(0, cm.every * 2 - 2));
+    syncCommentary();
+  }
+  renderCommentary();
+}
+
+// The moves a comment covers, in a row: those played since the comment
+// before it, the last one (the move the comment is for) picked out. A
+// click goes to that move on the board.
+function cmMoveStrip(c) {
+  const chips = c.moves.map((m, i) => {
+    const last = i === c.moves.length - 1 && c.kind === 'comment';
+    const num = m.white ? `${m.n}. ` : i === 0 ? `${m.n}… ` : '';
+    const chip = el('button', { type: 'button', className: 'cm-move' + (last ? ' for' : '') }, [
+      ...(num ? [el('span', { className: 'cm-num', textContent: num })] : []), m.san,
+    ]);
+    chip.title = last ? `The move this comment is about: ${m.n}${m.white ? '.' : '…'} ${m.san}. Click to show it on the board`
+      : `Played before the comment: ${m.n}${m.white ? '.' : '…'} ${m.san}. Click to show it on the board`;
+    chip.onclick = () => { if (state?.game === cm.game) showPly(m.ply); };
+    return chip;
+  });
+  return el('div', { className: 'cm-moves' }, [
+    el('span', { className: 'cm-moves-k', textContent: c.kind === 'summary' ? 'Last moves' : c.moves.length > 1 ? 'Moves' : 'Move' }),
+    ...chips,
+  ]);
+}
+
+function renderCommentary() {
+  // The card beside the board: the latest comment.
+  const card = $('#commentary');
+  const last = cm.feed.at(-1);
+  const show = Boolean(state?.players) && (cm.on || cm.feed.length > 0);
+  if (card.hidden !== !show) card.hidden = !show;
+  if (show) {
+    $('#cm-at').textContent = last?.label ?? '';
+    const text = $('#cm-text');
+    const body = last ? last.text : cmLive() ? `Commentary is on: the first comment comes after ${cm.every === 1 ? 'the next move' : `the next ${cm.every} moves`}.` : 'Commentary is on: it starts with the next game played.';
+    if (text.textContent !== body) text.textContent = body;
+    text.classList.toggle('live', Boolean(last?.live));
+    text.classList.toggle('waiting', Boolean(last?.live && !last.text));
+    text.classList.toggle('error', Boolean(last?.error));
+    text.classList.toggle('hint', !last);
+    card.classList.toggle('summary', last?.kind === 'summary');
+  }
+  // Reading aloud: the card's speaker, and the panel's controls.
+  const spk = $('#cm-speak-btn');
+  spk.setAttribute('aria-pressed', String(cm.speak));
+  spk.classList.toggle('on', cm.speak);
+  spk.classList.toggle('speaking', Boolean(cm.speaking));
+  spk.disabled = !cmCanSpeak;
+  spk.title = !cmCanSpeak ? 'This computer has no speech to read with' : cm.speak ? 'Reading the commentary aloud: click to stop' : 'Read the commentary aloud';
+  $('#cm-annotate').checked = cm.annotate;
+  $('#cm-speak').checked = cm.speak;
+  $('#cm-speak').disabled = !cmCanSpeak;
+  for (const id of ['#cm-voice', '#cm-rate', '#cm-test']) $(id).disabled = !cmCanSpeak;
+  $('#cm-rate').value = String(cm.rate);
+  // The AI panel's Commentary view: all of it, and the controls.
+  $('#cm-on').checked = cm.on;
+  $('#cm-every').value = String(cm.every);
+  $('#ai-views').classList.toggle('cm-live', cm.on && cmLive());
+  const feed = $('#cm-feed');
+  const atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
+  const key = JSON.stringify(cm.feed.map((c) => [c.label, c.text, c.live, c.error, c.moves?.length]));
+  if (feed.dataset.key !== key) {
+    feed.dataset.key = key;
+    feed.replaceChildren(...(cm.feed.length ? cm.feed.map((c) => el('div', { className: `cm-item ${c.kind}${c.error ? ' error' : ''}${c.live ? ' live' : ''}` }, [
+      el('div', { className: 'cm-label' }, [el('span', { textContent: c.label }), ...(cmCanSpeak && c.text && !c.live && !c.error ? [(() => {
+        const say = el('button', { type: 'button', className: 'cm-say', textContent: '▶', title: 'Read this comment aloud' });
+        say.setAttribute('aria-label', 'Read this comment aloud');
+        say.onclick = () => speakCommentary(c.text, { force: true });
+        return say;
+      })()] : [])]),
+      ...(c.moves?.length ? [cmMoveStrip(c)] : []),
+      el('div', { className: 'cm-body', textContent: c.text || (c.live ? 'Watching…' : '') }),
+    ])) : [el('p', { className: 'hint cm-empty', textContent: cm.on
+      ? (cmLive() ? 'Listening to the game: the first comment comes after the next few moves.' : 'Commentary starts with the next game that is played: yours, an engine’s, a Lichess game or a tournament game on the board.')
+      : 'Turn live commentary on and the AI model comments on the game every few moves as it is played, and sums it up when it ends.' })]));
+    if (atEnd) feed.scrollTop = feed.scrollHeight;
+  }
+  $('#cm-note').textContent = cm.note || 'Each comment sends the model the position and all the moves so far (Settings → AI sets the model).';
+  $('#cm-note').classList.toggle('error', Boolean(cm.note));
+}
+
+// The panel's two views.
+function showAiView(view) {
+  $('#pane-ai').dataset.view = view;
+  for (const b of $('#ai-views').querySelectorAll('button')) {
+    const on = b.dataset.view === view;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', String(on));
+  }
+  try { localStorage.setItem('aiView', view); } catch { /* not kept */ }
+  if (view === 'commentary') { renderCommentary(); $('#cm-feed').scrollTop = $('#cm-feed').scrollHeight; } else window.openAiChat?.(false);
+}
+for (const b of $('#ai-views').querySelectorAll('button')) b.onclick = () => showAiView(b.dataset.view);
+$('#cm-on').onchange = (e) => setCommentary(e.target.checked);
+$('#cm-every').onchange = (e) => { cm.every = +e.target.value || 2; saveCommentary(); syncCommentary(); };
+// The card opens the full commentary in the panel.
+$('#cm-open').onclick = () => { showAiView('commentary'); setAiPanel(true, { focus: false }); };
+$('#cm-off').onclick = () => setCommentary(false);
+$('#cm-annotate').onchange = (e) => setAnnotate(e.target.checked);
+$('#cm-speak').onchange = (e) => setSpeak(e.target.checked);
+$('#cm-speak-btn').onclick = () => setSpeak(!cm.speak);
+$('#cm-voice').onchange = (e) => { cm.voice = e.target.value; saveCommentary(); };
+$('#cm-rate').onchange = (e) => { cm.rate = +e.target.value || 1; saveCommentary(); };
+$('#cm-test').onclick = () => speakCommentary('White plays Nf3, and Black answers with a solid move. The centre is still contested.', { force: true });
+if (cmCanSpeak) {
+  fillCommentaryVoices();
+  window.speechSynthesis.addEventListener?.('voiceschanged', fillCommentaryVoices);
+  // Nothing is left talking when the window goes.
+  window.addEventListener('beforeunload', () => window.speechSynthesis.cancel());
+}
+
+showAiView(localStorage.getItem('aiView') === 'commentary' ? 'commentary' : 'chat');
+if (state) syncCommentary(); else renderCommentary();

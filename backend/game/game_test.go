@@ -398,7 +398,7 @@ func TestAnnotatedPGN(t *testing.T) {
 		}
 	}
 	text, err := m.AnnotatedPGN(&Annotations{
-		NAGs:       map[int]int{3: 6},
+		NAGs:       map[int][]int{3: {6}},
 		Comments:   map[int]string{1: "[%eval 0.30]", 3: "[%eval -0.20] Inaccuracy. Nf3 was best."},
 		Variations: map[int]string{3: "(2. Nf3 Nc6)"},
 		After:      "Analysis: 3. Bc4",

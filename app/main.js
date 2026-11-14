@@ -2,8 +2,10 @@ const { app, BrowserWindow, ipcMain, dialog, clipboard, safeStorage, shell } = r
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const readline = require('readline');
+const ai = require('./ai');
 
 const exe = process.platform === 'win32' ? '.exe' : '';
 const binDir = app.isPackaged
@@ -181,6 +183,27 @@ ipcMain.handle('engines:choosePath', async (_e, kind, title) => {
   return pick.canceled ? null : pick.filePaths[0] ?? null;
 });
 
+// How busy the computer's processors are: the share of time they were not
+// idle since the last time this was asked (0 to 1), over all of them.
+let cpuBefore = null;
+function cpuTimes() {
+  let idle = 0, total = 0;
+  for (const cpu of os.cpus()) {
+    for (const t of Object.values(cpu.times)) total += t;
+    idle += cpu.times.idle;
+  }
+  return { idle, total };
+}
+ipcMain.handle('system:cpu', () => {
+  const now = cpuTimes();
+  const before = cpuBefore;
+  cpuBefore = now;
+  const cores = os.cpus().length;
+  if (!before || now.total <= before.total) return { load: null, cores };
+  const load = 1 - (now.idle - before.idle) / (now.total - before.total);
+  return { load: Math.min(1, Math.max(0, load)), cores };
+});
+
 // Piece themes: each folder in svg/ holding all twelve <color>-<name>.svg
 // files is a theme named after the folder, e.g. svg/minimalist/white-king.svg.
 const svgDir = app.isPackaged
@@ -316,7 +339,8 @@ const safeName = (s) => String(s).replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g,
 
 ipcMain.handle('tournament:defaultPgn', (_e, a, b) => {
   const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ').replace(':', '.');
-  return path.join(tournamentDir(), `${safeName(a)} vs ${safeName(b)} ${stamp}.pgn`);
+  // A match is named after its two engines; the other formats after themselves.
+  return path.join(tournamentDir(), `${b ? `${safeName(a)} vs ${safeName(b)}` : safeName(a)} ${stamp}.pgn`);
 });
 
 ipcMain.handle('tournament:choosePgn', async (_e, current) => {
@@ -482,6 +506,9 @@ const LICHESS_DEFAULTS = {
   autoConnect: false,
   // Let the engine think on its opponent's time (UCI pondering).
   ponder: true,
+  // Seconds a challenge you (or your engine) sent waits for an answer
+  // before it is withdrawn; 0: it waits until answered or cancelled.
+  challengeTimeout: 30,
   policy: {
     rated: true, casual: true, humans: true, bots: true,
     minMinutes: 0, maxMinutes: 0, maxGames: 1,
@@ -592,6 +619,8 @@ async function publicLichess(settings) {
   };
 }
 
+const challengeTimeout = (settings) => (Number.isFinite(settings.challengeTimeout) ? settings.challengeTimeout : LICHESS_DEFAULTS.challengeTimeout);
+
 function lichessEngine(settings) {
   const list = loadEngines();
   const e = list.find((x) => x.id === settings.engineId) ?? list[0];
@@ -599,6 +628,95 @@ function lichessEngine(settings) {
 }
 
 ipcMain.handle('lichess:settings', () => publicLichess(loadLichess()));
+
+// ---------------------------------------------------------------------------
+// AI commentary: the endpoint (an OpenAI-compatible API, a local server by
+// default), the model, and a key when the endpoint wants one. The key is
+// encrypted with the system keychain when there is one, and never sent back
+// to the window. The game is sent only when AI annotate is pressed.
+// ---------------------------------------------------------------------------
+const aiFile = () => path.join(app.getPath('userData'), 'ai.json');
+function loadAi() {
+  let saved = {};
+  try { saved = JSON.parse(fs.readFileSync(aiFile(), 'utf8')) ?? {}; } catch { /* first run */ }
+  return { ...ai.DEFAULTS, ...saved };
+}
+function saveAi(settings) {
+  fs.mkdirSync(path.dirname(aiFile()), { recursive: true });
+  fs.writeFileSync(aiFile(), JSON.stringify(settings, null, 2), { mode: 0o600 });
+}
+async function aiKey(settings) {
+  if (settings.plainKey) return settings.plainKey;
+  if (!settings.key) return '';
+  try {
+    const buf = Buffer.from(settings.key, 'base64');
+    if (safeStorage.decryptStringAsync) return (await safeStorage.decryptStringAsync(buf)).result ?? '';
+    return safeStorage.decryptString(buf);
+  } catch { return ''; }
+}
+const publicAi = (s) => ({ baseUrl: s.baseUrl, model: s.model, hasKey: Boolean(s.key || s.plainKey), defaultUrl: ai.DEFAULTS.baseUrl });
+
+ipcMain.handle('ai:settings', () => publicAi(loadAi()));
+ipcMain.handle('ai:save', async (_e, patch) => {
+  const s = loadAi();
+  if (typeof patch?.baseUrl === 'string') s.baseUrl = ai.normalizeBase(patch.baseUrl);
+  if (typeof patch?.model === 'string') s.model = patch.model.trim();
+  if (typeof patch?.key === 'string') {
+    delete s.key;
+    delete s.plainKey;
+    const key = patch.key.trim();
+    if (key && await canEncrypt()) s.key = await encryptSecret(key);
+    else if (key) s.plainKey = key;
+  }
+  saveAi(s);
+  return publicAi(s);
+});
+
+// The request in flight. It has no time limit: a local model may take as
+// long as it needs, and the request ends when it answers or Stop is pressed.
+let aiRun = null;
+ipcMain.handle('ai:models', async () => {
+  const s = loadAi();
+  return ai.listModels({ baseUrl: s.baseUrl, key: await aiKey(s) }, { signal: AbortSignal.timeout(15000) });
+});
+ipcMain.handle('ai:annotate', async (_e, game) => {
+  const s = loadAi();
+  aiRun?.abort();
+  const run = aiRun = new AbortController();
+  try {
+    return await ai.annotate({ baseUrl: s.baseUrl, model: s.model, key: await aiKey(s) }, game ?? {}, { signal: run.signal });
+  } finally {
+    if (aiRun === run) aiRun = null;
+  }
+});
+ipcMain.handle('ai:cancel', () => { aiRun?.abort(); });
+
+// The AI tab's chat: the answer is streamed to the window as "aiChat"
+// events ({ id, delta }) and returned whole. One answer at a time.
+// The chat and the live commentary each have a channel of their own, so
+// one does not cut the other off: a new request ends the one before it on
+// the same channel only.
+const aiChatRuns = new Map(); // channel -> its request in flight
+ipcMain.handle('ai:chat', async (_e, id, messages, channel = 'chat') => {
+  const s = loadAi();
+  channel = String(channel);
+  aiChatRuns.get(channel)?.abort();
+  const run = new AbortController();
+  aiChatRuns.set(channel, run);
+  const list = (Array.isArray(messages) ? messages : [])
+    .filter((m) => ['system', 'user', 'assistant'].includes(m?.role) && typeof m.content === 'string')
+    .map((m) => ({ role: m.role, content: m.content }));
+  try {
+    return await ai.chat({ baseUrl: s.baseUrl, model: s.model, key: await aiKey(s) }, list, {
+      signal: run.signal,
+      onDelta: (delta) => { if (win && !win.isDestroyed()) win.webContents.send('backend-event', 'aiChat', { id, delta }); },
+      onThinking: (thinking) => { if (win && !win.isDestroyed()) win.webContents.send('backend-event', 'aiChat', { id, thinking }); },
+    });
+  } finally {
+    if (aiChatRuns.get(channel) === run) aiChatRuns.delete(channel);
+  }
+});
+ipcMain.handle('ai:chatCancel', (_e, channel = 'chat') => { aiChatRuns.get(String(channel))?.abort(); });
 
 ipcMain.handle('lichess:save', async (_e, patch) => {
   const settings = loadLichess();
@@ -611,6 +729,7 @@ ipcMain.handle('lichess:save', async (_e, patch) => {
   if (typeof patch.engineId === 'string') settings.engineId = patch.engineId;
   if (typeof patch.autoConnect === 'boolean') settings.autoConnect = patch.autoConnect;
   if (typeof patch.ponder === 'boolean') settings.ponder = patch.ponder;
+  if ('challengeTimeout' in patch) settings.challengeTimeout = Math.max(0, Math.min(3600, Math.round(Number(patch.challengeTimeout) || 0)));
   if (patch.policy && typeof patch.policy === 'object') {
     const p = { ...settings.policy };
     for (const k of ['rated', 'casual', 'humans', 'bots']) if (k in patch.policy) p[k] = Boolean(patch.policy[k]);
@@ -731,14 +850,14 @@ ipcMain.handle('lichess:signOut', async () => {
 
 ipcMain.handle('lichess:accountConnect', async () => {
   const settings = loadLichess();
-  return backend.request('lichessAcctConnect', { baseUrl: settings.baseUrl, token: await accountToken(settings) });
+  return backend.request('lichessAcctConnect', { baseUrl: settings.baseUrl, token: await accountToken(settings), challengeTimeout: challengeTimeout(settings) });
 });
 
 ipcMain.handle('lichess:connect', async () => {
   const settings = loadLichess();
   return backend.request('lichessConnect', {
     baseUrl: settings.baseUrl, token: await lichessToken(settings),
-    engine: lichessEngine(settings), policy: settings.policy, greeting: settings.greeting, ponder: settings.ponder !== false, draw: settings.draw,
+    engine: lichessEngine(settings), policy: settings.policy, greeting: settings.greeting, ponder: settings.ponder !== false, draw: settings.draw, challengeTimeout: challengeTimeout(settings),
   });
 });
 
@@ -828,7 +947,7 @@ ipcMain.handle('puzzles:chooseFile', async () => {
 
 ipcMain.handle('lichess:configure', () => {
   const settings = loadLichess();
-  return backend.request('lichessConfigure', { engine: lichessEngine(settings), policy: settings.policy, greeting: settings.greeting, ponder: settings.ponder !== false, draw: settings.draw });
+  return backend.request('lichessConfigure', { engine: lichessEngine(settings), policy: settings.policy, greeting: settings.greeting, ponder: settings.ponder !== false, draw: settings.draw, challengeTimeout: challengeTimeout(settings) });
 });
 
 // ---------------------------------------------------------------------------
@@ -841,8 +960,10 @@ function createWindow() {
     minWidth: 960,
     minHeight: 600,
     show: false,
-    backgroundColor: '#f3f2ee',
+    backgroundColor: '#f5f5f7',
     title: 'Ponder',
+    // macOS: no title bar, the window's buttons over the page's top strip.
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' } : {}),
     icon: path.join(__dirname, 'icon.png'), // Windows and Linux; macOS takes the bundle's
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

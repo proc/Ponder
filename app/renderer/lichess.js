@@ -35,6 +35,14 @@ function lxSetNote(text) {
   renderLichess();
 }
 
+// A challenge that could not be sent, or was turned down, is also shown as
+// a notification: the Lichess tab may not be the one open.
+function challengeFailed(err, args, who) {
+  const to = args?.username ? ` to ${args.username}` : '';
+  notify(errorText(err), { title: `${who === 'you' ? 'Your challenge' : 'Your engine’s challenge'}${to} was not sent` });
+}
+const challengeNews = (msg) => /declined the challenge|did not answer|could not (accept|challenge)/i.test(msg ?? '');
+
 async function lichessCommand(cmd, args) {
   try {
     const result = await api.backend(cmd, args);
@@ -42,6 +50,8 @@ async function lichessCommand(cmd, args) {
     return result ?? true;
   } catch (err) {
     lxSetNote(errorText(err));
+    if (cmd === 'lichessChallenge') challengeFailed(err, args, 'engine');
+    else if (cmd === 'lichessSeek') notify(errorText(err), { title: 'The random-bot challenge did not start' });
     return null;
   }
 }
@@ -52,7 +62,11 @@ function lichessStatus(next) {
   // A new challenge waiting for an answer.
   const before = new Set((prev.incoming ?? []).map((c) => c.id));
   if ((next.incoming ?? []).some((c) => !before.has(c.id))) sounds.play('challenge');
+  // The answer to a challenge sent: declined (with the reason), or none.
+  if (next.message && next.message !== prev.message && challengeNews(next.message)) notify(next.message, { title: 'Challenge', kind: 'warn' });
   renderLichess();
+  renderChallengePop();
+  renderDrawPop();
   renderLichessSettingsStatus();
   // Once the bot is connected, list the bots online without waiting for a click.
   if (next.state === 'connected' && prev.state !== 'connected' && !Array.isArray(ob.bots)) loadOnlineBots();
@@ -79,6 +93,29 @@ const lxWho = (name, title, rating) => {
   if (rating) parts.push(el('span', { className: 'lx-rating', textContent: String(rating) }));
   return el('span', { className: 'lx-who' }, parts);
 };
+
+// How long a challenge sent still waits before it is withdrawn, counting
+// down by itself ('' when it waits for ever).
+function expiryNote(c) {
+  const note = el('span', { className: 'lx-meta lx-expiry' });
+  if (c.expiresAt) {
+    note.dataset.at = c.expiresAt;
+    note.title = 'Withdrawn then if there is no answer (Settings → Lichess)';
+    expiryText(note);
+    expiryTimer ??= setInterval(tickExpiry, 500);
+  }
+  return note;
+}
+let expiryTimer = null;
+function expiryText(n) {
+  const left = Math.max(0, Math.ceil((+n.dataset.at - Date.now()) / 1000));
+  n.textContent = left ? `withdrawn in ${left} s` : 'withdrawing…';
+}
+function tickExpiry() {
+  const notes = [...document.querySelectorAll('.lx-expiry[data-at]')];
+  notes.forEach(expiryText);
+  if (!notes.length) { clearInterval(expiryTimer); expiryTimer = null; }
+}
 
 function challengeMeta(c) {
   const bits = [c.tc, c.rated ? 'rated' : 'casual'];
@@ -109,6 +146,7 @@ function renderLichess() {
   renderMe(); // also counts the tab's badge
   if (ob.bots) renderOnlineBots(); // Challenge needs the bot connected
   if (!online) return;
+  renderLichessAbout();
 
   // Challenges to the bot.
   $('#lx-auto').checked = Boolean(s.autoAccept);
@@ -140,6 +178,7 @@ function renderLichess() {
     el('span', { className: 'lx-meta', textContent: 'Waiting for' }),
     lxWho(c.user, c.title, c.rating),
     el('span', { className: 'lx-meta', textContent: challengeMeta(c) }),
+    expiryNote(c),
     el('span', { className: 'lx-actions' }, [lxButton('Cancel', () => lichessCommand('lichessCancel', { id: c.id }))]),
   ])));
 
@@ -420,8 +459,15 @@ function lxSpeed() {
 for (const id of ['#lx-time', '#lx-inc']) $(id).addEventListener('change', () => { $('#lx-seek-speed').textContent = lxSpeed(); });
 
 function saveSeekForm() {
-  try { localStorage.setItem('lichessSeek', JSON.stringify({ min: $('#lx-seek-min').value, max: $('#lx-seek-max').value })); } catch { /* ignore */ }
+  try { localStorage.setItem('lichessSeek', JSON.stringify({ min: $('#lx-seek-min').value, max: $('#lx-seek-max').value, games: $('#lx-seek-games').value })); } catch { /* ignore */ }
 }
+// How many games the random-bot search plays: 0 in the box is no limit.
+const seekGames = () => { const n = Math.round(+$('#lx-seek-games').value); return Number.isFinite(n) && n >= 0 ? n : 1; };
+function renderSeekGames() {
+  const n = seekGames();
+  $('#lx-seek-games-unit').textContent = n === 0 ? 'games (no limit)' : n === 1 ? 'game' : 'games';
+}
+$('#lx-seek-games').addEventListener('input', () => { renderSeekGames(); saveSeekForm(); });
 
 $('#lx-seek-go').onclick = async () => {
   const min = +$('#lx-seek-min').value || 0;
@@ -431,6 +477,7 @@ $('#lx-seek-go').onclick = async () => {
   await lichessCommand('lichessSeek', {
     rated: $('#lx-rated').checked, color: $('#lx-color').value,
     limit: +$('#lx-time').value, increment: +$('#lx-inc').value, minRating: min, maxRating: max,
+    games: seekGames() === 0 ? -1 : seekGames(), // the backend's "no limit" is below zero
   });
 };
 $('#lx-seek-stop').onclick = () => lichessCommand('lichessSeekStop');
@@ -440,7 +487,7 @@ function engineBusy() {
   const s = lx.status;
   const out = s.outgoing?.[0];
   if (out) return `Your engine's challenge to ${out.user} is waiting for an answer: cancel it to challenge someone else`;
-  if (s.seek?.active) return 'Your engine is looking for a random bot: stop that to challenge someone yourself';
+  if (s.seek?.active) return 'Your engine is challenging random bots: stop that to challenge someone yourself';
   if ((s.games ?? []).some((g) => !g.finished)) return 'Your engine is playing a game: challenge again when it is over';
   return '';
 }
@@ -466,7 +513,7 @@ function renderSeek() {
   const on = Boolean(seek?.active);
   $('#lx-seek-go').hidden = on;
   $('#lx-seek-stop').hidden = !on;
-  for (const id of ['#lx-seek-min', '#lx-seek-max']) $(id).disabled = on;
+  for (const id of ['#lx-seek-min', '#lx-seek-max', '#lx-seek-games']) $(id).disabled = on;
   const box = $('#lx-seek-state');
   box.hidden = !on;
   if (on) {
@@ -476,7 +523,11 @@ function renderSeek() {
     const text = () => {
       const left = seek.nextAt ? Math.max(0, Math.ceil((seek.nextAt - Date.now()) / 1000)) : 0;
       const next = left ? ` Next challenge in ${left} s.` : '';
-      box.textContent = `Random bot (${range}) · ${seek.tried} asked · ${seek.message}${next}`;
+      // Which game it is on, when more than one was asked for.
+      const many = seek.games !== 1;
+      const game = !many ? '' : seek.playing ? ` · game ${seek.played}${seek.games ? ` of ${seek.games}` : ''}`
+        : ` · ${seek.played}${seek.games ? ` of ${seek.games}` : ''} game${seek.games === 1 || (!seek.games && seek.played === 1) ? '' : 's'} played`;
+      box.textContent = `Random bot (${range})${game} · ${seek.tried} asked · ${seek.message}${next}`;
     };
     text();
     clearInterval(lx.seekTimer);
@@ -490,7 +541,9 @@ function loadChallengeForm() {
     const seek = JSON.parse(localStorage.getItem('lichessSeek') ?? '{}') ?? {};
     if (seek.min) $('#lx-seek-min').value = seek.min;
     if (seek.max) $('#lx-seek-max').value = seek.max;
+    if (seek.games != null && seek.games !== '') $('#lx-seek-games').value = seek.games;
   } catch { /* ignore */ }
+  renderSeekGames();
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('lichessChallenge') ?? '{}') ?? {}; } catch { /* ignore */ }
   if (saved.username) $('#lx-username').value = saved.username;
@@ -538,6 +591,7 @@ async function fillLichessSettings() {
   $('#ls-engine').value = engines.some((e) => e.id === st.engineId) ? st.engineId : engines[0]?.id ?? '';
   $('#ls-autoconnect').checked = st.autoConnect;
   $('#ls-ponder').checked = st.ponder !== false;
+  $('#ls-challenge-timeout').value = st.challengeTimeout ?? 30;
   fillGreeting(st.greeting);
   fillDraw(st.draw);
   $('#ls-server').value = st.baseUrl;
@@ -611,6 +665,7 @@ function lichessPatch() {
     engineId: $('#ls-engine').value,
     autoConnect: $('#ls-autoconnect').checked,
     ponder: $('#ls-ponder').checked,
+    challengeTimeout: +$('#ls-challenge-timeout').value || 0,
     baseUrl: $('#ls-server').value,
     greeting: Object.fromEntries(greetingInputs().map((i) => [i.dataset.greeting, i.value])),
     draw: drawPatch(),
@@ -639,7 +694,7 @@ async function saveLichessSettings() {
     lsError(err);
     return false;
   }
-  if (lxOnline()) {
+  if (lxOnline() || meOnline()) { // the time a sent challenge waits is your own account's too
     try { await api.lichess.configure(); } catch (err) { lxSetNote(errorText(err)); }
     if (patch.token || lx.settings.baseUrl !== before.baseUrl) lxSetNote('Disconnect and connect again to use the new token or server.');
   }
@@ -690,6 +745,340 @@ $('#ls-upgrade-btn').onclick = async () => {
 };
 
 // ---------------------------------------------------------------------------
+// Challenges window: comes up when a challenge arrives (to your engine's bot
+// or to you), lists every challenge waiting, each with Accept and Decline.
+// Later leaves them in the Lichess tab; the next new challenge opens it again.
+// ---------------------------------------------------------------------------
+const chPop = { seen: new Set(), busy: new Set(), error: '', reasons: new Map(), open: new Set() };
+// The messages Lichess lets a decline carry: the challenger sees the text.
+const DECLINE_REASONS = [
+  ['generic', 'No message', 'I’m not accepting challenges at the moment.'],
+  ['later', 'Not now', 'This is not the right time for me, please ask again later.'],
+  ['tooFast', 'Too fast', 'This time control is too fast for me, please challenge again with a slower game.'],
+  ['tooSlow', 'Too slow', 'This time control is too slow for me, please challenge again with a faster game.'],
+  ['timeControl', 'Other time control', 'I’m not accepting challenges with this time control.'],
+  ['rated', 'Rated only', 'Please send me a rated challenge instead.'],
+  ['casual', 'Casual only', 'Please send me a casual challenge instead.'],
+  ['standard', 'Standard chess only', 'I’m not accepting variant challenges right now.'],
+  ['variant', 'Not this variant', 'I’m not willing to play this variant right now.'],
+  ['noBot', 'No bots', 'I’m not accepting challenges from bots.'],
+  ['onlyBot', 'Bots only', 'I’m only accepting challenges from bots.'],
+];
+const chReason = (c) => chPop.reasons.get(c.id) ?? (c.supported ? 'generic' : 'standard');
+
+// What is known of the challenger: ratings at every speed, record, account.
+function challengerProfile(c) {
+  const speed = PL_SPEEDS.includes(c.speed) ? c.speed : 'blitz';
+  const entry = botLookup(c.user, speed);
+  if (entry.loading) return el('div', { className: 'ch-profile hint', textContent: `Looking ${c.user} up on Lichess…` });
+  const prof = plJSON(plInfo(entry.data, c.user)?.profile);
+  if (entry.error || !prof) return el('div', { className: 'ch-profile hint', textContent: entry.error || 'No profile found on Lichess.' });
+  const ratings = PL_SPEEDS.filter((s) => prof.perfs?.[s]?.games).map((s) => {
+    const p = prof.perfs[s];
+    return el('span', { className: 'ch-perf' + (s === c.speed ? ' on' : ''), title: `${plNum(p.games)} ${PL_LABEL[s]} games${p.prov ? ', provisional' : ''}` }, [
+      el('span', { textContent: PL_LABEL[s] }),
+      el('b', { textContent: `${p.rating}${p.prov ? '?' : ''}` }),
+      ...(p.prog ? [el('span', { className: 'pl-prog ' + (p.prog > 0 ? 'up' : 'down'), title: 'Change over the last 12 games', textContent: `${p.prog > 0 ? '▲' : '▼'}${Math.abs(p.prog)}` })] : []),
+    ]);
+  });
+  const n = prof.count;
+  const flag = flagEmoji(prof.profile?.flag);
+  const facts = [
+    n?.all ? `${plNum(n.all)} games` : '',
+    n && (n.win + n.draw + n.loss) ? `${plNum(n.win)} won · ${plNum(n.draw)} drawn · ${plNum(n.loss)} lost` : '',
+    prof.createdAt ? `joined ${plDate(prof.createdAt)}` : '',
+    prof.playTime?.total ? `${plHours(prof.playTime.total)} played` : '',
+    [flag, prof.profile?.location].filter(Boolean).join(' '),
+  ].filter(Boolean).join(' · ');
+  const base = (lx.settings?.baseUrl || 'https://lichess.org').replace(/\/+$/, '');
+  const open = chPop.open.has(c.id);
+  const more = lxButton(open ? 'Less' : 'More…', () => { if (open) chPop.open.delete(c.id); else chPop.open.add(c.id); renderChallengePop(true); }, 'small');
+  return el('div', { className: 'ch-profile' }, [
+    ...(ratings.length ? [el('div', { className: 'ch-perfs' }, ratings)] : [el('div', { className: 'hint', textContent: 'No rated games yet.' })]),
+    ...(facts ? [el('div', { className: 'ch-facts', textContent: facts })] : []),
+    ...(prof.profile?.bio ? [el('div', { className: 'ch-bio' + (open ? ' open' : ''), textContent: prof.profile.bio })] : []),
+    el('div', { className: 'ch-links' }, [more, lxLink(`${base}/@/${c.user}`, 'Profile ↗', `${c.user} on Lichess`)]),
+    ...(open ? [playerCard('', c.user, speed, entry.data), historyChart({ white: c.user }, speed, entry.data)] : []),
+  ]);
+}
+
+function waitingChallenges() {
+  const bot = lxOnline() ? (lx.status.incoming ?? []).map((c) => ({ c, who: 'engine' })) : [];
+  const mine = meOnline() ? (me.status.incoming ?? []).map((c) => ({ c, who: 'you' })) : [];
+  return [...bot, ...mine];
+}
+
+async function answerChallenge({ c, who }, accept) {
+  chPop.busy.add(c.id);
+  chPop.error = '';
+  renderChallengePop();
+  const cmd = who === 'engine' ? (accept ? 'lichessAccept' : 'lichessDecline') : (accept ? 'lichessAcctAccept' : 'lichessAcctDecline');
+  const args = { id: c.id };
+  if (!accept) args.reason = chReason(c);
+  try {
+    await api.backend(cmd, args);
+  } catch (err) {
+    chPop.error = errorText(err);
+  }
+  chPop.busy.delete(c.id);
+  renderChallengePop();
+}
+
+function renderChallengePop(redraw = false) {
+  const dlg = $('#dlg-challenges');
+  const list = waitingChallenges();
+  const ids = new Set(list.map(({ c }) => c.id));
+  for (const id of [...chPop.seen]) if (!ids.has(id)) chPop.seen.delete(id);
+  const pill = $('#challenges-pill');
+  if (!list.length) { chPop.error = ''; pill.hidden = true; if (dlg.open) dlg.close(); return; }
+  pill.textContent = list.length === 1 ? `1 challenge · ${list[0].c.user}` : `${list.length} challenges`;
+  // Only a challenge not shown before brings the window up.
+  const fresh = list.some(({ c }) => !chPop.seen.has(c.id));
+  if (!dlg.open && !fresh && !redraw) { pill.hidden = false; return; }
+  pill.hidden = true;
+  for (const id of ids) chPop.seen.add(id);
+  // Drawn again only when something shown changed: a menu stays open.
+  const key = JSON.stringify([list.map(({ c, who }) => [c.id, who, chPop.busy.has(c.id), chReason(c), chPop.open.has(c.id), botLookup(c.user, PL_SPEEDS.includes(c.speed) ? c.speed : 'blitz').at]),
+    chPop.error, pl.chartSpeed, pl.range]);
+  if (key === chPop.key && dlg.open && !redraw) return;
+  chPop.key = key;
+  const both = lxOnline() && meOnline();
+  $('#challenges-title').textContent = list.length === 1 ? 'Challenge' : `${list.length} challenges`;
+  $('#challenges-list').replaceChildren(...list.map((item) => {
+    const { c, who } = item;
+    const busy = chPop.busy.has(c.id);
+    const accept = lxButton('Accept', () => answerChallenge(item, true), 'primary');
+    accept.disabled = busy || !c.supported;
+    if (!c.supported) accept.title = who === 'engine' ? 'Your engine can only play standard chess with a clock' : 'Only standard chess can be played here';
+    const decline = lxButton('Decline', () => answerChallenge(item, false), '');
+    decline.disabled = busy;
+    const reason = el('select', { className: 'ch-reason', ariaLabel: 'Message sent with a decline' },
+      DECLINE_REASONS.map(([value, label]) => el('option', { value, textContent: label })));
+    reason.value = chReason(c);
+    const said = el('span', { className: 'ch-said' });
+    const say = () => { said.textContent = `“${DECLINE_REASONS.find(([v]) => v === reason.value)?.[2] ?? ''}”`; };
+    reason.onchange = () => { chPop.reasons.set(c.id, reason.value); say(); chPop.key = ''; };
+    reason.disabled = busy;
+    say();
+    const note = c.note && c.supported && who === 'engine' ? ` · outside your auto-accept rules (${c.note})` : '';
+    return el('div', { className: 'ch-row' }, [
+      el('div', { className: 'ch-who' }, [
+        lxWho(c.user, c.title, c.rating),
+        ...(both ? [el('span', { className: 'ch-to', textContent: who === 'engine' ? 'to your engine' : 'to you' })] : []),
+      ]),
+      el('div', { className: 'ch-meta', textContent: challengeMeta(c) + note }),
+      el('div', { className: 'ch-actions' }, [accept, decline]),
+      challengerProfile(c),
+      el('label', { className: 'ch-decline' }, [el('span', { textContent: 'Decline with' }), reason, said]),
+    ]);
+  }));
+  $('#challenges-error').textContent = chPop.error;
+  $('#challenges-error').hidden = !chPop.error;
+  $('#challenges-decline-all').hidden = list.length < 2;
+  $('#challenges-decline-all').disabled = chPop.busy.size > 0;
+  // Not modal: it floats in the corner and the board stays usable.
+  if (!dlg.open) dlg.show();
+}
+
+// Hidden: a button in the same corner brings the window back.
+$('#dlg-challenges').addEventListener('close', () => { chPop.key = ''; renderChallengePop(); });
+$('#challenges-pill').onclick = () => renderChallengePop(true);
+$('#challenges-decline-all').onclick = () => { for (const item of waitingChallenges()) answerChallenge(item, false); };
+
+// ---------------------------------------------------------------------------
+// Draw offers to your engine: when the opponent offers a draw and the
+// engine's own draw rules have not accepted it, a window asks. The offer
+// stands until the engine moves (a move without accepting declines it).
+// ---------------------------------------------------------------------------
+const drawPop = { seen: new Set(), busy: new Set(), error: '', key: '' };
+const drawOffers = () => (lxOnline() ? (lx.status.games ?? []).filter((g) => g.drawOffer === 'theirs' && !g.finished) : []);
+// One offer is one game at one move: a new offer later asks again.
+const drawKey = (g) => `${g.id}:${g.moves}`;
+
+async function answerDraw(g, yes) {
+  drawPop.busy.add(g.id);
+  drawPop.error = '';
+  renderDrawPop();
+  try {
+    await api.backend('lichessDraw', { id: g.id, yes });
+    if (!yes) drawPop.seen.add(drawKey(g) + ':no');
+  } catch (err) {
+    drawPop.error = errorText(err);
+  }
+  drawPop.busy.delete(g.id);
+  renderDrawPop();
+}
+
+function renderDrawPop() {
+  const dlg = $('#dlg-draw');
+  const list = drawOffers().filter((g) => !drawPop.seen.has(drawKey(g) + ':no'));
+  if (!list.length) { drawPop.error = ''; drawPop.key = ''; if (dlg.open) dlg.close(); return; }
+  const fresh = list.some((g) => !drawPop.seen.has(drawKey(g)));
+  if (!dlg.open && !fresh) return; // hidden: it stays hidden for these offers
+  if (fresh) sounds.play('challenge');
+  for (const g of list) drawPop.seen.add(drawKey(g));
+  const own = typeof botScore === 'function' ? botScore() : null;
+  const key = JSON.stringify([list.map((g) => [drawKey(g), drawPop.busy.has(g.id)]), drawPop.error, own && formatScore(own)]);
+  if (key === drawPop.key && dlg.open) return;
+  drawPop.key = key;
+  $('#draw-title').textContent = list.length === 1 ? 'Draw offer' : `${list.length} draw offers`;
+  $('#draw-list').replaceChildren(...list.map((g) => {
+    const busy = drawPop.busy.has(g.id);
+    const accept = lxButton('Accept draw', () => answerDraw(g, true), 'primary');
+    const decline = lxButton('Decline', () => answerDraw(g, false), '');
+    accept.disabled = decline.disabled = busy;
+    const onBoard = state?.external?.id === g.id;
+    const meta = ['Offers a draw', g.tc, g.rated ? 'rated' : 'casual', g.speed, `move ${Math.floor(g.moves / 2) + 1}`,
+      onBoard && own ? `your engine sees ${formatScore(own)} (White’s view)` : ''].filter(Boolean).join(' · ');
+    return el('div', { className: 'ch-row' }, [
+      el('div', { className: 'ch-who' }, [lxWho(g.opponent, g.opponentTitle, g.opponentRating)]),
+      el('div', { className: 'ch-meta', textContent: meta }),
+      el('div', { className: 'ch-actions' }, [accept, decline]),
+    ]);
+  }));
+  $('#draw-note').textContent = 'Your engine’s draw rules did not accept it. The offer lapses when your engine makes its move.';
+  $('#draw-error').textContent = drawPop.error;
+  $('#draw-error').hidden = !drawPop.error;
+  if (!dlg.open) dlg.show();
+}
+
+// ---------------------------------------------------------------------------
+// Engine and bot account: what is playing (the engine, how it is started and
+// its UCI options) and as whom (the bot's ratings, their change, its record
+// and rating history). Shown while connected.
+// ---------------------------------------------------------------------------
+const lxa = {
+  key: '',            // what is drawn, so a status update does not redraw it
+  probes: new Map(),  // engine id + arguments → { info, error, loading }
+  finished: -1,       // finished games seen, to read the ratings again
+  stamp: 0,           // bumps when the bot's numbers are read again
+};
+
+const lxEngine = () => engines.find((e) => e.id === lx.settings?.engineId) ?? engines[0];
+const lxaSpeed = () => pl.chartSpeed || (PL_SPEEDS.includes(lxSpeed()) ? lxSpeed() : 'blitz');
+
+// What the engine says about itself (name, author, options): asked once.
+function lxaProbe(engine) {
+  const key = `${engine.id}|${JSON.stringify(engine.args ?? [])}`;
+  let p = lxa.probes.get(key);
+  if (!p) {
+    p = { info: null, error: '', loading: true };
+    lxa.probes.set(key, p);
+    api.engines.probe(engine.id).then((info) => { p.info = info; }, (err) => { p.error = errorText(err); })
+      .finally(() => { p.loading = false; renderLichessAbout(); });
+  }
+  return p;
+}
+
+// Reads the bot's ratings again (after a game, or on Refresh).
+function lxaRefresh() {
+  const name = lx.status.account?.username?.toLowerCase();
+  if (!name) return;
+  for (const k of [...plCache.keys()]) if (k.startsWith(name + '|')) plCache.delete(k);
+  lxa.stamp++;
+  renderLichessAbout();
+}
+
+function lxaEngineCard(engine) {
+  const probe = lxaProbe(engine);
+  const info = probe.info;
+  const set = engine.options ?? {};
+  const opts = (info?.options ?? []).filter((o) => o.type !== 'button');
+  const show = (v) => (v === '' || v === '<empty>' ? '(empty)' : String(v));
+  const edit = lxButton('Options…', () => openOptions(engine));
+  edit.title = 'Change this engine’s UCI options';
+  const said = [info?.name, info?.author && `by ${info.author}`].filter(Boolean).join(' ');
+  const fact = (label, value, title = '') => el('div', { className: 'pl-fact', title }, [el('span', { textContent: label }), el('b', { textContent: value })]);
+  const facts = [
+    fact('Program', (engine.path ?? '').split(/[\\/]/).pop() || '—', engine.path ?? ''),
+    ...(engine.args?.length ? [fact('Command line', engine.args.join(' '), 'Passed to the engine when it starts')] : []),
+    fact('Thinks on their time', lx.settings?.ponder !== false ? 'On' : 'Off', 'Pondering: set in Settings → Lichess'),
+    ...(info ? [fact('UCI options', `${opts.length}${Object.keys(set).length ? ` · ${Object.keys(set).length} changed` : ''}`)] : []),
+  ];
+  const kids = [
+    el('div', { className: 'lx-about-head' }, [el('span', { className: 'lx-about-kind', textContent: 'Engine' }), edit]),
+    el('div', { className: 'lx-about-name', textContent: engine.name }),
+    ...(said && said !== engine.name ? [el('div', { className: 'lx-about-sub', textContent: said })] : []),
+    el('div', { className: 'pl-facts' }, facts),
+  ];
+  if (probe.loading) kids.push(el('p', { className: 'hint', textContent: 'Asking the engine for its options…' }));
+  else if (probe.error) kids.push(el('p', { className: 'error', textContent: `The engine did not answer: ${probe.error}` }));
+  // Options you set, whether or not the engine listed them.
+  const changed = Object.entries(set);
+  if (changed.length) {
+    kids.push(el('div', { className: 'lx-opts' }, changed.map(([name, value]) => {
+      const def = opts.find((o) => o.name === name)?.default;
+      return el('span', { className: 'lx-opt set', title: def != null ? `The engine’s default is ${show(def)}` : '' }, [`${name} `, el('b', { textContent: show(value) })]);
+    })));
+  } else if (info) {
+    kids.push(el('p', { className: 'hint', textContent: opts.length ? 'Every option is at the engine’s default.' : 'This engine has no options.' }));
+  }
+  if (opts.length) {
+    const all = el('details', { className: 'lx-opts-all' }, [
+      el('summary', { textContent: `All ${opts.length} options` }),
+      el('div', { className: 'lx-opt-table' }, opts.flatMap((o) => {
+        const isSet = o.name in set;
+        return [
+          el('span', { className: 'k' + (isSet ? ' set' : ''), textContent: o.name }),
+          el('span', { className: 'v' + (isSet ? ' set' : ''), textContent: show(set[o.name] ?? o.default), title: isSet ? `Default ${show(o.default)}` : 'Default' }),
+        ];
+      })),
+    ]);
+    all.open = lxa.allOpen === true;
+    all.ontoggle = () => { lxa.allOpen = all.open; };
+    kids.push(all);
+  }
+  return kids;
+}
+
+function lxaBotCard(name) {
+  const speed = lxaSpeed();
+  const entry = botLookup(name, speed);
+  const refresh = lxButton('Refresh', lxaRefresh);
+  refresh.title = 'Read the ratings again; they are also read after each game';
+  refresh.disabled = entry.loading;
+  const head = el('div', { className: 'lx-about-head' }, [el('span', { className: 'lx-about-kind', textContent: 'Bot account' }), refresh]);
+  if (entry.loading) return [head, el('p', { className: 'hint', textContent: `Looking ${name} up on Lichess…` })];
+  if (entry.error) return [head, el('p', { className: 'error', textContent: entry.error })];
+  return [head, playerCard('', name, speed, entry.data), historyChart({ white: name }, speed, entry.data)];
+}
+
+function renderLichessAbout() {
+  const box = $('#lx-about');
+  if (!box || !lxOnline()) return;
+  const engine = lxEngine();
+  const name = lx.status.account?.username ?? '';
+  $('#lx-about-summary').textContent = [engine?.name, name].filter(Boolean).join(' · ');
+  if (!box.open) { lxa.key = ''; return; }
+  // A finished game changes the ratings: read them again shortly after.
+  const finished = (lx.status.games ?? []).filter((g) => g.finished).length;
+  if (lxa.finished >= 0 && finished > lxa.finished) setTimeout(lxaRefresh, 4000);
+  lxa.finished = finished;
+  const probe = engine ? lxaProbe(engine) : null;
+  const entry = name ? botLookup(name, lxaSpeed()) : null;
+  const key = JSON.stringify([engine, probe?.loading, probe?.error, lx.settings?.ponder, name, lxaSpeed(), pl.range,
+    entry?.loading, entry?.error, entry?.at, lxa.stamp, document.documentElement.dataset.theme]);
+  if (key === lxa.key) return;
+  lxa.key = key;
+  $('#lx-about-engine').replaceChildren(...(engine ? lxaEngineCard(engine) : [el('p', { className: 'hint', textContent: 'No engine is chosen.' })]));
+  $('#lx-about-bot').replaceChildren(...(name ? lxaBotCard(name) : [el('p', { className: 'hint', textContent: 'No account yet.' })]));
+}
+window.renderLichessAbout = renderLichessAbout;
+
+$('#lx-about').open = localStorage.getItem('lichessAbout') !== 'closed';
+$('#lx-about').addEventListener('toggle', () => {
+  try { localStorage.setItem('lichessAbout', $('#lx-about').open ? 'open' : 'closed'); } catch { /* ignore */ }
+  renderLichessAbout();
+});
+
+// An engine's options were saved: the Lichess engine takes them up.
+window.lichessEngineChanged = async (id) => {
+  if (lxEngine()?.id !== id) return;
+  if (lxOnline()) { try { await api.lichess.configure(); } catch (err) { lxSetNote(errorText(err)); } }
+  renderLichessAbout();
+};
+
+// ---------------------------------------------------------------------------
 // Online bots: who is on Lichess now, their ratings and what they are doing,
 // with Challenge (your engine, or you), Watch and a link to the profile.
 // ---------------------------------------------------------------------------
@@ -699,6 +1088,7 @@ const ob = {
   shown: 50,         // rows drawn (Show more adds 50)
   open: new Set(),   // ids with details open
   sent: new Map(),   // id → note after a challenge
+  mark: { engine: null, you: null }, // the bot just challenged, until the status names it
   loading: false,
   timer: null,
 };
@@ -814,6 +1204,8 @@ function renderOnlineBots() {
   const tcYou = `${+$('#lx-me-time').value / 60}+${$('#lx-me-inc').value}`;
   const eBusy = engineOn ? engineBusy() : '';
   const mBusy = youOn ? meBusy() : '';
+  const eOut = engineOn ? obChallenged('engine') : null;
+  const yOut = youOn ? obChallenged('you') : null;
   const rows = list.slice(0, ob.shown).map((b) => {
     const name = obName(b);
     const st = ob.status.get(b.id);
@@ -840,15 +1232,25 @@ function renderOnlineBots() {
       el('span', { className: 'doing' + (st?.playing && !sent ? ' playing' : ''), textContent: doing }),
     ]);
     const acts = [];
-    const engineBtn = lxButton('Challenge', () => obChallenge(b, 'engine'), 'small primary');
-    engineBtn.disabled = !engineOn || Boolean(eBusy);
+    // The bot a challenge went to shows it; every other button waits.
+    const key = name.toLowerCase();
+    const eMine = eOut && eOut.name === key;
+    const engineBtn = lxButton(eMine ? (eOut.sending ? 'Challenging…' : 'Challenged') : 'Challenge', () => obChallenge(b, 'engine'), 'small primary' + (eMine ? ' challenged' : ''));
+    engineBtn.disabled = !engineOn || Boolean(eBusy) || Boolean(eOut) || ob.sending;
     engineBtn.title = !engineOn ? 'Connect your engine’s Bot account (below) to challenge with it'
-      : eBusy || `Challenge ${name} with your engine: ${tcEngine}, from “Challenge a player” below`;
+      : eMine ? `Your engine challenged ${name}: waiting for an answer. Cancel it under “Challenge a player” below`
+        : eOut ? `Your engine's challenge to ${eOut.shown} is waiting for an answer: cancel it to challenge someone else`
+          : eBusy || `Challenge ${name} with your engine: ${tcEngine}, from “Challenge a player” below`;
+    if (eMine) engineBtn.setAttribute('aria-pressed', 'true');
     acts.push(engineBtn);
     if (youOn) {
-      const youBtn = lxButton('Play', () => obChallenge(b, 'you'), 'small');
-      youBtn.disabled = Boolean(mBusy);
-      youBtn.title = mBusy || `Challenge ${name} to play you: ${tcYou}, from your Challenge a friend settings`;
+      const yMine = yOut && yOut.name === key;
+      const youBtn = lxButton(yMine ? (yOut.sending ? 'Challenging…' : 'Challenged') : 'Play', () => obChallenge(b, 'you'), 'small' + (yMine ? ' challenged' : ''));
+      youBtn.disabled = Boolean(mBusy) || Boolean(yOut) || ob.sending;
+      youBtn.title = yMine ? `You challenged ${name}: waiting for an answer. Cancel it under your challenges`
+        : yOut ? `Your challenge to ${yOut.shown} is waiting for an answer: cancel it to challenge someone else`
+          : mBusy || `Challenge ${name} to play you: ${tcYou}, from your Challenge a friend settings`;
+      if (yMine) youBtn.setAttribute('aria-pressed', 'true');
       acts.push(youBtn);
     }
     const watching = lx.watch?.active && lx.watch.user?.toLowerCase() === name.toLowerCase();
@@ -888,11 +1290,26 @@ function renderOnlineBots() {
   $('#lx-online-more').hidden = list.length <= ob.shown;
 }
 
+// Who a challenge from the list is out to: { name (lower case), shown, sending }.
+// The status names it once Lichess has it; until then the click is remembered.
+function obChallenged(who) {
+  const out = (who === 'engine' ? lx.status : me.status).outgoing?.[0];
+  const m = ob.mark[who];
+  if (out) {
+    if (m) m.seen = true;
+    return { name: String(out.user ?? '').toLowerCase(), shown: out.user, sending: false };
+  }
+  if (m && !m.seen && (m.sending || Date.now() - m.at < 5000)) return { name: m.name.toLowerCase(), shown: m.name, sending: m.sending };
+  ob.mark[who] = null;
+  return null;
+}
+
 async function obChallenge(b, who) {
   const name = obName(b);
   if (ob.sending) return;
   ob.sending = true;
-  for (const btn of $('#lx-online-list').querySelectorAll('.acts button')) btn.disabled = true;
+  ob.mark[who] = { name, sending: true, seen: false, at: Date.now() };
+  renderOnlineBots();
   let ok;
   if (who === 'engine') {
     ok = await lichessCommand('lichessChallenge', {
@@ -908,6 +1325,11 @@ async function obChallenge(b, who) {
   if (ok) {
     ob.sent.set(b.id, who === 'engine' ? 'Challenged by your engine' : 'Challenged by you');
     setTimeout(() => { ob.sent.delete(b.id); renderOnlineBots(); }, 15000);
+    // Sent: the button stays "Challenged" until the status takes over.
+    if (ob.mark[who]) { ob.mark[who].sending = false; ob.mark[who].at = Date.now(); }
+    setTimeout(() => ob.bots && renderOnlineBots(), 5100);
+  } else {
+    ob.mark[who] = null;
   }
   ob.sending = false;
   renderOnlineBots();
@@ -984,6 +1406,7 @@ async function meCommand(cmd, args) {
     return result ?? true;
   } catch (err) {
     meSetNote(errorText(err));
+    if (cmd === 'lichessAcctChallenge') challengeFailed(err, args, 'you');
     return null;
   }
 }
@@ -997,7 +1420,9 @@ function lichessAccountStatus(next) {
   const offers = (st) => new Set((st.games ?? []).flatMap((g) => [g.draw === 'theirs' && g.id + 'd', g.takeback === 'theirs' && g.id + 't']).filter(Boolean));
   const had = offers(prev);
   if ([...offers(next)].some((o) => !had.has(o))) sounds.play('challenge');
+  if (next.message && next.message !== prev.message && challengeNews(next.message)) notify(next.message, { title: 'Challenge', kind: 'warn' });
   renderMe();
+  renderChallengePop();
   if (ob.bots) renderOnlineBots(); // Play needs you signed in
   if (state?.external?.kind === 'play') renderPlayers(); // the bar's buttons follow the offers
   else renderPlayOffer();
@@ -1071,6 +1496,7 @@ function renderMe() {
     el('span', { className: 'lx-meta', textContent: 'Waiting for' }),
     lxWho(c.user, c.title, c.rating),
     el('span', { className: 'lx-meta', textContent: challengeMeta(c) }),
+    expiryNote(c),
     el('span', { className: 'lx-actions' }, [lxButton('Cancel', () => meCommand('lichessAcctCancel', { id: c.id }))]),
   ])));
   $('#lx-me-games').replaceChildren(...s.games.map((g) => {

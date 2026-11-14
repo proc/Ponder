@@ -13,6 +13,10 @@ const PIECE_NAMES = { k: 'king', q: 'queen', r: 'rook', b: 'bishop', n: 'knight'
 // from its own tallest piece.
 // ---------------------------------------------------------------------------
 const DEFAULT_THEME = 'minimalist';
+// On macOS the window has no title bar: the page leaves a strip for the
+// window's buttons (see html.mac-chrome in style.css).
+if (/Electron/.test(navigator.userAgent) && /Mac/.test(navigator.platform)) document.documentElement.classList.add('mac-chrome');
+
 const themes = {};    // name -> { pieces: { "white-king": { url, h, pad } }, maxH }
 let theme = DEFAULT_THEME;
 
@@ -159,6 +163,41 @@ let viewPly = null;      // null = follow the live position, else a ply index
 // a file). branches: ply p → first moves of lines replacing move p+1.
 let tree = { branches: new Map() };
 let varNode = null;      // the variation move shown, or null on the game's moves
+// Your annotations of the game's moves, by ply (1 = the first move): each
+// { nag, pos, other, comment, cmds }. Moves in variations carry theirs as
+// node.ann. before is the comment ahead of the first move.
+let notes = { before: null, moves: new Map(), dirty: false };
+const NAG_MOVE = { 1: '!', 2: '?', 3: '!!', 4: '??', 5: '!?', 6: '?!' };
+const NAG_POS = { 10: '=', 13: '∞', 14: '⩲', 15: '⩱', 16: '±', 17: '∓', 18: '+−', 19: '−+' };
+const NAG_KIND = { 1: 'good', 3: 'good', 5: 'interesting', 6: 'inaccuracy', 2: 'mistake', 4: 'blunder' };
+const NAG_TITLE = { 1: 'Good move', 2: 'Mistake', 3: 'Brilliant move', 4: 'Blunder', 5: 'Interesting move', 6: 'Dubious move',
+  10: 'Equal', 13: 'Unclear', 14: 'White is slightly better', 15: 'Black is slightly better', 16: 'White is better', 17: 'Black is better', 18: 'White is winning', 19: 'Black is winning' };
+const KIND_LABEL = { good: 'Good move', interesting: 'Interesting', inaccuracy: 'Inaccuracy', mistake: 'Mistake', blunder: 'Blunder' };
+// A comment as a row of the moves list, in the colour of its kind (blunder,
+// mistake, inaccuracy, good, interesting); a kind named at its start is bold.
+// ai: the comment is the AI model's (AI annotate, the live commentary): it
+// wears an AI badge and its own look.
+function commentRow(text, kind = '', tag = 'div', cls = 'comment user', ai = false) {
+  const label = Object.values(KIND_LABEL).concat('Brilliant move', 'Dubious move').find((l) => text.startsWith(l + '.'));
+  const kids = label ? [el('b', { textContent: label + '.' }), text.slice(label.length + 1)] : [text];
+  if (ai) {
+    const badge = el('span', { className: 'ai-badge', title: 'Written by the AI model. Edit it and it becomes yours.' });
+    badge.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><g stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 3v18"/><path d="M3 12h18"/><path d="M5.6 5.6l12.8 12.8"/><path d="M18.4 5.6L5.6 18.4"/></g></svg>';
+    badge.append('AI');
+    badge.setAttribute('aria-label', 'From the AI');
+    kids.unshift(badge);
+  }
+  const row = el(tag, { className: `${cls}${kind ? ' ' + kind : ''}${ai ? ' ai' : ''}` }, kids);
+  if (kind) row.title = KIND_LABEL[kind];
+  return row;
+}
+// The glyphs of an annotation, as elements for a move button.
+function annGlyphs(a) {
+  const out = [];
+  if (a?.nag) out.push(el('span', { className: `glyph ${NAG_KIND[a.nag]}`, textContent: NAG_MOVE[a.nag], title: NAG_TITLE[a.nag] }));
+  if (a?.pos) out.push(el('span', { className: 'glyph pos', textContent: NAG_POS[a.pos], title: NAG_TITLE[a.pos] }));
+  return out;
+}
 const positionCache = new Map(); // fen → { legal, check, status }
 let puzzleView = null;   // set by puzzles.js while a puzzle is on the board
 let engineInfo = {};     // latest search info per side
@@ -167,6 +206,37 @@ const engineMsgOpen = {}; // side -> whether all messages are shown
 let engineLineOpen = {};  // side -> the plies whose line is shown in full
 const MAX_STRINGS = 12;
 let drag = null;
+
+// A notification: a card in the top right corner that goes by itself after
+// a while (errors stay longer), or when closed. The same text twice in a
+// row shows once.
+function notify(text, { title = '', kind = 'error', ms } = {}) {
+  if (!text) return;
+  let box = document.querySelector('#toasts');
+  if (!box) {
+    box = el('div', { id: 'toasts' });
+    box.setAttribute('aria-live', 'assertive');
+    document.body.append(box);
+  }
+  const same = [...box.children].find((t) => t.dataset.key === `${kind}|${title}|${text}`);
+  if (same) same.remove();
+  const close = el('button', { type: 'button', className: 'toast-close', textContent: '✕', title: 'Dismiss' });
+  close.setAttribute('aria-label', 'Dismiss');
+  const toast = el('div', { className: `toast is-${kind}` }, [
+    el('div', { className: 'toast-body' }, [...(title ? [el('b', { textContent: title })] : []), el('span', { textContent: text })]),
+    close,
+  ]);
+  toast.dataset.key = `${kind}|${title}|${text}`;
+  toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  const gone = () => { toast.classList.add('leaving'); setTimeout(() => toast.remove(), 220); };
+  close.onclick = gone;
+  let timer = setTimeout(gone, ms ?? (kind === 'error' ? 9000 : 6000));
+  // Reading it keeps it there.
+  toast.onmouseenter = () => clearTimeout(timer);
+  toast.onmouseleave = () => { timer = setTimeout(gone, 2500); };
+  box.append(toast);
+  while (box.children.length > 4) box.firstElementChild.remove();
+}
 
 const errorText = (err) => String(err?.message ?? err)
   .replace(/^Error invoking remote method '[^']+': /, '').replace(/^Error: /, '');
@@ -404,6 +474,7 @@ function renderCaptured() {
       for (let i = 0; i < taken[t]; i++) {
         const img = pieceImage(t, side !== 'white');
         img.className = 'cap-piece';
+        img.dataset.type = t;
         group.append(img);
       }
       groups.push(group);
@@ -413,6 +484,12 @@ function renderCaptured() {
     box.replaceChildren(...groups);
     const names = ['p', 'n', 'b', 'r', 'q'].filter((t) => taken[t]).map((t) => `${taken[t]} ${PIECE_NAMES[t]}${taken[t] > 1 ? 's' : ''}`);
     box.title = names.length ? `Captured: ${names.join(', ')}${lead > 0 ? ` · ahead by ${lead}` : ''}` : '';
+    // A piece still flying here has its place kept empty in the new row.
+    for (const flight of typeof capFlights === 'undefined' ? [] : capFlights) {
+      if (flight.captor !== side) continue;
+      const place = [...box.querySelectorAll('.cap-piece')].filter((img) => img.dataset.type === flight.type).at(-1);
+      if (place) { place.style.visibility = 'hidden'; flight.place = place; }
+    }
   }
 }
 
@@ -502,9 +579,14 @@ function animateBoard(before, elapsed = 0) {
   };
   const layer = $('.pieces', boardEl);
   for (const sq of change.captured) {
-    // The taken piece stays a moment and fades under the arriving one.
     const [col, row] = at(sq);
     const p = before[sq];
+    // The taken piece lifts off its square and flies, shrinking, into the
+    // captured pieces of the player who took it. (Once per capture: a
+    // redraw mid-flight leaves it flying.)
+    if (!elapsed && flyCaptured(p, col, row)) continue;
+    if (elapsed && document.querySelector('.cap-flyer')) continue;
+    // No row to fly to: it stays a moment and fades under the arriving one.
     const ghost = el('div', { className: 'slot fading' }, [pieceImage(p.toLowerCase(), p === p.toUpperCase())]);
     ghost.style.left = col * 12.5 + '%';
     ghost.style.top = row * 12.5 + '%';
@@ -530,6 +612,97 @@ function animateBoard(before, elapsed = 0) {
   }
 }
 
+// Sends a captured piece from its square (col, row on the board as shown) to
+// its place among the captor's captured pieces. False when there is no such
+// place (a puzzle, no game), so the caller fades it instead.
+const capFlights = new Set(); // pieces in the air: { captor, type, place }
+function flyCaptured(piece, col, row) {
+  const white = piece === piece.toUpperCase();
+  const type = piece.toLowerCase();
+  // White's pieces are taken by Black, and shown on Black's bar.
+  const captor = white ? 'black' : 'white';
+  const bar = $(captor === (flipped ? 'black' : 'white') ? '#player-bottom' : '#player-top');
+  // Its place in the row: the last piece of its kind there (just added).
+  const kind = PIECE_NAMES[type];
+  const places = [...bar.querySelectorAll('.cap-piece')].filter((img) => img.dataset.type === type);
+  const place = places.at(-1);
+  const board = boardEl.getBoundingClientRect();
+  if (!place || !board.width || !kind) return false;
+  const size = board.width / 8;
+  const flyer = pieceImage(type, white);
+  flyer.className = 'cap-flyer';
+  flyer.alt = '';
+  Object.assign(flyer.style, { left: `${board.left + col * size}px`, top: `${board.top + row * size}px`, width: `${size}px`, height: `${size}px` });
+  document.body.append(flyer);
+  const to = place.getBoundingClientRect();
+  const dx = to.left + to.width / 2 - (board.left + (col + 0.5) * size);
+  const dy = to.top + to.height / 2 - (board.top + (row + 0.5) * size);
+  const scale = Math.max(0.12, to.width / size);
+  // The place stays empty until the piece lands in it (also when the row
+  // is drawn again meanwhile: renderCaptured keeps it hidden).
+  const flight = { captor, type, place };
+  capFlights.add(flight);
+  place.style.visibility = 'hidden';
+  const land = () => { flyer.remove(); flight.place.style.visibility = ''; capFlights.delete(flight); };
+  const ms = Math.max(450, Math.min(900, ANIM_SPEEDS[animSpeed] * 3.2));
+  const anim = flyer.animate([
+    { transform: 'translate(0, 0) scale(1)', opacity: 1, offset: 0 },
+    { transform: `translate(0, ${-size * 0.38}px) scale(1.14)`, opacity: 1, offset: 0.3, easing: 'cubic-bezier(.5, 0, .3, 1)' },
+    { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, opacity: 0.35, offset: 1 },
+  ], { duration: ms, easing: 'cubic-bezier(.2, .7, .3, 1)' });
+  anim.onfinish = land;
+  anim.oncancel = land;
+  setTimeout(land, ms + 200);
+  return true;
+}
+
+// Pieces under attack: for each piece, how many enemy pieces could capture
+// it less how many of its own side guard it (by how the pieces move; a
+// pinned piece still counts, one lined up behind another does not). Only
+// pieces with more attackers than defenders are in the result, each with
+// { net, attackers, defenders }.
+let attackMarks = (() => { try { return localStorage.getItem('attackMarks') !== 'off'; } catch { return true; } })();
+function attackCounts(pieces) {
+  const at = (f, r) => (f >= 0 && f < 8 && r >= 1 && r <= 8 ? pieces[FILES[f] + r] : undefined);
+  const all = {};
+  const hit = (f, r, white) => {
+    const target = at(f, r);
+    if (!target) return;
+    const c = all[FILES[f] + r] ??= { attackers: 0, defenders: 0 };
+    if ((target === target.toUpperCase()) !== white) c.attackers++;
+    else c.defenders++;
+  };
+  const KNIGHT = [[1, 2], [2, 1], [2, -1], [1, -2], [-1, -2], [-2, -1], [-2, 1], [-1, 2]];
+  const DIAG = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+  const LINE = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  for (const [sq, piece] of Object.entries(pieces)) {
+    const f = FILES.indexOf(sq[0]);
+    const r = +sq[1];
+    const white = piece === piece.toUpperCase();
+    const slide = (dirs) => {
+      for (const [df, dr] of dirs) {
+        for (let x = f + df, y = r + dr; x >= 0 && x < 8 && y >= 1 && y <= 8; x += df, y += dr) {
+          if (at(x, y)) { hit(x, y, white); break; }
+        }
+      }
+    };
+    switch (piece.toLowerCase()) {
+      case 'p': hit(f - 1, r + (white ? 1 : -1), white); hit(f + 1, r + (white ? 1 : -1), white); break;
+      case 'n': for (const [df, dr] of KNIGHT) hit(f + df, r + dr, white); break;
+      case 'k': for (const [df, dr] of [...DIAG, ...LINE]) hit(f + df, r + dr, white); break;
+      case 'b': slide(DIAG); break;
+      case 'r': slide(LINE); break;
+      case 'q': slide([...DIAG, ...LINE]); break;
+      default:
+    }
+  }
+  const counts = {};
+  for (const [sq, c] of Object.entries(all)) {
+    if (c.attackers > c.defenders) counts[sq] = { ...c, net: c.attackers - c.defenders };
+  }
+  return counts;
+}
+
 function renderBoard() {
   renderCaptured();
   const before = lastPieces;
@@ -540,6 +713,7 @@ function renderBoard() {
   const turnKing = shownFen().split(' ')[1] === 'w' ? 'K' : 'k';
   const inCheck = /[+#]$/.test(lastMoveSan());
 
+  const attacked = attackMarks ? attackCounts(pieces) : {};
   const nodes = [];
   const slots = [];
   for (let row = 0; row < 8; row++) {
@@ -565,6 +739,15 @@ function renderBoard() {
         slot.dataset.sq = sq;
         slot.style.left = col * 12.5 + '%';
         slot.style.top = row * 12.5 + '%';
+        if (attacked[sq]) {
+          const { net: n, attackers, defenders } = attacked[sq];
+          const mark = el('span', { className: 'attack-mark' + (n > 1 ? ' many' : ''),
+            title: `${attackers} attacking, ${defenders} defending: ${n} more attacker${n === 1 ? '' : 's'} than defenders` });
+          mark.innerHTML = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="4.6" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 1v3.2M8 11.8V15M1 8h3.2M11.8 8H15" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+          mark.append(el('b', { textContent: `+${n}` }));
+          mark.setAttribute('aria-label', mark.title);
+          slot.append(mark);
+        }
         slots.push(slot);
         node.classList.add('occupied');
       }
@@ -852,13 +1035,27 @@ function renderMoves() {
   const ply = shownPly();
   const num = () => el('span', { className: 'num', textContent: number });
   const empty = (text = '') => el('span', { className: 'move empty', textContent: text });
+  // The annotation of the move shown opens up: larger, and easier to read.
+  // It grows into place when the move is gone to, not each time the list
+  // is drawn again (typing a comment draws it at every key).
+  const at = `${state.game}:${ply}:${varNode ? varNode.fen : ''}`;
+  const arrived = at !== renderMoves.at;
+  renderMoves.at = at;
+  const shown = (row, on) => { if (on) row.classList.add('current', ...(arrived ? ['opening'] : [])); return row; };
+  if (notes.before?.comment) nodes.push(shown(commentRow(notes.before.comment, '', 'div', 'comment user', Boolean(notes.before.ai)), ply === 0 && !varNode));
   state.moves.forEach((move, i) => {
     const white = whiteNext;
     if (white) nodes.push(num());
     else if (!open) nodes.push(num(), empty('…')); // Black first, or after a comment
     const j = review?.judgments?.[i];
     const node = el('button', { type: 'button', className: 'move' }, sanLabel(move.san, white));
-    if (j?.glyph) {
+    const a = notes.moves.get(i + 1);
+    // Your own mark on the move stands in for the computer's.
+    if (a?.nag || a?.pos) node.append(...annGlyphs(a));
+    // The colour of the move's annotation: your mark, else the computer's.
+    const kind = NAG_KIND[a?.nag] ?? j?.kind ?? '';
+    if (a?.nag) node.classList.add(kind);
+    if (j?.glyph && !a?.nag) {
       node.append(el('span', { className: `glyph ${j.kind}`, textContent: j.glyph }));
       node.classList.add(j.kind);
     }
@@ -870,14 +1067,14 @@ function renderMoves() {
     nodes.push(node);
     open = white;
     const alts = tree.branches.get(i);
-    if (j?.kind || alts?.length) {
+    if (j?.kind || alts?.length || a?.comment) {
       if (white) nodes.push(empty());
       open = false;
     }
-    if (j?.kind) {
-      if (white) nodes.push(empty());
+    if (a?.comment) nodes.push(shown(commentRow(a.comment, kind, 'div', 'comment user', Boolean(a.ai)), i + 1 === ply && !varNode));
+    if (j?.kind && !a?.comment) { // a comment on the move says it already
       const kind = { inaccuracy: 'Inaccuracy', mistake: 'Mistake', blunder: 'Blunder' }[j.kind];
-      const comment = el('div', { className: `comment ${j.kind}` }, [el('b', { textContent: kind + '.' })]);
+      const comment = shown(el('div', { className: `comment ${j.kind}` }, [el('b', { textContent: kind + '.' })]), i + 1 === ply && !varNode);
       if (j.best) {
         const best = el('button', { type: 'button', className: 'best', title: 'Show the position before this move' }, sanLabel(j.best, white));
         best.onclick = () => showPly(i);
@@ -906,6 +1103,8 @@ function renderMoves() {
   $('#nav-next').disabled = varNode ? !varNode.children.length : ply === livePly();
   $('#nav-last').disabled = ply === livePly() && !varNode;
   window.renderReview?.();
+  window.renderAnnotate?.();
+  window.autosaveAnnotations?.();
 }
 
 function showPly(ply) {
@@ -982,6 +1181,9 @@ async function explore(uci) {
     ply: (parent ? parent.ply : base) + 1 };
   siblings.push(node);
   if (!parent) tree.branches.set(base, siblings);
+  // A line tried on the board is not saved by itself: it waits for Save
+  // (or for a comment or mark on one of its moves, which keeps it).
+  notes.loose = true;
   goNode(node);
 }
 
@@ -1022,6 +1224,7 @@ function deleteLine(node) {
   const i = list?.indexOf(node) ?? -1;
   if (i < 0) return;
   list.splice(i, 1);
+  notes.loose = true; // a line taken off: written at the next save
   if (!node.parent && !list.length) tree.branches.delete(node.base);
   // Leave the line if we are in it.
   for (let n = varNode; n; n = n.parent) {
@@ -1043,17 +1246,21 @@ function lineElements(first) {
   const move = (node, numbered) => {
     const { n, white } = plyNumber(node.ply);
     if (white || numbered) out.push(el('span', { className: 'vnum', textContent: white ? `${n}.` : `${n}…` }));
-    const b = el('button', { type: 'button', className: 'vmove' + (node === varNode ? ' current' : '') }, sanLabel(node.san, white));
+    const b = el('button', { type: 'button', className: 'vmove' + (node === varNode ? ' current' : '') }, [...sanLabel(node.san, white), ...annGlyphs(node.ann)]);
     b.onclick = () => goNode(node);
     out.push(b);
+    if (node.ann?.comment) {
+      const row = commentRow(node.ann.comment, NAG_KIND[node.ann.nag] ?? '', 'span', 'vcomment');
+      if (node === varNode) row.classList.add('current');
+      out.push(row);
+    }
+    return Boolean(node.ann?.comment);
   };
-  move(first, true);
+  let renumber = move(first, true);
   let cur = first;
-  let renumber = false;
   while (cur.children.length) {
     const [main, ...alts] = cur.children;
-    move(main, renumber);
-    renumber = false;
+    renumber = move(main, renumber);
     for (const alt of alts) {
       out.push(el('span', { className: 'vsub' }, ['(', ...lineElements(alt), ')']));
       renumber = true;
@@ -1064,22 +1271,29 @@ function lineElements(first) {
 }
 
 // The same line as PGN text.
-function lineText(first) {
+// kept: only the moves that are the game's to keep (node.keep: from its
+// file, annotated, or saved by hand), not lines merely tried on the board.
+function lineText(first, kept = false) {
   const out = [];
   const move = (node, numbered) => {
     const { n, white } = plyNumber(node.ply);
     if (white) out.push(`${n}.`);
     else if (numbered) out.push(`${n}...`);
     out.push(node.san);
+    const a = node.ann;
+    for (const nag of [a?.nag, a?.pos, ...(a?.other ?? [])]) if (nag) out.push(`$${nag}`);
+    const text = [a?.cmds, a?.comment].filter(Boolean).join(' ').replace(/[{}]/g, '').trim();
+    if (text) out.push(`{ ${text} }`);
+    return Boolean(text);
   };
-  move(first, true);
+  let renumber = move(first, true);
   let cur = first;
-  let renumber = false;
-  while (cur.children.length) {
-    const [main, ...alts] = cur.children;
-    move(main, renumber);
-    renumber = false;
-    for (const alt of alts) { out.push(`(${lineText(alt)})`); renumber = true; }
+  for (;;) {
+    const next = kept ? cur.children.filter((c) => c.keep) : cur.children;
+    if (!next.length) break;
+    const [main, ...alts] = next;
+    renumber = move(main, renumber);
+    for (const alt of alts) { out.push(`(${lineText(alt, kept)})`); renumber = true; }
     cur = main;
   }
   return out.join(' ');
@@ -1116,8 +1330,26 @@ function syncZenButton() {
 }
 syncZenButton();
 
+// The speaker by the board: sounds on or off, the same switch as Settings →
+// General → Sounds.
+function syncSoundButton() {
+  const on = sounds.enabled;
+  const b = $('#btn-sound');
+  b.setAttribute('aria-pressed', String(on));
+  b.classList.toggle('muted', !on);
+  b.title = on ? 'Sounds are on: click to mute (M)' : 'Sounds are off: click to turn them on (M)';
+  if ($('#sound-on')) $('#sound-on').checked = on;
+}
+function toggleSounds() {
+  sounds.setEnabled(!sounds.enabled);
+  syncSoundButton();
+  if (sounds.enabled) sounds.play('move'); // heard at once: they are back
+}
+$('#btn-sound').onclick = toggleSounds;
+syncSoundButton();
+
 window.addEventListener('keydown', (e) => {
-  if (document.querySelector('dialog[open]') || !state) return;
+  if (document.querySelector('dialog:modal') || !state) return;
   if (e.key === 'ArrowLeft') stepBack();
   else if (e.key === 'ArrowRight') stepForward();
   else if (e.key === 'ArrowUp') showPly(0);
@@ -1128,6 +1360,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'p' || e.key === 'P') toggleAnalysisHold();
   else if (e.key === 'f' || e.key === 'F') $('#btn-flip').click();
   else if (e.key === 'z' || e.key === 'Z') toggleZen();
+  else if (e.key === 'm' || e.key === 'M') toggleSounds();
   else if (e.key === 'l' || e.key === 'L') $('#btn-analysis').click();
   else if (e.key === 'b' || e.key === 'B') takeback();
   else if (e.key === '?') $('#dlg-keys').showModal();
@@ -1155,6 +1388,77 @@ function formatCount(n) {
 // current line, a log of the search (one row per depth, newest first) and
 // the engine's own messages. The panels stay in place so their size is kept.
 let engineLog = {}; // side -> [{ ply, depth, score, nodes, line }]
+// What each engine's searches came to over the game, for its window's
+// statistics: side -> { moves: ply -> { depth, nodes, nps, hit }, pondered }.
+let engineSearch = {};
+
+// A ponder hit: the opponent played the reply the engine was thinking
+// about. A label rises from the piece that just moved and fades, once.
+const ponderHitsShown = new Set();
+function popPonderHit(data) {
+  const key = `${state?.game}:${data.side}:${data.ply}`;
+  if (!state || ponderHitsShown.has(key)) return;
+  ponderHitsShown.add(key);
+  // Only for the move just played, on the live board.
+  const move = state.moves[data.ply - 1];
+  if (!move || data.ply !== state.moves.length || !isLive()) return;
+  sounds.play('ponderhit'); // heard in zen mode too, where the label is not shown
+  if (document.body.classList.contains('zen')) return;
+  const to = move.uci.slice(2, 4);
+  const file = to.charCodeAt(0) - 97;
+  const rank = +to[1];
+  const col = flipped ? 7 - file : file;
+  const row = flipped ? rank - 1 : 8 - rank;
+  const pop = el('div', { className: 'ponder-pop', textContent: 'Ponder hit' });
+  pop.setAttribute('role', 'status');
+  pop.title = `${state.players?.[data.side]?.name ?? 'The engine'} expected this move and was already thinking about its answer`;
+  // Centred on the piece, but kept inside the board on the edge files.
+  pop.style.left = `${Math.min(86, Math.max(14, (col + 0.5) * 12.5))}%`;
+  pop.style.top = `${row * 12.5}%`;
+  $('.board-wrap').append(pop);
+  const done = () => pop.remove();
+  pop.addEventListener('animationend', done);
+  setTimeout(done, 2500); // in case animations are off
+}
+
+// Every line of a search counts: the last one for a move is what it reached.
+function noteEngineSearch(data) {
+  if (data.ply == null) return;
+  const s = engineSearch[data.side] ??= { moves: new Map(), pondered: new Set() };
+  if (data.pondering) { s.pondered.add(data.ply); return; }
+  if (!data.depth && !data.ponderHit) return;
+  const m = s.moves.get(data.ply) ?? { depth: 0, nodes: 0, nps: 0, hit: false };
+  if (data.depth) m.depth = data.depth;
+  if (data.nodes) m.nodes = data.nodes;
+  if (data.nps) m.nps = data.nps;
+  if (data.ponderHit) m.hit = true;
+  s.moves.set(data.ply, m);
+}
+
+// The averages under an engine window's header.
+function engineSummary(side) {
+  const s = engineSearch[side];
+  const moves = [...(s?.moves.values() ?? [])].filter((m) => m.depth > 0);
+  if (!moves.length) return null;
+  const avg = (key) => {
+    const have = moves.filter((m) => m[key] > 0);
+    return have.length ? have.reduce((sum, m) => sum + m[key], 0) / have.length : 0;
+  };
+  const stat = (label, value, title) => el('span', { className: 'engine-stat', title }, [el('span', { textContent: label }), el('b', { textContent: value })]);
+  const out = [stat('Avg depth', avg('depth').toFixed(1), `Average depth of its search for each of its ${moves.length} moves`)];
+  if (avg('nodes')) out.push(stat('Nodes / move', formatCount(Math.round(avg('nodes'))), 'Average positions searched for a move'));
+  if (avg('nps')) out.push(stat('Speed', `${formatCount(Math.round(avg('nps')))} n/s`, 'Average positions searched a second'));
+  const hits = [...s.moves.values()].filter((m) => m.hit).length;
+  // Each move after its first could have been pondered on; where the engine
+  // reported its pondering, those are the tries.
+  const tries = Math.max(hits, s.pondered.size, 0);
+  if (tries) {
+    out.push(stat('Ponder hits', `${Math.round((hits / tries) * 100)}% (${hits}/${tries})`,
+      `The opponent played the reply it was thinking about ${hits} time${hits === 1 ? '' : 's'} out of ${tries}`));
+  }
+  out.push(stat('Moves', String(moves.length), 'Moves it searched'));
+  return out;
+}
 const ENGINE_LOG_MAX = 60;
 
 function numberedFromPly(ply, san) {
@@ -1219,10 +1523,14 @@ function renderEngineInfo() {
           el('span', { className: 'engine-name' }),
           el('span', { className: 'stats' }),
         ]),
+        el('div', { className: 'engine-sum', hidden: true }),
         el('div', { className: 'lines' }),
         el('div', { className: 'messages' }),
       );
     }
+    const sum = engineSummary(side);
+    $('.engine-sum', panel).hidden = !sum;
+    if (sum) $('.engine-sum', panel).replaceChildren(...sum);
     $('.engine-name', panel).textContent = player.name;
     $('.engine-name', panel).title = player.name;
     renderEngineHead(side);
@@ -1241,6 +1549,11 @@ function renderEngineInfo() {
             : `Its search for move ${fullmove}, to depth ${r.depth}${r.nodes ? `, ${r.nodes} nodes` : ''}`,
         }),
         el('span', { className: 'score ' + r.tone, textContent: r.score || '–' }),
+        // How deep the search for this move got.
+        ...(r.depth ? [el('span', {
+          className: 'depth', textContent: `d${r.depth}`,
+          title: `${r.pondering ? 'Pondering has reached' : 'The search for this move reached'} depth ${r.depth}${r.nodes ? `, ${r.nodes} nodes` : ''}`,
+        })] : []),
         ...(r.hit ? [el('span', {
           className: 'ponder-hit', textContent: 'hit',
           title: 'Ponder hit: the opponent played the reply it expected, so it had been thinking about this move on their time',
@@ -1337,8 +1650,13 @@ function fitTabs() {
   more.hidden = true;
   const widths = tabs.map((t) => t.getBoundingClientRect().width);
   const total = Math.ceil(widths.reduce((a, b) => a + b, 0)) + 2;
-  if (total > 2 && workspace.style.getPropertyValue('--tabs-w') !== `${total}px`) workspace.style.setProperty('--tabs-w', `${total}px`);
-  const room = row.clientWidth;
+  // The row's own padding and margins: room the panel must have besides.
+  const cs = getComputedStyle(row);
+  const around = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight) + parseFloat(cs.marginLeft) + parseFloat(cs.marginRight);
+  const wide = Math.ceil(total + around);
+  if (total > 2 && workspace.style.getPropertyValue('--tabs-w') !== `${wide}px`) workspace.style.setProperty('--tabs-w', `${wide}px`);
+  // The row is only as wide as its tabs: the room is what the panel has.
+  const room = row.parentElement.clientWidth - around;
   const out = [];
   if (total > room + 1 && room > 0) {
     more.hidden = false;
@@ -1707,7 +2025,9 @@ function playStateSounds(prev, next, newGame) {
     if ((next.active && !next.loaded) || (next.external?.live && next.moves.length === 0)) sounds.play('start');
     return;
   }
-  const ended = (prev.active && !next.active) || (prev.external?.live && next.external && !next.external.live && next.result !== '*');
+  const ended = (prev.active && !next.active) || (prev.external?.live && next.external && !next.external.live && next.result !== '*')
+    // A watched game whose result comes a moment after it stopped being live.
+    || (prev.external && next.external && !next.external.live && prev.result === '*' && next.result !== '*');
   if (next.moves.length === prev.moves.length + 1) sounds.play(moveSound(next.moves.at(-1)));
   if (ended) {
     const end = endSound(next);
@@ -1759,7 +2079,12 @@ const ratingDelta = (n) => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '±0');
 let pendingNotice = null; // { game, timer }: the notification waits for the rating changes
 
 function showGameOver(st) {
-  if (!st || st !== state || st.result === '*' || st.external?.kind === 'tournament') return;
+  // The game as it stands now: a watched game is told again after it ends
+  // (its rating changes, the end of its stream), and those later reports
+  // of the same finished game must not keep the result from showing.
+  if (!st || !state || st.game !== state.game || state.result === '*' || state.external?.live || state.active) return;
+  st = state;
+  if (st.external?.kind === 'tournament') return;
   const head = resultHeadline(st);
   clearTimeout(pendingNotice?.timer);
   pendingNotice = null;
@@ -1882,20 +2207,40 @@ function applyState(next) {
   const wasLive = !state || isLive();
   state = next;
   stateAt = performance.now();
-  if (newGame) { tree = { branches: new Map() }; varNode = null; if (puzzleView) window.leavePuzzle?.(); }
+  if (newGame) {
+    tree = { branches: new Map() }; varNode = null; if (puzzleView) window.leavePuzzle?.();
+    notes = { before: null, moves: new Map(), dirty: false };
+  }
+  // A takeback takes the notes on the moves it removed.
+  for (const ply of [...notes.moves.keys()]) if (ply > next.moves.length) notes.moves.delete(ply);
+  // Watching a game (someone's on Lichess, your engine's, a tournament's):
+  // the analysis rests when the game ends and takes up again with the next
+  // one. Not if you paused it yourself, and not once you have turned it off.
+  if (typeof analysis !== 'undefined' && analysis.on) {
+    const watched = (st) => Boolean(st?.external && st.external.kind !== 'play');
+    if (newGame && analysis.autoHeld) {
+      analysis.held = false;
+      analysis.autoHeld = false;
+    } else if (prev && !newGame && watched(prev) && prev.external.live && watched(next) && !next.external.live && !analysis.held) {
+      analysis.held = true;
+      analysis.autoHeld = true;
+    }
+  }
   if (newGame || (wasLive && !varNode)) viewPly = null;
   // A game opened from a file starts at its first move, to be stepped
   // through, rather than at its last.
   if (newGame && next.loaded && next.moves.length > 1) viewPly = 1;
-  if (newGame) { engineInfo = {}; engineStrings = {}; engineLog = {}; engineScores = []; engineLineOpen = {}; }
+  if (newGame) { engineInfo = {}; engineStrings = {}; engineLog = {}; engineSearch = {}; engineScores = []; engineLineOpen = {}; ponderHitsShown.clear(); }
   else if (next.moves.length < (prev?.moves.length ?? 0)) engineScores.length = next.moves.length + 1; // takeback
   // A Lichess game is shown from your engine's side.
   if (newGame && next.external) flipped = next.external.side === 'black';
   if (prev) playStateSounds(prev, next, newGame);
   if (gameOverFor != null && (newGame || next.result === '*')) hideGameOver();
   window.syncPlayersInfo?.();
+  if (newGame) window.maybeVersus?.();
   window.renderPositionBar?.();
   window.syncChat?.();
+  window.syncCommentary?.();
   if (prev && !newGame && next.external?.ratingDiff && JSON.stringify(next.external.ratingDiff) !== JSON.stringify(prev.external?.ratingDiff)) {
     setTimeout(() => ratingDiffArrived(state), 0);
   }
@@ -1905,6 +2250,7 @@ function applyState(next) {
   renderPlayers();
   renderStatus();
   renderMoves();
+  if (newGame) window.loadAnnotations?.();
   renderOpening();
   renderEngineInfo();
   renderGameInfo();
@@ -1915,12 +2261,15 @@ function applyState(next) {
 }
 
 api.onEvent((event, data) => {
+  if (event === 'aiChat') { window.onAiChat?.(data); window.onAiCommentary?.(data); return; }
   if (event === 'state') {
     applyState(data);
   } else if (event === 'engineInfo') {
     // The move an engine chose comes with its last line when there was one;
     // otherwise only the moves (for the arrows) are new.
     const prev = engineInfo[data.side];
+    noteEngineSearch(data);
+    if (data.ponderHit) popPonderHit(data);
     if (data.stats) {
       // Between two lines of a search: how deep it has got and how fast it
       // goes. Only the window's header changes.
@@ -2057,36 +2406,57 @@ for (const btn of document.querySelectorAll('.player .abort')) {
 // The analysis to save with the game, in Lichess's PGN form: the
 // evaluation after each move as [%eval], ?! ? ?? with a comment naming the
 // better move, and the side variations.
-function pgnAnnotations() {
+// kept: for a save made by itself, which leaves out the lines you have only
+// tried on the board (Save, Copy and Save… write them all).
+function pgnAnnotations({ kept = false } = {}) {
   if (!state?.moves) return null;
   const ann = { nags: {}, comments: {}, variations: {} };
   const review = window.currentReview?.();
+  // The computer's part, by ply: evaluation, mark and what it says.
+  const auto = {};
   if (review) {
     const NAG = { inaccuracy: 6, mistake: 2, blunder: 4 };
     review.positions.forEach((p, ply) => {
       if (ply === 0) return;
-      let ev = '';
-      if (p.final === 'checkmate') ev = '';
-      else if (p.mate) ev = `[%eval #${p.mate}]`;
-      else ev = `[%eval ${(p.cp / 100).toFixed(2)}]`;
+      const it = auto[ply] = { ev: '', nag: 0, text: '' };
+      if (p.final === 'checkmate') it.ev = '';
+      else if (p.mate) it.ev = `[%eval #${p.mate}]`;
+      else it.ev = `[%eval ${(p.cp / 100).toFixed(2)}]`;
       const j = review.judgments[ply - 1];
-      let text = ev;
       if (j?.kind) {
-        ann.nags[ply] = NAG[j.kind];
+        it.nag = NAG[j.kind];
         const kind = { inaccuracy: 'Inaccuracy', mistake: 'Mistake', blunder: 'Blunder' }[j.kind];
-        text += ` ${kind}.${j.best ? ` ${j.best} was best.` : ''}`;
+        it.text = `${kind}.${j.best ? ` ${j.best} was best.` : ''}`;
       }
-      if (text.trim()) ann.comments[ply] = text.trim();
     });
     ann.annotator = `Ponder (${review.engine})`;
   }
-  for (const [p, lines] of tree.branches) {
-    if (!lines.length) continue;
-    const text = lines.map((l) => `(${lineText(l)})`).join(' ');
-    if (p < state.moves.length) ann.variations[p + 1] = text;
-    else ann.after = `Analysis: ${lines.map((l) => lineText(l)).join('; ')}`;
+  // Yours come first: your mark and comment stand in for the computer's.
+  for (let ply = 1; ply <= state.moves.length; ply++) {
+    const a = notes.moves.get(ply);
+    const it = auto[ply];
+    const nags = [a?.nag || it?.nag, a?.pos, ...(a?.other ?? [])].filter(Boolean);
+    if (nags.length) ann.nags[ply] = nags;
+    // An evaluation the game already carries (from its file) is kept: the
+    // analysis adds its own only where there is none.
+    const hasEval = /\[%eval[^\]]*\]/.test(a?.cmds ?? '');
+    // "[%ai]" marks a comment as the AI's in the file, so that it is known
+    // as such when the game is opened again (PGN readers pass over such tags).
+    const text = [a?.cmds, a?.ai && a.comment ? '[%ai]' : '', hasEval ? '' : it?.ev, a?.comment || it?.text].filter(Boolean).join(' ').trim();
+    if (text) ann.comments[ply] = text;
   }
-  const empty = !review && !tree.branches.size;
+  if (notes.before?.comment) ann.before = `${notes.before.ai ? '[%ai] ' : ''}${notes.before.comment}`;
+  if (!ann.annotator && notes.aiModel && [...notes.moves.values()].some((a) => a.ai)) ann.annotator = `AI (${notes.aiModel})`;
+  let anyLine = false;
+  for (const [p, all] of tree.branches) {
+    const lines = kept ? all.filter((l) => l.keep) : all;
+    if (!lines.length) continue;
+    anyLine = true;
+    const text = lines.map((l) => `(${lineText(l, kept)})`).join(' ');
+    if (p < state.moves.length) ann.variations[p + 1] = text;
+    else ann.after = `Analysis: ${lines.map((l) => lineText(l, kept)).join('; ')}`;
+  }
+  const empty = !review && !anyLine && !notes.moves.size && !notes.before?.comment;
   return empty ? null : ann;
 }
 
@@ -2244,7 +2614,6 @@ function renderGames() {
   // Edit and Delete act on the game on the board, when it is from this file.
   const shown = has ? currentIndex() : -1;
   $('#games-edit').disabled = $('#games-delete').disabled = shown < 0;
-  $('#games-count').textContent = has ? collection.total.toLocaleString() : '';
   if (!has) {
     $('#games-list').replaceChildren();
     $('#games-note').hidden = true;
@@ -2253,6 +2622,7 @@ function renderGames() {
   const n = collection.total;
   $('#games-file').textContent = `${collection.source} · ${n.toLocaleString()} game${n === 1 ? '' : 's'}`;
   $('#games-file').title = collection.source;
+  renderDatabaseButton();
   const list = collection.list ?? { matched: 0, games: [] };
   const current = currentIndex();
   const cell = (cls, text) => el('span', { className: cls, textContent: text, title: text });
@@ -2327,6 +2697,7 @@ $('#games-filter').onkeydown = async (e) => {
 };
 $('#games-open').onclick = () => openPgn();
 $('#games-open-db').onclick = () => openDatabase();
+$('#games-db').onclick = () => openDatabase();
 
 // ---------------------------------------------------------------------------
 // The game database: finished games are added to a PGN file.
@@ -2511,17 +2882,27 @@ $('#form-game-info').onsubmit = async (e) => {
   }
 };
 
+// Lists the game database (the default file finished games go to) in the
+// Games tab. The board keeps what it shows; click a game to load it.
 async function openDatabase() {
   database = await api.database.settings();
+  if (!database?.path) { setStatus('No game database is set (Settings → Database).'); return; }
+  const name = database.path.split(/[\\/]/).pop();
   if (!database.exists) {
-    setStatus(`${database.path.split(/[\\/]/).pop()} has no games yet. Finished games are added when they end.`);
+    setStatus(`${name} has no games yet. Finished games are added when they end.`);
     return;
   }
-  await openPgn({ name: database.path.split(/[\\/]/).pop(), path: database.path });
+  showTab('games');
+  await openPgn({ name, path: database.path }, { list: true });
+  renderDatabaseButton();
 }
 
+// The button in the list's header: off while the database is what is listed.
 function renderDatabaseButton() {
-  $('#games-open-db').hidden = !database?.enabled;
+  const btn = $('#games-db');
+  const listed = Boolean(collection && database?.path && collection.path === database.path);
+  btn.disabled = listed;
+  btn.title = listed ? 'The game database is listed' : `List the games in your game database${database?.path ? ` (${database.path.split(/[\\/]/).pop()})` : ''}, where finished games are kept`;
 }
 
 // A game was added: keep the Games list up to date when it shows the file.
@@ -2533,6 +2914,9 @@ async function onDatabaseSaved(ev) {
   if (database) database.exists = true;
   if (collection) await refreshGames(ev.path);
   else await listDatabase(); // its first game: the list appears
+  // The game now has a place in a file: annotations made while it was
+  // played (the commentary's, yours) can be saved into it.
+  window.autosaveAnnotations?.(true);
   if (state && !state.active && !state.external?.live && ev.kind !== 'lichess' && ev.kind !== 'watched') {
     setStatus(`${$('#status').textContent} · saved to ${ev.name}`);
   } else if (ev.kind !== 'local') {
@@ -2648,7 +3032,7 @@ window.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
   if (key !== 's' && key !== 'o') return;
   e.preventDefault();
-  if (document.querySelector('dialog[open]')) return;
+  if (document.querySelector('dialog:modal')) return;
   if (key === 's') exportPgn();
   else openPgn();
 });
@@ -2697,6 +3081,8 @@ function fillEngineSelects() {
     slot.engine.replaceChildren(...engines.map((e) => el('option', { value: e.id, textContent: e.name })));
     if (engines.some((e) => e.id === current)) slot.engine.value = current;
   }
+  // The Tournament tab lists the engines too.
+  if (typeof refreshTournamentEngines === 'function') refreshTournamentEngines();
 }
 
 function saveSetup() {
@@ -2893,6 +3279,10 @@ $('#engine-add').onclick = async () => {
     fillAnalysisSettings();
     if (added?.error) {
       engineError(`${added.engine.name} was added, but did not start as a UCI engine (${added.error}). If it needs command-line options, enter them under its name.`);
+    } else if (added?.engine) {
+      // A new engine: straight to its UCI options (threads, hash, …).
+      const engine = engines.find((e) => e.id === added.engine.id);
+      if (engine) await openOptions(engine);
     }
   } catch (err) {
     engineError(err);
@@ -3083,6 +3473,8 @@ $('#form-options').addEventListener('submit', async (e) => {
   dlgOptions.close();
   // The analysis engine picks the new options up at once.
   if (analysis.on && analysisSettings().engineId === optionsEngine.id) { stopAnalysis(); startAnalysis(); }
+  // So does the engine playing on Lichess, from its next game.
+  window.lichessEngineChanged?.(optionsEngine.id);
 });
 
 // ---------------------------------------------------------------------------
@@ -3112,10 +3504,16 @@ function renderThemeList() {
   $('#theme-list').replaceChildren(...options);
 }
 
-$('#sound-on').onchange = (e) => sounds.setEnabled(e.target.checked);
+$('#sound-on').onchange = (e) => { sounds.setEnabled(e.target.checked); syncSoundButton(); };
 $('#moves-figurines').onchange = (e) => setMovesPref('figurines', e.target.checked);
 $('#anim-speed').onchange = (e) => setAnimSpeed(e.target.value);
 $('#result-card').onchange = (e) => setResultCard(e.target.checked);
+$('#versus-on').onchange = (e) => window.setVersus?.(e.target.checked);
+$('#attack-marks').onchange = (e) => {
+  attackMarks = e.target.checked;
+  try { localStorage.setItem('attackMarks', attackMarks ? 'on' : 'off'); } catch { /* storage unavailable */ }
+  if (state) renderBoard();
+};
 $('#moves-scores').onchange = (e) => setMovesPref('scores', e.target.checked);
 $('#sound-volume').oninput = (e) => sounds.setVolume(e.target.value / 100);
 $('#sound-test').onclick = () => {
@@ -3138,6 +3536,9 @@ async function openSettings(pane) {
   $('#moves-figurines').checked = movesPrefs.figurines;
   $('#anim-speed').value = animSpeed;
   $('#result-card').checked = resultCard;
+  $('#attack-marks').checked = attackMarks;
+  if (typeof vs !== 'undefined') $('#versus-on').checked = vs.on;
+  window.fillAiSettings?.();
   $('#moves-scores').checked = movesPrefs.scores;
   $('#sound-volume').value = Math.round(sounds.volume * 100);
   renderThemeList();
@@ -3228,6 +3629,7 @@ async function startAnalysis() {
 function stopAnalysis() {
   analysis.on = false;
   analysis.held = false;
+  analysis.autoHeld = false; // stopped: it does not come back with the next game
   analysis.sentFen = null;
   analysis.data = null;
   analysis.error = '';
@@ -3245,6 +3647,7 @@ $('#btn-analysis').onclick = () => {
 function toggleAnalysisHold() {
   if (!analysis.on || analysis.paused) return;
   analysis.held = !analysis.held;
+  analysis.autoHeld = false; // yours now: paused or resumed by hand
   syncAnalysis();
   renderAnalysis();
 }
@@ -3261,6 +3664,43 @@ function syncAnalysis() {
   if (!analysis.held || analysis.paused) analysis.data = null;
   command('analysisPosition', { fen });
   renderAnalysis();
+}
+
+// The computer's processor load, on the Analysis button while the analysis
+// is on: asked for once a second.
+const cpu = { timer: null, load: null, cores: 0 };
+function watchCpu(on) {
+  if (on === !!cpu.timer) return;
+  if (!on) {
+    clearInterval(cpu.timer);
+    cpu.timer = null;
+    cpu.load = null;
+    renderCpu();
+    return;
+  }
+  const ask = async () => {
+    let got = null;
+    try { got = await window.board.cpuLoad(); } catch { /* no reading */ }
+    if (!cpu.timer) return;
+    cpu.load = typeof got?.load === 'number' ? got.load : null;
+    cpu.cores = got?.cores || 0;
+    renderCpu();
+  };
+  cpu.timer = setInterval(ask, 1000);
+  ask(); // the first answer only starts the measuring
+}
+function renderCpu() {
+  const box = $('#analysis-cpu');
+  const pct = cpu.load === null ? null : Math.round(cpu.load * 100);
+  box.hidden = pct === null;
+  // A meter: the bar fills with the load, the figure beside it.
+  $('#analysis-cpu-fill').style.width = `${pct ?? 0}%`;
+  $('#analysis-cpu-pct').textContent = pct === null ? '' : `${pct}%`;
+  if (pct === null) box.removeAttribute('aria-valuenow'); else box.setAttribute('aria-valuenow', pct);
+  box.classList.toggle('busy', pct !== null && pct >= 90);
+  const cores = cpu.cores ? ` of ${cpu.cores} processor core${cpu.cores === 1 ? '' : 's'}` : '';
+  box.title = pct === null ? '' : `CPU usage: ${pct}%${cores} (the whole computer, every program)`;
+  box.setAttribute('aria-label', box.title);
 }
 
 // "+0.35", "−1.20", "M3", "−M2" from White's point of view.
@@ -3287,6 +3727,13 @@ function renderAnalysis() {
   const on = analysis.on || !!analysis.error;
   $('#btn-analysis').setAttribute('aria-pressed', on);
   $('#btn-analysis').classList.toggle('active', on);
+  // The icon turns while the engine is thinking, and stands still while the
+  // analysis is paused.
+  const thinking = analysis.on && !analysis.held && !analysis.paused && !analysis.error
+    && analysis.data?.state !== 'over' && analysis.data?.state !== 'error';
+  $('#btn-analysis').classList.toggle('on', analysis.on);
+  $('#btn-analysis').classList.toggle('working', thinking);
+  watchCpu(analysis.on);
   const panel = $('#analysis');
   panel.hidden = !on;
   panel.classList.toggle('held', analysis.held && !analysis.paused);
@@ -3294,14 +3741,16 @@ function renderAnalysis() {
   pause.hidden = !analysis.on || analysis.paused || !!analysis.error;
   pause.textContent = analysis.held ? '▶' : '⏸';
   pause.setAttribute('aria-label', analysis.held ? 'Resume the analysis' : 'Pause the analysis');
-  pause.title = analysis.held
+  pause.title = analysis.autoHeld
+    ? 'The game ended, so the analysis is resting: it takes up again with the next game. Resume it now on this position (P)'
+    : analysis.held
     ? 'Resume the analysis on the position on the board (P)'
     : 'Pause the analysis: the engine stops thinking and the lines stay as they are (P)';
   pause.setAttribute('aria-pressed', analysis.held);
   const data = analysis.data;
   $('#analysis-engine-name').textContent = data?.engine ?? '';
   const stats = [];
-  if (analysis.held) stats.push('paused');
+  if (analysis.held) stats.push(analysis.autoHeld ? 'paused: the game ended' : 'paused');
   if (data?.state === 'running' && data.depth) {
     stats.push(`d${data.depth}`);
     if (data.nodes) stats.push(`${formatCount(data.nodes)} nodes`);
@@ -3319,7 +3768,7 @@ function renderAnalysis() {
   } else if (data?.state === 'over' || data?.state === 'error') {
     rows = [el('p', { className: data.state === 'error' ? 'error' : 'hint', textContent: data.message })];
   } else if (!data?.lines?.length) {
-    rows = [el('p', { className: 'hint', textContent: analysis.held ? 'Paused. Resume to analyse the position on the board.' : 'Thinking…' })];
+    rows = [el('p', { className: 'hint', textContent: analysis.autoHeld ? 'The game ended: the analysis is resting, and takes up again with the next game. Resume to analyse this position now.' : analysis.held ? 'Paused. Resume to analyse the position on the board.' : 'Thinking…' })];
   } else {
     rows = [];
     if (analysis.held && data.fen !== shownFen()) {
@@ -3356,7 +3805,14 @@ function renderAnalysis() {
 function botScore() {
   if (state?.external?.kind !== 'bot' || varNode || puzzleView) return null;
   const p = shownPly();
-  return engineScores[p + 1] ?? engineScores[p] ?? null;
+  // The score of the move shown, else the engine's latest before it: the
+  // opponent's moves have none of their own, and neither has a move the
+  // engine played at once (a ponder hit, a book move) or one it has only
+  // begun to search, so the bar keeps the last word rather than vanishing.
+  for (let i = Math.min(p + 1, engineScores.length - 1); i >= 1; i--) {
+    if (engineScores[i]) return engineScores[i];
+  }
+  return null;
 }
 
 // The moves list is drawn again for new scores, but not at every line of a search.
@@ -3383,7 +3839,13 @@ function renderEvalBar() {
   if (line) {
     if (line.isMate) white = line.mate > 0 ? 1 : 0;
     else white = 1 / (1 + Math.pow(10, -line.cp / 400));
-    label = formatScore(line).replace('+', '').replace('−', '');
+    // One decimal on the bar, so it can be set large; the tooltip has it all.
+    const pawns = Math.abs(line.cp / 100);
+    // With its sign, now that it sits in the middle: plus is White's lead.
+    const sign = (line.isMate ? line.mate : line.cp) > 0 ? '+' : (line.isMate ? line.mate : line.cp) < 0 ? '−' : '';
+    // Ten pawns and more go without the decimal, to stay large in the bar's width.
+    label = sign + (line.isMate ? `M${Math.abs(line.mate)}` : pawns >= 10 ? pawns.toFixed(0) : pawns.toFixed(1));
+    bar.title += `: ${formatScore(line)}`;
   } else if (analysis.data?.state === 'over' && analysis.data.message === 'Checkmate') {
     white = state.turn === 'white' ? 0 : 1;
   }
@@ -3391,7 +3853,36 @@ function renderEvalBar() {
   bar.style.setProperty('--white', (white * 100).toFixed(1) + '%');
   const labelEl = $('.label', bar);
   labelEl.textContent = label;
-  labelEl.className = 'label ' + (white >= 0.5 ? 'at-white' : 'at-black');
+  // A long one (a mate in ten or more) is set a little smaller, to fit.
+  labelEl.className = 'label ' + (white >= 0.5 ? 'at-white' : 'at-black') + ([...label].length > 4 ? ' tight' : '');
+  // A face at each end: White's and Black's, smiling as the score favours
+  // its side, flat when it is level, frowning as it goes against it.
+  const lead = Math.max(-1, Math.min(1, (white - 0.5) * 2.6)); // +1 White happy … −1 Black happy
+  setEvalFace($('#face-white'), lead, 'White');
+  setEvalFace($('#face-black'), -lead, 'Black');
+}
+
+// Draws a face's mood, from −1 (frowning) through 0 (flat) to +1 (smiling):
+// the mouth bends, the brows tilt, and the eyes narrow a little with a grin.
+function setEvalFace(face, mood, who) {
+  const m = Math.round(mood * 20) / 20;
+  if (face.dataset.mood === String(m)) return;
+  face.dataset.mood = String(m);
+  // The mouth: its corners rise with a smile and drop with a frown, and
+  // its middle goes the other way.
+  const ends = 16 - m * 1.6;
+  const mid = 16 + m * 4.4;
+  const half = 4.2 + Math.abs(m) * 0.9;
+  $('.mouth', face).setAttribute('d', `M${(12 - half).toFixed(2)} ${ends.toFixed(2)} Q12 ${mid.toFixed(2)} ${(12 + half).toFixed(2)} ${ends.toFixed(2)}`);
+  // Brows: level when content, drawn together and down in a frown.
+  const tilt = m < 0 ? -m * 1.5 : -m * 0.5;
+  $('.brow.l', face).setAttribute('d', `M6.6 ${(8.2 - tilt).toFixed(2)} 9.8 ${(8.2 + tilt).toFixed(2)}`);
+  $('.brow.r', face).setAttribute('d', `M14.2 ${(8.2 + tilt).toFixed(2)} 17.4 ${(8.2 - tilt).toFixed(2)}`);
+  for (const eye of face.querySelectorAll('.eye')) eye.setAttribute('ry', (1.25 - Math.max(0, m) * 0.45).toFixed(2));
+  face.classList.toggle('happy', m > 0.15);
+  face.classList.toggle('sad', m < -0.15);
+  const mood2 = m > 0.6 ? 'is delighted' : m > 0.15 ? 'is pleased' : m < -0.6 ? 'is in despair' : m < -0.15 ? 'is worried' : 'is unmoved';
+  face.setAttribute('aria-label', `${who} ${mood2}`);
 }
 
 // An arrow for the best line's first move.
@@ -3418,7 +3909,9 @@ function engineArrows() {
     }
     if (!info?.best) continue;
     if (info.ply === n) {
-      out.push({ move: info.best, cls: 'l1 engine-best', head: 'head-line-1', title: `${name} means to play this` });
+      // Still searching: the arrow shows the depth reached so far.
+      const label = !info.played && info.depth ? `d${info.depth}` : '';
+      out.push({ move: info.best, cls: 'l1 engine-best', head: 'head-line-1', title: `${name} means to play this`, label });
       if (info.ponder) out.push({ move: info.ponder, cls: 'engine-ponder', head: 'head-ponder', title: `${name} expects this reply` });
     } else if (info.ply === n - 1 && info.ponder && state.moves[n - 1].uci === info.best) {
       out.push({ move: info.ponder, cls: 'engine-ponder', head: 'head-ponder', title: `${name} expects this reply` });
@@ -3441,11 +3934,14 @@ function renderArrow() {
     return [col + 0.5, row + 0.5];
   };
   const arrows = [];
-  const drawn = lines.map((line, i) => ({ move: line.uci?.[0], cls: `l${i + 1}`, head: `head-line-${i + 1}` }));
+  const marks = [];
+  // The best move's arrow carries how deep the search is.
+  const drawn = lines.map((line, i) => ({ move: line.uci?.[0], cls: `l${i + 1}`, head: `head-line-${i + 1}`,
+    label: i === 0 && line.depth ? `d${line.depth}` : '' }));
   // The reply the analysis expects to its best move (the ponder move).
   if (lines[0]?.uci?.[1]) drawn.push({ move: lines[0].uci[1], cls: 'engine-ponder', head: 'head-ponder' });
   drawn.push(...engineArrows());
-  drawn.forEach(({ move, cls, head, title }) => {
+  drawn.forEach(({ move, cls, head, title, label }) => {
     if (!move) return;
     const [x1, y1] = center(move.slice(0, 2));
     const [x2, y2] = center(move.slice(2, 4));
@@ -3461,8 +3957,41 @@ function renderArrow() {
     a.setAttribute('marker-end', `url(#${head})`);
     if (title) a.append(Object.assign(document.createElementNS('http://www.w3.org/2000/svg', 'title'), { textContent: title }));
     arrows.unshift(a);
+    if (label) {
+      // A small tag on the middle of the arrow: the depth, upright.
+      const NS = 'http://www.w3.org/2000/svg';
+      const g = document.createElementNS(NS, 'g');
+      g.setAttribute('class', 'arrow-label');
+      g.setAttribute('transform', `translate(${(x1 + x2) / 2} ${(y1 + y2) / 2})`);
+      const w = label.length * 0.075 + 0.13;
+      const box = document.createElementNS(NS, 'rect');
+      for (const [k, v] of Object.entries({ x: -w / 2, y: -0.105, width: w, height: 0.21, rx: 0.105 })) box.setAttribute(k, v);
+      const text = document.createElementNS(NS, 'text');
+      text.setAttribute('text-anchor', 'middle');
+      text.setAttribute('y', 0.05);
+      text.textContent = label;
+      const tip = document.createElementNS(NS, 'title');
+      tip.textContent = `Depth of the search for the best move so far${title ? ` (${title})` : ''}`;
+      g.append(box, text, tip);
+      marks.push(g);
+    }
+    // The ponder move: a thought bubble on the corner of the piece expected
+    // to move, its dots pulsing.
+    if (cls.includes('engine-ponder')) {
+      const NS = 'http://www.w3.org/2000/svg';
+      const g = document.createElementNS(NS, 'g');
+      g.setAttribute('class', 'ponder-mark');
+      g.setAttribute('transform', `translate(${x1 + 0.3} ${y1 - 0.3})`);
+      const add = (tag, attrs) => { const n = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v); g.append(n); return n; };
+      add('circle', { class: 'tail', cx: -0.2, cy: 0.2, r: 0.035 });
+      add('circle', { class: 'tail', cx: -0.13, cy: 0.13, r: 0.055 });
+      add('rect', { class: 'bubble', x: -0.19, y: -0.13, width: 0.38, height: 0.26, rx: 0.13 });
+      [-0.09, 0, 0.09].forEach((dx, i) => add('circle', { class: `dot d${i + 1}`, cx: dx, cy: 0, r: 0.033 }));
+      add('title', {}).textContent = title ?? 'The reply the engine expects (its ponder move)';
+      marks.push(g);
+    }
   });
-  box.replaceChildren(...arrows);
+  box.replaceChildren(...arrows, ...marks);
 }
 
 // ---------------------------------------------------------------------------

@@ -268,11 +268,9 @@ func newTester(req Request) (*tester, error) {
 	if err != nil {
 		return nil, err
 	}
-	for k, v := range req.Engine.Options {
-		if strings.EqualFold(k, "MultiPV") || strings.EqualFold(k, "Ponder") {
-			continue
-		}
-		eng.SetOption(k, v)
+	if err := eng.ApplyOptions(req.Engine.Options, "MultiPV", "Ponder"); err != nil {
+		eng.Quit()
+		return nil, err
 	}
 	t.eng = eng
 	return t, nil

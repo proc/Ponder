@@ -130,10 +130,9 @@ func (a *Analyzer) Start(cfg Config) error {
 			multi = true
 		}
 	}
-	for name, value := range cfg.Options {
-		if !strings.EqualFold(name, "MultiPV") {
-			eng.SetOption(name, value)
-		}
+	if err := eng.ApplyOptions(cfg.Options, "MultiPV"); err != nil {
+		eng.Quit()
+		return fmt.Errorf("analysis engine: %w", err)
 	}
 	if multi {
 		eng.SetOption("MultiPV", fmt.Sprint(cfg.Lines))

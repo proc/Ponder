@@ -5,10 +5,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"board/backend/uci"
 )
 
 var randomEngine, basicEngine string
@@ -89,7 +93,7 @@ func TestFixedNumberOfGames(t *testing.T) {
 	r := &recorder{}
 	tr := newT(r)
 	err := tr.Start(Config{
-		Engines:     [2]EngineSpec{{Name: "A", Path: randomEngine}, {Name: "B", Path: randomEngine}},
+		Engines:     []EngineSpec{{Name: "A", Path: randomEngine}, {Name: "B", Path: randomEngine}},
 		TimeControl: TimeControl{BaseMs: 2000, IncMs: 20},
 		Concurrency: 4, Games: 20,
 		Openings:     OpeningConfig{Source: "book", Plies: 6},
@@ -108,6 +112,10 @@ func TestFixedNumberOfGames(t *testing.T) {
 	if len(r.saved) != 20 || !strings.Contains(r.saved[0], "[Event \"A vs B\"]") || !strings.Contains(r.saved[0], "[TimeControl \"2+0.02\"]") {
 		t.Fatalf("%d saved; first:\n%s", len(r.saved), r.saved[0])
 	}
+	// Search statistics: both engines' moves are counted, and the games.
+	if len(s.Search) != 2 || s.Search[0].Name != "A" || s.Search[0].Moves == 0 || s.Search[1].Moves == 0 || s.AvgPlies <= 6 {
+		t.Fatalf("search statistics %+v, average plies %v", s.Search, s.AvgPlies)
+	}
 	// Pairs: the same opening with colours reversed.
 	if len(s.Recent) != 20 {
 		t.Fatalf("recent %d", len(s.Recent))
@@ -121,7 +129,7 @@ func TestSPRTStopsWhenDecided(t *testing.T) {
 	r := &recorder{}
 	tr := newT(r)
 	err := tr.Start(Config{
-		Engines:      [2]EngineSpec{{Name: "Basic", Path: basicEngine}, {Name: "Random", Path: randomEngine}},
+		Engines:      []EngineSpec{{Name: "Basic", Path: basicEngine}, {Name: "Random", Path: randomEngine}},
 		TimeControl:  TimeControl{MoveTimeMs: 20, MarginMs: 500},
 		Concurrency:  4,
 		Openings:     OpeningConfig{Source: "book", Plies: 4},
@@ -142,7 +150,7 @@ func TestStop(t *testing.T) {
 	r := &recorder{}
 	tr := newT(r)
 	err := tr.Start(Config{
-		Engines:     [2]EngineSpec{{Name: "A", Path: basicEngine}, {Name: "B", Path: basicEngine}},
+		Engines:     []EngineSpec{{Name: "A", Path: basicEngine}, {Name: "B", Path: basicEngine}},
 		TimeControl: TimeControl{BaseMs: 60000},
 		Concurrency: 2, Games: 100, Openings: OpeningConfig{Source: "start"},
 	})
@@ -188,5 +196,129 @@ func TestLLRDoesNotStopOnAFewPairs(t *testing.T) {
 		if llr := s.LLR(0, 5); llr >= 2.94 {
 			t.Fatalf("%d pairs, all won: LLR %v already accepts H1", pairs, llr)
 		}
+	}
+}
+
+// logged wraps an engine in a script that records every line it is sent, a
+// file per process, and returns the script and the folder of records.
+func logged(t *testing.T, engine string) (script, dir string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("needs a shell")
+	}
+	dir = t.TempDir()
+	script = filepath.Join(dir, "engine.sh")
+	body := "#!/bin/sh\ntee \"" + dir + "/sent.$$\" | \"" + engine + "\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return script, dir
+}
+
+// Every engine process of an SPRT match is given the engine's options as it
+// is loaded: after uci, before its first game, each worker's copy alike.
+func TestOptionsAreSetInAnSPRTMatch(t *testing.T) {
+	basic, basicDir := logged(t, basicEngine)
+	random, randomDir := logged(t, randomEngine)
+	tr := newT(&recorder{})
+	err := tr.Start(Config{
+		Engines: []EngineSpec{
+			{Name: "Basic", Path: basic, Options: map[string]string{"multipv": "2"}},
+			{Name: "Random", Path: random, Options: map[string]string{"Delay": "0", "Extra": "on"}},
+		},
+		TimeControl:  TimeControl{MoveTimeMs: 20, MarginMs: 500},
+		Concurrency:  3,
+		Openings:     OpeningConfig{Source: "book", Plies: 4},
+		SPRT:         SPRT{Enabled: true, Elo0: 0, Elo1: 100, Alpha: 0.05, Beta: 0.05},
+		Adjudication: Adjudication{Resign: true, ResignMoves: 2, ResignScore: 600, Draw: true, MaxMoves: 150},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := waitDone(t, tr, 120*time.Second); s.Verdict == "" {
+		t.Fatalf("no verdict: %s", s.Describe())
+	}
+	check := func(dir string, want ...string) {
+		t.Helper()
+		files, _ := filepath.Glob(filepath.Join(dir, "sent.*"))
+		if len(files) < 3 {
+			t.Errorf("%d engine processes recorded in %s, want one per worker", len(files), dir)
+		}
+		for _, f := range files {
+			text, _ := os.ReadFile(f)
+			head := "uci\n" + strings.Join(want, "\n") + "\nisready\nucinewgame\n"
+			if !strings.HasPrefix(string(text), head) {
+				lines := strings.SplitN(string(text), "\n", 8)
+				t.Errorf("%s began %q, want %q", filepath.Base(f), strings.Join(lines[:len(lines)-1], "\n"), head)
+			}
+		}
+	}
+	check(basicDir, "setoption name MultiPV value 2")
+	check(randomDir, "setoption name Delay value 0", "setoption name Extra value on")
+	// The results say what each engine ran with, and so do the games.
+	st := tr.Status()
+	want := []EngineOptions{
+		{Name: "Basic", Confirmed: true, Options: []uci.OptionSetting{{Name: "MultiPV", Value: "2"}}},
+		{Name: "Random", Confirmed: true, Options: []uci.OptionSetting{{Name: "Delay", Value: "0"}, {Name: "Extra", Value: "on"}}},
+	}
+	if !reflect.DeepEqual(st.EngineOptions, want) {
+		t.Errorf("engine options %+v", st.EngineOptions)
+	}
+	text, err := tr.GamePGN(st.Recent[0].Number)
+	if err != nil || !strings.Contains(text, `Options "MultiPV=2"]`) || !strings.Contains(text, `Options "Delay=0; Extra=on"]`) {
+		t.Errorf("the game's PGN:\n%s (%v)", text, err)
+	}
+}
+
+// A paused tournament finishes the pairs it is playing, starts no more,
+// and carries on to the end when resumed.
+func TestPauseAndResume(t *testing.T) {
+	tr := newT(&recorder{})
+	err := tr.Start(Config{
+		Engines:     []EngineSpec{{Name: "A", Path: randomEngine}, {Name: "B", Path: randomEngine}},
+		TimeControl: TimeControl{MoveTimeMs: 10, MarginMs: 500},
+		Concurrency: 2, Games: 16,
+		Openings:     OpeningConfig{Source: "book", Plies: 4},
+		Adjudication: Adjudication{MaxMoves: 30},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wait := func(what string, ok func(Status) bool) Status {
+		t.Helper()
+		for end := time.Now().Add(60 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+			if s := tr.Status(); ok(s) {
+				return s
+			}
+		}
+		t.Fatalf("timed out waiting for %s: %s", what, tr.Status().Describe())
+		return Status{}
+	}
+	wait("two games", func(s Status) bool { return s.Games >= 2 })
+	if err := tr.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	s := wait("the games in progress to end", func(s Status) bool { return s.Paused && len(s.Live) == 0 })
+	if s.State != "running" || s.Games%2 != 0 || s.Games >= 16 {
+		t.Fatalf("paused with %d games, state %s", s.Games, s.State)
+	}
+	held, elapsed := s.Games, s.Elapsed
+	time.Sleep(600 * time.Millisecond)
+	s = tr.Status()
+	if s.Games != held || len(s.Live) != 0 || !s.Paused {
+		t.Fatalf("while paused: %d games (was %d), %d playing", s.Games, held, len(s.Live))
+	}
+	if s.Elapsed-elapsed > 0.2 {
+		t.Errorf("the clock ran %.2fs while paused", s.Elapsed-elapsed)
+	}
+	if err := tr.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	s = waitDone(t, tr, 60*time.Second)
+	if s.Games != 16 || s.Paused {
+		t.Fatalf("after resuming: %d games, paused %v", s.Games, s.Paused)
+	}
+	if tr.Pause() == nil {
+		t.Error("a finished tournament was paused")
 	}
 }
