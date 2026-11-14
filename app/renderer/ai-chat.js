@@ -181,6 +181,28 @@ function aicFormat(text) {
 
 const aicTime = (ms) => { const s = Math.max(1, Math.round(ms / 1000)); return s >= 60 ? `${Math.floor(s / 60)} min ${s % 60} s` : `${s} s`; };
 
+// Makes parent's children be rows, in order, moving as little as possible:
+// what is gone is taken out, what is new is put in, and what is already in
+// its place is left alone, so nothing that is staying is animated again.
+function aicSync(parent, rows) {
+  const keep = new Set(rows);
+  for (const child of [...parent.children]) if (!keep.has(child)) child.remove();
+  rows.forEach((row, i) => { if (parent.children[i] !== row) parent.insertBefore(row, parent.children[i] ?? null); });
+}
+
+// Plain text that grows as it is written: only what is new is added, in a
+// piece that fades in; what was there before stays as it is. Text that
+// changes in any other way (tidied up at the end, replaced) is set plainly.
+function aicSoftText(node, text) {
+  text = String(text ?? '');
+  const had = node.dataset.text ?? '';
+  if (text === had && (node.textContent === text)) return;
+  if (text.startsWith(had) && text.length > had.length && node.textContent === had && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    node.append(el('span', { className: 'aic-in', textContent: text.slice(had.length) }));
+  } else node.textContent = text;
+  node.dataset.text = text;
+}
+
 // --- The answer streaming in --------------------------------------------------
 // The model's words arrive in bursts; they are let onto the page at an even
 // pace instead, catching up faster the further behind they are, and each
@@ -454,9 +476,9 @@ function renderAiChat() {
       })),
     ]));
   }
-  // Only what changed is put in: rows already there stay as they are.
-  const same = log.children.length === rows.length && rows.every((row, i) => log.children[i] === row);
-  if (!same) log.replaceChildren(...rows);
+  // Only what changed is put in: rows already there stay where they are,
+  // untouched (putting an element in again would play its entrance again).
+  aicSync(log, rows);
   if (atEnd || aic.justSent) log.scrollTop = log.scrollHeight;
   aic.justSent = false;
   const send = $('#aic-send');

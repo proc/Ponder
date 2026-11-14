@@ -25,12 +25,17 @@ npm start        # builds the Go backend into ./bin, then opens the app
 npm run package            # dist/Ponder-<platform>-<arch>/ (on macOS: Ponder.app)
 npm run package -- --zip   # macOS: also dist/Ponder-<version>-mac-<arch>.zip
 npm run package -- --arch=x64   # for the other processor (arm64, x64)
+npm run package -- --platform=win32 --arch=x64 --zip   # for Windows, from a Mac
 ```
 
 This builds the Go backend and the two bundled engines for that processor
 and puts them, the window's files and the piece sets into an Electron
 bundle that runs without Go, Node or the source. The package is for the
-system it is made on (macOS, Windows or Linux). On macOS the bundle is
+system it is made on unless `--platform=` names another (`win32`, `darwin`,
+`linux`): Go and Electron's packager both build across systems, so a Windows
+package (`dist/Ponder-win32-x64/Ponder.exe`) can be made on a Mac. The first
+time, Electron for that system is downloaded. A Windows package made this
+way is not code-signed, so Windows SmartScreen warns before running it. On macOS the bundle is
 signed ad hoc, which is enough to run it on the computer that built it;
 another Mac will refuse it as from an unidentified developer until it is
 signed with a Developer ID and notarized. Its icon is made from `icon.svg`: after changing the drawing, run
@@ -91,8 +96,9 @@ rest holds the moves or game list beside engine analysis and game details.
   processor load (all cores, every program) with the figure beside it, read once a
   second. When a game you are
   watching ends (someone's on Lichess, your engine's, a tournament game),
-  the analysis pauses by itself and takes up again when the next game
-  starts; not if you had paused it yourself, and not once you turn it off.
+  the analysis pauses by itself (as soon as the result is in) and takes up
+  again when the next game starts, or when a game it lost the connection
+  to comes back; not if you had paused it yourself, and not once you turn it off.
 - **Moves list** – one row per move number as on Lichess (number, White,
   Black), with the result at the end; click a move to go to it. Each move
   starts with an icon of the piece that moved (in the board's piece theme;
@@ -116,16 +122,19 @@ rest holds the moves or game list beside engine analysis and game details.
   earlier analysis's) is left as it is, an evaluation the file carries is
   kept, and **Remove its comments** takes the analysis's off again.
 - **Versus screen** – when a game you are watching starts (a Lichess
-  player's, or your engine's), the two players' cards come in from either
-  side of the board to face each other across a **VS**: colour, name,
+  player's, or your engine's), the whole window dims and the two players'
+  cards come in from either edge of it to face each other across a **VS**: colour, name,
   title, flag and rating, with their games, record and recent form once
   Lichess has answered, the event underneath and their score against each
-  other. After a few seconds they go off the way they came; a click or Esc
+  other. A 1990s arcade fighting-game fanfare plays as they arrive (a thud,
+  three rising chords and a crash, in place of the usual game-start sound;
+  it follows the Sounds setting). After a few seconds they go off the way
+  they came; a click or Esc
   sends them away at once. A game joined part way through, tournament
   games and your own games do not show it. Turn it off under **Settings →
   General**.
-- **Captures** – a captured piece lifts off its square and flies, shrinking
-  and fading, into the captured pieces on the bar of the player who took it,
+- **Captures** – a captured piece lifts off its square and flies, spinning,
+  shrinking and fading, into the captured pieces on the bar of the player who took it,
   where it lands in its place. It follows the move animation setting (off:
   no flight).
 - **Pieces under attack** – a piece that more enemy pieces attack than its
@@ -231,6 +240,15 @@ rest holds the moves or game list beside engine analysis and game details.
   positions and the time left, and **All / Solved / Missed** filters the
   list. **Test engine** on the bar over the moves tests the position on the
   board. Your engine's options apply (MultiPV and Ponder are left out).
+  When a run of several positions ends (or is stopped), a **Test results**
+  screen opens: solved and missed counts with percentages, the average,
+  median and slowest time to solve, the average depth (and on the missed
+  ones), search speed and nodes, and how long the run took. Under them is
+  every position that was not solved, with a small board, the side to
+  move, what was asked (the best move, or the move to avoid), the EPD's
+  comment if it has one, and what the engine played with its depth, score,
+  nodes and line. **Load on board** puts that position on the board;
+  **Results…** on the test bar opens the screen again.
   After a run, **Review missed (N)** on the bar makes a set of just the
   missed positions: ◀ ▶ step through them, and the moves list shows the
   solution (green) and the engine's move with its line, depth and score
@@ -399,7 +417,11 @@ accent colour; a click on a move shows it on the board. The summary is set
 apart at the end, with the last moves of the game. A new game
 starts a new commentary. It runs beside the chat without interrupting it,
 uses the model from **Settings → AI**, and turns itself off with a
-notification if the endpoint does not answer. Comments are not saved with
+notification if the endpoint does not answer. The comment that failed has
+a **Retry** button (on the card and in the Commentary view): it asks again,
+covering the moves the failed comment would have and any played since, and
+turns commentary back on; a summary that failed is asked for again the same
+way. Comments are not saved with
 the game.
 
 **Annotate the game with the commentary** (in the Commentary view) puts
@@ -580,8 +602,11 @@ it was.
 Moves, captures, castling, check, promotion, the start and end of a game
 (a win or loss when you play the computer), your clock dropping under 10
 seconds, and illegal moves each have a sound. They are generated in code
-(`app/renderer/sounds.js`), with a wooden set for the minimalist theme and a
-synth set for cyberpunk. **Settings** turns them off or changes the volume.
+(`app/renderer/sounds.js`), with a wooden set for the minimalist theme, a
+synth set for cyberpunk and a 1990s 16-bit arcade fighting-game set for dusk (FM-synth
+brass, bass and bells with noise for the blows: a jab for a move, a heavy
+punch for a capture, a charge-up for a promotion, brass fanfares for the
+start, a win and the versus screen, a sinking "K.O." for a loss). **Settings** turns them off or changes the volume.
 
 While a game is being played, its controls sit on the player bars beside
 the board: each person has **⚑ Resign** on their own bar, and the bar

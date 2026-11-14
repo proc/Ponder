@@ -231,9 +231,7 @@ async function loadPosition(suite, index) {
     for (let t = 0; t < 40 && state?.startFen?.split(' ').slice(0, 4).join(' ') !== key; t++) await new Promise((res) => setTimeout(res, 25));
     if (tp.suite !== suite || tp.index !== index) return;
     const engine = tp.suites[suite].engine ?? 'Engine';
-    // The engine reports from the side to move; shown from White's, like the analysis.
-    const sign = p.fen.split(' ')[1] === 'b' ? -1 : 1;
-    const score = r.mate ? `#${sign * r.mate}` : `${sign * r.cp > 0 ? '+' : ''}${((sign * r.cp) / 100).toFixed(2)}`;
+    const score = tpScore(r, p);
     const want = p.bm.length ? (r.want ?? []) : [];
     for (const u of want) await addLine(0, [u], p.bm.length > 1 ? 'A solution' : 'Solution', 'good');
     await addLine(0, r.pvUci?.length ? r.pvUci : [r.uci], `${engine}${r.depth ? ` · d${r.depth}` : ''} · ${score}`, 'bad');
@@ -367,7 +365,7 @@ async function runEngineTest(suite, indexes) {
   const key = `t${Date.now()}`;
   const results = tpResults(suite);
   for (const i of pick) results.delete(i);
-  tp.run = { key, suite, engine: engine.name, total: pick.length, done: 0, solved: 0, started: Date.now(), timeMs: time, conc, single: pick.length === 1 ? pick[0] : null };
+  tp.run = { key, suite, pick, engine: engine.name, total: pick.length, done: 0, solved: 0, started: Date.now(), timeMs: time, conc, single: pick.length === 1 ? pick[0] : null };
   try {
     await api.backend('epdTestStart', {
       key, moveTimeMs: time, concurrency: conc,
@@ -395,6 +393,8 @@ function epdTestEvent(ev) {
     tp.last = { ...run, state: ev.state, error: ev.error, finished: Date.now() };
     tp.run = null;
     if (ev.state === 'error') { $('#tp-error').textContent = ev.error; $('#tp-error').hidden = false; }
+    // A run of several positions ends on its results.
+    if (run.total > 1 && run.done > 0) openTestResults();
   }
   renderTestProgress();
   if (dlgPositions.open && run.suite === tp.suite) renderPositionList();
@@ -428,17 +428,19 @@ function renderTestProgress() {
   const review = $('#tp-review');
   review.hidden = running || !missed || tp.suites[shown.suite]?.review;
   review.textContent = `Review missed (${missed})`;
+  $('#tp-results').hidden = running || shown.total < 2 || !shown.done;
 }
 
 // The positions the engine missed, as a set of their own to go through:
 // ◀ ▶ step through only those, and each shows the solution and the
 // engine's line in the moves list.
-function reviewMissed() {
+// Returns the set's number, and where each missed position is in it.
+function missedSuite() {
   const from = tp.last?.suite ?? tp.suite;
   const src = tp.suites[from];
   const results = tpResults(from);
   const missed = src.positions.map((p, i) => ({ p, i, r: results.get(i) })).filter(({ r }) => r && !r.solved && !r.error);
-  if (!missed.length) return;
+  if (!missed.length) return null;
   const run = tp.last;
   const name = `Missed: ${src.name.replace(/^Missed: /, '')}${run ? ` · ${run.engine} · ${fmtMs(run.timeMs)}` : ''}`;
   const suite = { name, review: true, engine: run?.engine, positions: missed.map(({ p }) => p) };
@@ -448,8 +450,113 @@ function reviewMissed() {
   const map = new Map();
   missed.forEach(({ r }, k) => map.set(k, { ...r, index: k }));
   tp.results.set(at, map);
-  loadPosition(at, 0);
+  return { at, where: new Map(missed.map(({ i }, k) => [i, k])) };
 }
+function reviewMissed() {
+  const set = missedSuite();
+  if (set) loadPosition(set.at, 0);
+}
+
+// ---------------------------------------------------------------------------
+// The results of a run: its figures, and each position it missed, with what
+// was wanted and what the engine played, to put on the board.
+// ---------------------------------------------------------------------------
+const dlgTestResults = $('#dlg-test-results');
+
+// The engine's score, from White's side like the analysis.
+function tpScore(r, p) {
+  const sign = p.fen.split(' ')[1] === 'b' ? -1 : 1;
+  if (r.mate) return `#${sign * r.mate}`;
+  const cp = sign * r.cp;
+  return `${cp > 0 ? '+' : ''}${(cp / 100).toFixed(2)}`;
+}
+const fmtCount = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(2)}B` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(0)}k` : String(Math.round(n)));
+
+function testRunStats(run) {
+  const results = tpResults(run.suite);
+  const rows = (run.pick ?? []).map((i) => ({ i, p: tp.suites[run.suite].positions[i], r: results.get(i) })).filter(({ p, r }) => p && r);
+  const solved = rows.filter(({ r }) => r.solved);
+  const errors = rows.filter(({ r }) => r.error);
+  const missed = rows.filter(({ r }) => !r.solved && !r.error);
+  const searched = rows.filter(({ r }) => !r.error);
+  const avg = (list) => (list.length ? list.reduce((a, b) => a + b, 0) / list.length : 0);
+  const times = solved.map(({ r }) => r.foundMs).filter((t) => t >= 0).sort((a, b) => a - b);
+  const nodes = searched.reduce((a, { r }) => a + (r.nodes ?? 0), 0);
+  return {
+    rows, solved, errors, missed,
+    avgSolve: avg(times),
+    medianSolve: times.length ? times[Math.floor((times.length - 1) / 2)] : 0,
+    slowest: times.length ? times[times.length - 1] : 0,
+    avgDepth: avg(searched.map(({ r }) => r.depth).filter(Boolean)),
+    avgDepthMissed: avg(missed.map(({ r }) => r.depth).filter(Boolean)),
+    nodes,
+    nps: searched.length ? nodes / ((searched.length * run.timeMs) / 1000) : 0,
+    took: (run.finished ?? Date.now()) - run.started,
+  };
+}
+
+function openTestResults() {
+  const run = tp.last;
+  if (!run || !tp.suites[run.suite]) return;
+  const st = testRunStats(run);
+  const suite = tp.suites[run.suite];
+  const ended = run.state === 'stopped' ? ` Stopped after ${run.done} of ${run.total}.` : run.state === 'error' ? ` Stopped by an error after ${run.done} of ${run.total}.` : '';
+  $('#tr-what').textContent = `${run.engine} on ${suite.name}: ${fmtMs(run.timeMs)} a position${run.conc > 1 ? `, ${run.conc} at once` : ''}.${ended}`;
+  const tile = (label, value, note = '', cls = '') => el('div', { className: 'tr-stat ' + cls }, [
+    el('span', { className: 'tr-stat-label', textContent: label }),
+    el('b', { textContent: value }),
+    el('span', { className: 'tr-stat-note', textContent: note }),
+  ]);
+  const done = st.rows.length;
+  const took = st.took >= 90000 ? `${Math.round(st.took / 60000)} min` : st.took >= 10000 ? `${Math.round(st.took / 1000)} s` : `${(st.took / 1000).toFixed(1)} s`;
+  $('#tr-stats').replaceChildren(
+    tile('Solved', `${st.solved.length} / ${done}`, done ? `${((st.solved.length / done) * 100).toFixed(1)}%` : '', 'ok'),
+    tile('Missed', String(st.missed.length), st.errors.length ? `${st.errors.length} with an error` : done ? `${((st.missed.length / done) * 100).toFixed(1)}%` : '', st.missed.length ? 'no' : ''),
+    tile('Time to solve', st.solved.length ? fmtMs(Math.round(st.avgSolve)) : '–', st.solved.length ? `median ${fmtMs(st.medianSolve)} · slowest ${fmtMs(st.slowest)}` : ''),
+    tile('Depth', st.avgDepth ? st.avgDepth.toFixed(1) : '–', st.missed.length && st.avgDepthMissed ? `${st.avgDepthMissed.toFixed(1)} on the missed` : 'average reached'),
+    tile('Speed', st.nps ? `${fmtCount(st.nps)}/s` : '–', st.nodes ? `${fmtCount(st.nodes)} nodes` : ''),
+    tile('Run time', took, `${done} position${done === 1 ? '' : 's'}`),
+  );
+  const failed = [...st.missed, ...st.errors];
+  $('#tr-missed-title').textContent = failed.length ? `Not solved (${failed.length})` : 'Every position solved';
+  $('#tr-missed-hint').textContent = failed.length ? 'Put one on the board to go through it: the solution and the engine\'s line are added to the moves.' : '';
+  const set = st.missed.length ? missedSuite() : null;
+  $('#tr-list').hidden = !failed.length;
+  $('#tr-list').replaceChildren(...failed.map(({ i, p, r }) => {
+    const white = p.fen.split(' ')[1] === 'w';
+    const task = p.bm.length ? `Find the best move: ${p.bm.join(' or ')}` : p.am.length ? `Avoid ${p.am.join(' and ')}` : 'No solution given';
+    const lines = [
+      el('div', { className: 'tr-row-head' }, [
+        el('span', { className: 'tp-id', textContent: p.id }),
+        el('span', { className: `tp-side ${white ? 'w' : 'b'}`, textContent: white ? 'White to move' : 'Black to move' }),
+      ]),
+      el('div', { className: 'tr-task', textContent: task }),
+    ];
+    if (p.comment) lines.push(el('div', { className: 'hint', textContent: p.comment }));
+    if (r.error) lines.push(el('div', { className: 'tr-played err', textContent: `The engine failed: ${r.error}` }));
+    else {
+      lines.push(el('div', { className: 'tr-played' }, [
+        'Played ', el('b', { textContent: r.move || '?' }),
+        el('span', { className: 'tr-fig', textContent: `${r.depth ? ` · depth ${r.depth}` : ''} · ${tpScore(r, p)}${r.nodes ? ` · ${fmtCount(r.nodes)} nodes` : ''}` }),
+      ]));
+      if (r.pv?.length > 1) lines.push(el('div', { className: 'tr-pv', textContent: r.pv.join(' ') }));
+    }
+    const load = el('button', { type: 'button', className: 'small', textContent: 'Load on board', title: 'Put this position on the board, with the solution and the engine\'s line' });
+    load.onclick = () => {
+      dlgTestResults.close();
+      const k = set?.where.get(i);
+      if (k != null) loadPosition(set.at, k); else loadPosition(run.suite, i);
+    };
+    const mini = miniBoard(p.fen, !white);
+    return el('div', { className: 'tr-row' }, [mini, el('div', { className: 'tr-row-text' }, lines), load]);
+  }));
+  $('#tr-review').hidden = !st.missed.length;
+  $('#tr-review').textContent = `Review all missed (${st.missed.length})`;
+  if (!dlgTestResults.open) dlgTestResults.showModal();
+}
+$('#tr-review').onclick = () => { dlgTestResults.close(); reviewMissed(); };
+$('#tp-results').onclick = openTestResults;
+window.openTestResults = openTestResults;
 
 $('#tp-review').onclick = reviewMissed;
 $('#tp-run-all').onclick = () => runEngineTest(tp.suite, []);

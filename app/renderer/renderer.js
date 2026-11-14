@@ -58,7 +58,7 @@ function setTheme(name, { save = true } = {}) {
   if (!name) return;
   theme = name;
   themeElement(document.documentElement, name);
-  sounds.setVoice(name === 'cyberpunk' ? 'synth' : 'wood');
+  sounds.setVoice({ cyberpunk: 'synth', dusk: 'arcade' }[name] ?? 'wood');
   if (save) {
     try { localStorage.setItem('theme', name); } catch { /* storage unavailable */ }
   }
@@ -645,10 +645,13 @@ function flyCaptured(piece, col, row) {
   place.style.visibility = 'hidden';
   const land = () => { flyer.remove(); flight.place.style.visibility = ''; capFlights.delete(flight); };
   const ms = Math.max(450, Math.min(900, ANIM_SPEEDS[animSpeed] * 3.2));
+  // It spins on the way: two full turns, toward the side it flies to, to
+  // land upright (not when the system asks for less motion).
+  const turn = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : (dx < 0 ? -720 : 720);
   const anim = flyer.animate([
-    { transform: 'translate(0, 0) scale(1)', opacity: 1, offset: 0 },
-    { transform: `translate(0, ${-size * 0.38}px) scale(1.14)`, opacity: 1, offset: 0.3, easing: 'cubic-bezier(.5, 0, .3, 1)' },
-    { transform: `translate(${dx}px, ${dy}px) scale(${scale})`, opacity: 0.35, offset: 1 },
+    { transform: 'translate(0, 0) scale(1) rotate(0deg)', opacity: 1, offset: 0 },
+    { transform: `translate(0, ${-size * 0.38}px) scale(1.14) rotate(${turn * 0.12}deg)`, opacity: 1, offset: 0.3, easing: 'cubic-bezier(.5, 0, .3, 1)' },
+    { transform: `translate(${dx}px, ${dy}px) scale(${scale}) rotate(${turn}deg)`, opacity: 0.35, offset: 1 },
   ], { duration: ms, easing: 'cubic-bezier(.2, .7, .3, 1)' });
   anim.onfinish = land;
   anim.oncancel = land;
@@ -2022,6 +2025,8 @@ function playStateSounds(prev, next, newGame) {
   if (next.external?.kind === 'tournament') return;
   if (newGame) {
     lowTime = {};
+    // The versus screen has a sound of its own, in place of the start sound.
+    if (window.versusWanted?.(next)) return;
     if ((next.active && !next.loaded) || (next.external?.live && next.moves.length === 0)) sounds.play('start');
     return;
   }
@@ -2218,10 +2223,13 @@ function applyState(next) {
   // one. Not if you paused it yourself, and not once you have turned it off.
   if (typeof analysis !== 'undefined' && analysis.on) {
     const watched = (st) => Boolean(st?.external && st.external.kind !== 'play');
-    if (newGame && analysis.autoHeld) {
+    // Over: no longer followed, or decided (the result can arrive first).
+    const over = (st) => !st.external.live || st.result !== '*';
+    if (analysis.autoHeld && (newGame || (watched(next) && !over(next)))) {
+      // The next game, or this one going again (reconnected to it).
       analysis.held = false;
       analysis.autoHeld = false;
-    } else if (prev && !newGame && watched(prev) && prev.external.live && watched(next) && !next.external.live && !analysis.held) {
+    } else if (prev && !newGame && watched(prev) && !over(prev) && watched(next) && over(next) && !analysis.held) {
       analysis.held = true;
       analysis.autoHeld = true;
     }

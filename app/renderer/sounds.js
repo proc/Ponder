@@ -1,6 +1,7 @@
 // Game sounds, synthesised with the Web Audio API: no audio files needed.
-// Two voices follow the theme: "wood" (soft clicks and chimes, for the
-// minimalist theme) and "synth" (short electronic blips, for cyberpunk).
+// Three voices follow the theme: "wood" (soft clicks and chimes, for the
+// minimalist theme), "synth" (short electronic blips, for cyberpunk) and
+// "arcade" (a 1990s 16-bit arcade fighting game: FM brass, punches, for dusk).
 'use strict';
 
 const sounds = (() => {
@@ -11,7 +12,7 @@ const sounds = (() => {
   let voice = 'wood';
   const log = []; // the last few sounds played, newest last (for tests and debugging)
   // Output level per voice, so both sound about as loud at the same volume.
-  const level = { wood: 2.4, synth: 5 };
+  const level = { wood: 2.4, synth: 5, arcade: 1.8 };
 
   // Master gain, then a compressor so that loud moments do not clip.
   function connectOutput(c) {
@@ -76,6 +77,7 @@ const sounds = (() => {
     const t = c.currentTime + start;
     const src = c.createBufferSource();
     src.buffer = noiseBuffer;
+    src.loop = dur > 0.18; // the buffer is short: longer bursts go round it
     const band = c.createBiquadFilter();
     band.type = 'bandpass';
     band.frequency.value = freq;
@@ -89,7 +91,109 @@ const sounds = (() => {
     if (body) tone(body, start, dur * 1.4, { gain: gain * 0.5 });
   }
 
-  // Each sound in both voices. Times are in seconds from now.
+  // The versus screen: a 1990s arcade fighting game's "here they come". A
+  // thud and a whoosh as the cards fly in, three square-wave power chords
+  // stepping upward, and on the last a cymbal crash, a bright arpeggio and a
+  // held chord with a slow shimmer. k scales it to the voice's output level.
+  function versus(k) {
+    const chord = (root, at, dur, gain) => {
+      for (const [mul, type] of [[0.5, 'square'], [1, 'square'], [1.498, 'square'], [2.007, 'sawtooth']]) {
+        tone(root * mul, at, dur, { type, gain: gain * k });
+      }
+    };
+    tone(150, 0, 0.45, { gain: 0.5 * k, slideTo: 36 });
+    knock(0, { freq: 900, q: 0.4, gain: 0.3 * k, dur: 0.3, body: 0 });
+    tone(90, 0, 0.3, { type: 'sawtooth', gain: 0.05 * k, slideTo: 700 });
+    chord(164.81, 0.02, 0.24, 0.085);  // E
+    chord(174.61, 0.28, 0.24, 0.085);  // F
+    chord(196.0, 0.54, 1.25, 0.1);     // G, held
+    tone(120, 0.54, 0.5, { gain: 0.45 * k, slideTo: 40 });
+    knock(0.54, { freq: 6500, q: 0.3, gain: 0.3 * k, dur: 0.75, body: 0 });
+    [783.99, 987.77, 1174.66, 1567.98, 2349.32].forEach((f, i) => {
+      tone(f, 0.56 + i * 0.055, 0.16, { type: 'square', gain: 0.05 * k });
+    });
+    tone(1567.98, 0.86, 0.9, { type: 'square', gain: 0.035 * k, slideTo: 1580 });
+    tone(1574, 0.86, 0.9, { type: 'square', gain: 0.03 * k });
+  }
+
+  // The arcade voice's instruments: what a 16-bit arcade board of the early
+  // 1990s had. FM synthesis (a sine bent by another sine, brightest at the
+  // attack) for the brass, bass and bells, and noise for punches and swings.
+  function fm(freq, start, dur, { ratio = 1, index = 2, gain = 0.1, slideTo = null, hold = 0.55, bright = 0.3 } = {}) {
+    const c = audio();
+    const t = c.currentTime + start;
+    const car = c.createOscillator();
+    const mod = c.createOscillator();
+    const depth = c.createGain();
+    const env = c.createGain();
+    car.frequency.setValueAtTime(freq, t);
+    mod.frequency.setValueAtTime(freq * ratio, t);
+    if (slideTo) {
+      car.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      mod.frequency.exponentialRampToValueAtTime(slideTo * ratio, t + dur);
+    }
+    const peak = index * freq * ratio;
+    depth.gain.setValueAtTime(peak, t);
+    depth.gain.exponentialRampToValueAtTime(Math.max(1, peak * bright), t + dur);
+    mod.connect(depth).connect(car.frequency);
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(gain, t + 0.008);
+    env.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain * hold), t + dur * 0.7);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    car.connect(env).connect(master);
+    for (const o of [car, mod]) { o.start(t); o.stop(t + dur + 0.02); }
+  }
+  let longNoise = null;
+  function noiseThrough(start, dur, type, from, to, q, shape) {
+    const c = audio();
+    if (!longNoise) {
+      longNoise = c.createBuffer(1, c.sampleRate, c.sampleRate);
+      const d = longNoise.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    const t = c.currentTime + start;
+    const src = c.createBufferSource();
+    src.buffer = longNoise;
+    src.loop = true;
+    const filter = c.createBiquadFilter();
+    filter.type = type;
+    filter.Q.value = q;
+    filter.frequency.setValueAtTime(from, t);
+    filter.frequency.exponentialRampToValueAtTime(to, t + dur);
+    const env = c.createGain();
+    shape(env.gain, t);
+    src.connect(filter).connect(env).connect(master);
+    src.start(t, Math.random() * 0.5);
+    src.stop(t + dur + 0.02);
+  }
+  // A swing through the air: band-passed noise sweeping up or down.
+  const whoosh = (start, dur, from, to, gain) => noiseThrough(start, dur, 'bandpass', from, to, 1.4, (g, t) => {
+    g.setValueAtTime(0.0001, t);
+    g.exponentialRampToValueAtTime(gain, t + dur * 0.45);
+    g.exponentialRampToValueAtTime(0.0001, t + dur);
+  });
+  // A blow landing: a burst of noise closing down fast, over a falling thump.
+  function impact(start, { gain = 0.5, dur = 0.18, from = 5200, to = 380, low = 170 } = {}) {
+    noiseThrough(start, dur, 'lowpass', from, to, 0.7, (g, t) => {
+      g.setValueAtTime(gain, t);
+      g.exponentialRampToValueAtTime(0.0001, t + dur);
+    });
+    if (low) tone(low, start, dur * 1.3, { gain: gain * 0.9, slideTo: low * 0.28 });
+  }
+  // A crash cymbal.
+  const crash = (start, dur, gain) => noiseThrough(start, dur, 'highpass', 5200, 3800, 0.5, (g, t) => {
+    g.setValueAtTime(gain, t);
+    g.exponentialRampToValueAtTime(0.0001, t + dur);
+  });
+  // FM brass (each note doubled, slightly apart), bass and bell.
+  const brass = (notes, at, dur, gain = 0.07) => notes.forEach((f) => {
+    fm(f, at, dur, { index: 2.6, gain, bright: 0.4 });
+    fm(f * 1.007, at, dur, { index: 2.1, gain: gain * 0.6, bright: 0.4 });
+  });
+  const fbass = (f, at, dur, gain = 0.15) => fm(f, at, dur, { index: 3.4, gain, bright: 0.12 });
+  const bell = (f, at, dur, gain = 0.07) => fm(f, at, dur, { ratio: 3.5, index: 1.5, gain, bright: 0.04, hold: 0.22 });
+
+  // Each sound in every voice. Times are in seconds from now.
   const voices = {
     wood: {
       move: () => knock(0),
@@ -107,6 +211,7 @@ const sounds = (() => {
       challenge: () => { tone(784, 0, 0.18, { gain: 0.16 }); tone(1175, 0.12, 0.3, { gain: 0.16 }); },
       // A ponder hit: a bright two-note rise, just after the move's own sound.
       ponderhit: () => { tone(1319, 0.1, 0.12, { gain: 0.15 }); tone(1976, 0.19, 0.3, { gain: 0.17 }); },
+      versus: () => versus(0.75),
     },
     synth: {
       move: () => tone(660, 0, 0.07, { type: 'square', gain: 0.09, slideTo: 880 }),
@@ -123,6 +228,91 @@ const sounds = (() => {
       illegal: () => tone(110, 0, 0.12, { type: 'sawtooth', gain: 0.12 }),
       challenge: () => { tone(988, 0, 0.08, { type: 'square', gain: 0.08 }); tone(1480, 0.1, 0.12, { type: 'square', gain: 0.08 }); },
       ponderhit: () => { tone(880, 0.1, 0.06, { type: 'square', gain: 0.07, slideTo: 1760 }); tone(2637, 0.18, 0.14, { type: 'square', gain: 0.06 }); },
+      versus: () => versus(0.38),
+    },
+    // A 1990s arcade fighting game: FM brass stabs over an FM bass, punches
+    // and swings made of noise, bells for the small things.
+    arcade: {
+      // A light jab.
+      move: () => { whoosh(0, 0.07, 1400, 3600, 0.12); impact(0.03, { gain: 0.2, dur: 0.06, from: 3800, to: 900, low: 210 }); },
+      // A heavy punch landing.
+      capture: () => {
+        whoosh(0, 0.08, 700, 2600, 0.22);
+        impact(0.05, { gain: 0.5, dur: 0.24, low: 165 });
+        fm(92, 0.05, 0.16, { ratio: 1.41, index: 7, gain: 0.1, bright: 0.1 });
+      },
+      // Two quick steps and a block.
+      castle: () => {
+        whoosh(0, 0.07, 900, 2400, 0.14); whoosh(0.09, 0.07, 1200, 3000, 0.14);
+        fm(392, 0.17, 0.2, { ratio: 3.5, index: 2.5, gain: 0.1, bright: 0.05, hold: 0.2 });
+        impact(0.17, { gain: 0.22, dur: 0.07, low: 0 });
+      },
+      // Charging up a special move.
+      promote: () => {
+        fm(196, 0, 0.5, { index: 4, gain: 0.1, slideTo: 1568, bright: 0.6 });
+        whoosh(0, 0.5, 500, 5000, 0.16);
+        brass([784, 988, 1175], 0.5, 0.5, 0.05);
+        [1568, 1976, 2349].forEach((f, i) => bell(f, 0.5 + i * 0.06, 0.4, 0.05));
+        crash(0.5, 0.5, 0.12);
+      },
+      // Danger: two hard stabs a tritone apart.
+      check: () => { brass([440, 622], 0, 0.11, 0.08); brass([440, 622], 0.14, 0.2, 0.08); fbass(110, 0, 0.3, 0.12); },
+      // "Round one — fight!"
+      start: () => {
+        impact(0, { gain: 0.4, dur: 0.2 });
+        brass([294, 349, 440], 0, 0.12); fbass(73.4, 0, 0.13);
+        brass([294, 349, 440], 0.15, 0.12); fbass(73.4, 0.15, 0.13);
+        impact(0.3, { gain: 0.5, dur: 0.3 }); crash(0.3, 0.7, 0.14);
+        brass([392, 466, 587, 784], 0.3, 0.75); fbass(98, 0.3, 0.75);
+      },
+      // "You win": a brass fanfare climbing home.
+      win: () => {
+        const steps = [[[262, 330, 392], 65.4, 0, 0.12], [[262, 330, 392], 65.4, 0.15, 0.12], [[349, 440, 523], 87.3, 0.3, 0.2],
+          [[392, 494, 587], 98, 0.54, 0.2], [[523, 659, 784, 1047], 130.8, 0.78, 1.0]];
+        for (const [notes, root, at, dur] of steps) { brass(notes, at, dur); fbass(root, at, dur); }
+        impact(0, { gain: 0.3, dur: 0.15 }); impact(0.78, { gain: 0.45, dur: 0.3 }); crash(0.78, 0.9, 0.14);
+        [1047, 1319, 1568, 2093].forEach((f, i) => bell(f, 0.84 + i * 0.07, 0.5, 0.04));
+      },
+      // "K.O.": the blow, then the brass sinking.
+      loss: () => {
+        impact(0, { gain: 0.65, dur: 0.35, low: 150 });
+        brass([294, 349, 440], 0.05, 0.3); fbass(73.4, 0.05, 0.3);
+        brass([277, 330, 415], 0.38, 0.3); fbass(69.3, 0.38, 0.3);
+        brass([220, 262, 349], 0.71, 1.0); fbass(55, 0.71, 1.0);
+        fm(440, 0.71, 1.0, { index: 2, gain: 0.05, slideTo: 110 });
+      },
+      // Time over: two level stabs.
+      draw: () => { brass([392, 523, 587], 0, 0.14); brass([392, 523, 587], 0.2, 0.4); fbass(98, 0, 0.6, 0.12); },
+      // The closing gong.
+      end: () => {
+        impact(0, { gain: 0.35, dur: 0.25, low: 120 });
+        fm(110, 0, 1.3, { ratio: 1.41, index: 4, gain: 0.14, bright: 0.05, hold: 0.3 });
+        brass([220, 330, 440], 0, 0.9, 0.04);
+      },
+      // The timer running down.
+      lowtime: () => { bell(1568, 0, 0.12, 0.09); bell(1568, 0.14, 0.12, 0.09); bell(1568, 0.28, 0.2, 0.09); },
+      // Blocked.
+      illegal: () => { fm(110, 0, 0.17, { ratio: 0.5, index: 6, gain: 0.14, bright: 0.5 }); impact(0, { gain: 0.2, dur: 0.06, from: 2500, to: 500, low: 0 }); },
+      // "Here comes a new challenger!"
+      challenge: () => {
+        whoosh(0, 0.22, 400, 4200, 0.2);
+        impact(0.2, { gain: 0.45, dur: 0.22 });
+        brass([330, 494, 659], 0.2, 0.14); fbass(82.4, 0.2, 0.15);
+        brass([440, 659, 880], 0.38, 0.5); fbass(110, 0.38, 0.5); crash(0.38, 0.5, 0.1);
+      },
+      // A special move connecting.
+      ponderhit: () => { whoosh(0.08, 0.12, 1500, 6000, 0.12); bell(1319, 0.12, 0.12, 0.08); bell(1976, 0.2, 0.45, 0.08); },
+      // The versus screen: thud, whoosh, three brass power chords climbing,
+      // then the crash and a held chord with bells over it.
+      versus: () => {
+        impact(0, { gain: 0.6, dur: 0.4, low: 150 }); whoosh(0, 0.3, 300, 3500, 0.2);
+        for (const [root, at, dur] of [[164.81, 0.02, 0.22], [174.61, 0.28, 0.22], [196, 0.54, 1.3]]) {
+          brass([root, root * 1.498, root * 2, root * 2.997], at, dur, 0.06); fbass(root / 2, at, dur);
+        }
+        whoosh(0.3, 0.24, 500, 5000, 0.14);
+        impact(0.54, { gain: 0.6, dur: 0.45, low: 120 }); crash(0.54, 1.1, 0.18);
+        [784, 988, 1175, 1568, 2349].forEach((f, i) => bell(f, 0.58 + i * 0.06, 0.5, 0.045));
+      },
     },
   };
 

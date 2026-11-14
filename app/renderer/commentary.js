@@ -217,7 +217,7 @@ async function askCommentary(kind) {
     moves.push({ ply: p, san: state.moves[p - 1].san, n: at.n, white: at.white });
   }
   const entry = {
-    ply: n, kind, text: '', live: true, moves,
+    ply: n, from, kind, text: '', live: true, moves,
     label: kind === 'summary' ? `Summary · ${state.result.replace('1/2-1/2', '½-½')}` : n ? `After ${num}${white ? '.' : '…'} ${state.moves[n - 1].san}` : 'Before the first move',
   };
   cm.feed.push(entry);
@@ -246,7 +246,7 @@ async function askCommentary(kind) {
       // An endpoint that does not answer is not asked again move after move.
       cm.on = false;
       saveCommentary();
-      cm.note = 'Commentary was turned off: the AI endpoint did not answer. Check Settings → AI, then turn it on again.';
+      cm.note = 'Commentary was turned off: the AI endpoint did not answer. Retry asks again and turns it back on; Settings → AI has the endpoint.';
       if (typeof notify === 'function') notify(msg, { title: 'Live commentary stopped' });
     }
   } finally {
@@ -255,6 +255,29 @@ async function askCommentary(kind) {
     renderCommentary();
     // Moves played while it was speaking may already call for the next one.
     if (cm.id === id && state?.game === game) syncCommentary();
+  }
+}
+
+// Asks again for a comment the endpoint failed to give: the failed one goes,
+// commentary is turned back on, and the new comment covers the moves the
+// failed one would have, and any played since.
+function retryCommentary(entry) {
+  if (cm.busy || !entry?.error || state?.game !== cm.game) return;
+  const at = cm.feed.indexOf(entry);
+  if (at >= 0) cm.feed.splice(at, 1);
+  cm.on = true;
+  cm.note = '';
+  saveCommentary();
+  cm.lastPly = Math.max(0, Math.min(entry.from ?? cm.lastPly, state.moves.length));
+  const over = !cmLive() && state.result && state.result !== '*';
+  if (entry.kind === 'summary' || over) {
+    // The game is over: what is owed is its summary.
+    cm.summed = true;
+    cm.wasLive = false;
+    askCommentary('summary');
+  } else {
+    cm.wasLive = cmLive();
+    askCommentary('comment');
   }
 }
 
@@ -307,6 +330,39 @@ function setCommentary(on) {
   renderCommentary();
 }
 
+// A comment's row in the list, made once.
+const cmRows = new WeakMap();
+function cmRow(c) {
+  let r = cmRows.get(c);
+  if (r) return r;
+  const label = el('span');
+  const say = el('button', { type: 'button', className: 'cm-say', textContent: '▶', title: 'Read this comment aloud', hidden: true });
+  say.setAttribute('aria-label', 'Read this comment aloud');
+  say.onclick = () => speakCommentary(c.text, { force: true });
+  const body = el('div', { className: 'cm-body' });
+  const again = el('button', { type: 'button', className: 'small cm-retry', textContent: 'Retry', hidden: true });
+  again.title = 'Ask the AI endpoint again for this comment, and turn commentary back on';
+  again.onclick = () => retryCommentary(c);
+  const row = el('div', { className: 'cm-item' }, [
+    el('div', { className: 'cm-label' }, [label, say]),
+    ...(c.moves?.length ? [cmMoveStrip(c)] : []),
+    body, again,
+  ]);
+  r = { row, label, say, body, again };
+  cmRows.set(c, r);
+  return r;
+}
+function updateCmRow(c) {
+  const r = cmRow(c);
+  const cls = `cm-item ${c.kind}${c.error ? ' error' : ''}${c.live ? ' live' : ''}`;
+  if (r.row.className !== cls) r.row.className = cls;
+  if (r.label.textContent !== c.label) r.label.textContent = c.label;
+  aicSoftText(r.body, c.text); // the newest words fade in; the rest stay put
+  r.say.hidden = !(cmCanSpeak && c.text && !c.live && !c.error);
+  r.again.hidden = !c.error;
+  r.again.disabled = cm.busy;
+}
+
 // The moves a comment covers, in a row: those played since the comment
 // before it, the last one (the move the comment is for) picked out. A
 // click goes to that move on the board.
@@ -338,12 +394,20 @@ function renderCommentary() {
     $('#cm-at').textContent = last?.label ?? '';
     const text = $('#cm-text');
     const body = last ? last.text : cmLive() ? `Commentary is on: the first comment comes after ${cm.every === 1 ? 'the next move' : `the next ${cm.every} moves`}.` : 'Commentary is on: it starts with the next game played.';
-    if (text.textContent !== body) text.textContent = body;
+    // The same comment growing: its new words fade in. Another comment, or
+    // the hint: set plainly.
+    if (text.dataset.of !== (last ? `${cm.game}:${cm.feed.length}` : '')) { text.dataset.of = last ? `${cm.game}:${cm.feed.length}` : ''; text.dataset.text = ''; text.textContent = ''; }
+    if (last) aicSoftText(text, body); else if (text.textContent !== body) { text.textContent = body; text.dataset.text = body; }
     text.classList.toggle('live', Boolean(last?.live));
     text.classList.toggle('waiting', Boolean(last?.live && !last.text));
     text.classList.toggle('error', Boolean(last?.error));
     text.classList.toggle('hint', !last);
     card.classList.toggle('summary', last?.kind === 'summary');
+    // A comment that failed can be asked for again from the card too.
+    const again = $('#cm-retry');
+    again.hidden = !last?.error;
+    again.disabled = cm.busy;
+    again.onclick = () => retryCommentary(last);
   }
   // Reading aloud: the card's speaker, and the panel's controls.
   const spk = $('#cm-speak-btn');
@@ -363,23 +427,21 @@ function renderCommentary() {
   $('#ai-views').classList.toggle('cm-live', cm.on && cmLive());
   const feed = $('#cm-feed');
   const atEnd = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 60;
-  const key = JSON.stringify(cm.feed.map((c) => [c.label, c.text, c.live, c.error, c.moves?.length]));
-  if (feed.dataset.key !== key) {
-    feed.dataset.key = key;
-    feed.replaceChildren(...(cm.feed.length ? cm.feed.map((c) => el('div', { className: `cm-item ${c.kind}${c.error ? ' error' : ''}${c.live ? ' live' : ''}` }, [
-      el('div', { className: 'cm-label' }, [el('span', { textContent: c.label }), ...(cmCanSpeak && c.text && !c.live && !c.error ? [(() => {
-        const say = el('button', { type: 'button', className: 'cm-say', textContent: '▶', title: 'Read this comment aloud' });
-        say.setAttribute('aria-label', 'Read this comment aloud');
-        say.onclick = () => speakCommentary(c.text, { force: true });
-        return say;
-      })()] : [])]),
-      ...(c.moves?.length ? [cmMoveStrip(c)] : []),
-      el('div', { className: 'cm-body', textContent: c.text || (c.live ? 'Watching…' : '') }),
-    ])) : [el('p', { className: 'hint cm-empty', textContent: cm.on
+  // Each comment keeps its row: it is made once and then only what has
+  // changed in it is touched, so that the words being written fade in and
+  // nothing else in the list moves.
+  const rows = cm.feed.map((c) => { updateCmRow(c); return cmRow(c).row; });
+  if (!rows.length) {
+    const empty = cm.on
       ? (cmLive() ? 'Listening to the game: the first comment comes after the next few moves.' : 'Commentary starts with the next game that is played: yours, an engine’s, a Lichess game or a tournament game on the board.')
-      : 'Turn live commentary on and the AI model comments on the game every few moves as it is played, and sums it up when it ends.' })]));
-    if (atEnd) feed.scrollTop = feed.scrollHeight;
+      : 'Turn live commentary on and the AI model comments on the game every few moves as it is played, and sums it up when it ends.';
+    const hint = feed.querySelector('.cm-empty') ?? el('p', { className: 'hint cm-empty' });
+    if (hint.textContent !== empty) hint.textContent = empty;
+    rows.push(hint);
   }
+  const grew = rows.length !== feed.children.length;
+  aicSync(feed, rows);
+  if (atEnd && (grew || cm.busy)) feed.scrollTop = feed.scrollHeight;
   $('#cm-note').textContent = cm.note || 'Each comment sends the model the position and all the moves so far (Settings → AI sets the model).';
   $('#cm-note').classList.toggle('error', Boolean(cm.note));
 }

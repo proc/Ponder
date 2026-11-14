@@ -4,7 +4,8 @@
 //
 //   npm run package                 for this computer
 //   npm run package -- --arch=x64   for another processor (arm64, x64)
-//   npm run package -- --zip        also a .zip of it (macOS)
+//   npm run package -- --platform=win32   for another system (win32, darwin, linux)
+//   npm run package -- --zip        also a .zip of it
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -18,25 +19,34 @@ if (!goArch) {
   console.error(`Unknown --arch=${arch}: use arm64 or x64.`);
   process.exit(1);
 }
+// The system the package is for: this one, unless another is named. Go and
+// Electron's packager can both build for a system other than the one they
+// run on, so a Windows package can be made on a Mac.
+const platform = args.find((a) => a.startsWith('--platform='))?.slice(11) || process.platform;
+const goOS = { darwin: 'darwin', win32: 'windows', linux: 'linux' }[platform];
+if (!goOS) {
+  console.error(`Unknown --platform=${platform}: use win32, darwin or linux.`);
+  process.exit(1);
+}
 
 async function main() {
   // The backend and engines for the processor the package is for. They are
   // built apart from ./bin, which npm start uses (and may be running).
-  const exe = process.platform === 'win32' ? '.exe' : '';
-  const stage = path.join(root, 'dist', `.stage-${arch}`);
+  const exe = platform === 'win32' ? '.exe' : '';
+  const stage = path.join(root, 'dist', `.stage-${platform}-${arch}`);
   const bin = path.join(stage, 'bin');
   fs.rmSync(stage, { recursive: true, force: true });
   fs.mkdirSync(bin, { recursive: true });
   for (const [name, pkg] of [['backend', '.'], ['randomengine', './cmd/randomengine'], ['basicengine', './cmd/basicengine']]) {
     try {
       execFileSync('go', ['build', '-trimpath', '-ldflags=-s -w', '-o', path.join(bin, name + exe), pkg], {
-        cwd: path.join(root, 'backend'), stdio: 'inherit', env: { ...process.env, GOARCH: goArch, CGO_ENABLED: '0' },
+        cwd: path.join(root, 'backend'), stdio: 'inherit', env: { ...process.env, GOOS: goOS, GOARCH: goArch, CGO_ENABLED: '0' },
       });
     } catch (err) {
       if (err.code === 'ENOENT') console.error('Go was not found on your PATH. Install it from https://go.dev/dl/ and try again.');
       process.exit(1);
     }
-    console.log('built', name, `(${arch})`);
+    console.log('built', name, `(${platform} ${arch})`);
   }
 
   let packager, electronVersion;
@@ -58,7 +68,7 @@ async function main() {
     icon: path.join(root, 'assets', 'icon'), // .icns or .ico, by platform
     appBundleId: 'org.ponder.chess',
     appCategoryType: 'public.app-category.board-games',
-    platform: process.platform,
+    platform,
     arch,
     electronVersion,
     overwrite: true,
@@ -73,7 +83,7 @@ async function main() {
       fs.rmSync(path.join(res, junk), { force: true });
     }
   }
-  if (process.platform === 'darwin') {
+  if (platform === 'darwin' && process.platform === 'darwin') {
     // Sign the finished bundle for this computer (ad hoc: no developer
     // identity). Without it macOS finds the bundle changed since Electron
     // was signed. To hand the app to others, sign and notarize it instead.
@@ -81,12 +91,21 @@ async function main() {
   }
   console.log('packaged', path.relative(root, out));
 
-  if (zip && process.platform === 'darwin') {
+  if (zip) {
     const { version } = require(path.join(root, 'package.json'));
-    const file = path.join(root, 'dist', `Ponder-${version}-mac-${arch}.zip`);
+    const tag = { darwin: 'mac', win32: 'windows', linux: 'linux' }[platform];
+    const file = path.join(root, 'dist', `Ponder-${version}-${tag}-${arch}.zip`);
     fs.rmSync(file, { force: true });
-    execFileSync('ditto', ['-c', '-k', '--keepParent', path.join(out, 'Ponder.app'), file], { stdio: 'inherit' });
-    console.log('zipped', path.relative(root, file));
+    // What is zipped: the .app on macOS, the whole folder otherwise.
+    const what = platform === 'darwin' ? path.join(out, 'Ponder.app') : out;
+    try {
+      if (process.platform === 'darwin') execFileSync('ditto', ['-c', '-k', '--keepParent', what, file], { stdio: 'inherit' });
+      else if (process.platform === 'win32') execFileSync('powershell', ['-NoProfile', '-Command', `Compress-Archive -Path "${what}" -DestinationPath "${file}"`], { stdio: 'inherit' });
+      else execFileSync('zip', ['-qr', file, path.basename(what)], { cwd: path.dirname(what), stdio: 'inherit' });
+      console.log('zipped', path.relative(root, file));
+    } catch (err) {
+      console.error(`The package was made, but could not be zipped (${err.message}).`);
+    }
   }
 }
 

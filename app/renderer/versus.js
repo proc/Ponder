@@ -8,7 +8,7 @@
 // Settings → General turns it off.
 
 const vs = { game: null, timers: [], on: (() => { try { return localStorage.getItem('versus') !== 'off'; } catch { return true; } })() };
-const VS_HOLD = 3200; // ms the cards face each other
+const VS_HOLD = 5500; // ms the cards face each other
 const VS_OUT = 520;   // ms they take to leave
 
 function setVersus(on) {
@@ -96,16 +96,23 @@ function showVersus() {
   // The classes that set the cards moving go on once it has been drawn.
   void box.offsetWidth;
   box.classList.add('in');
+  sounds.play('versus');
   vs.timers.push(setTimeout(() => hideVersus(), VS_HOLD));
 }
 
-// Called when a new game comes onto the board.
-function maybeVersus() {
-  const ext = state?.external;
+// Whether a game with this state gets the versus screen.
+function versusWanted(st) {
+  const ext = st?.external;
   // A game you watch, as it starts: not one joined half way, not the quick
   // succession of a tournament's games, not your own.
   const watching = ext?.live && (ext.kind === 'spectate' || ext.kind === 'bot');
-  if (!vs.on || !watching || state.moves.length > 2 || puzzleView) { hideVersus(true); return; }
+  return !!(vs.on && watching && st.moves.length <= 2 && !puzzleView);
+}
+window.versusWanted = versusWanted;
+
+// Called when a new game comes onto the board.
+function maybeVersus() {
+  if (!versusWanted(state)) { hideVersus(true); return; }
   showVersus();
 }
 window.maybeVersus = maybeVersus;

@@ -51,14 +51,6 @@
             <g id="shapes"></g>
           </svg>
           <div id="promotion" hidden></div>
-          <div id="versus" hidden aria-live="polite" title="Click to go to the game">
-            <div class="vs-shade"></div>
-            <div class="vs-slash"></div>
-            <div class="vs-side white" id="vs-white"></div>
-            <div class="vs-side black" id="vs-black"></div>
-            <div class="vs-badge" aria-hidden="true"><span>VS</span></div>
-            <div class="vs-foot"><span class="vs-event" id="vs-event"></span><span class="vs-h2h" id="vs-h2h" hidden></span></div>
-          </div>
           <div id="game-over" hidden role="alertdialog" aria-labelledby="go-title" aria-describedby="go-reason">
             <div class="go-card">
               <div class="go-badge" id="go-badge"></div>
@@ -592,6 +584,7 @@
               <h3>Commentary</h3>
               <span class="cm-at" id="cm-at"></span>
               <button type="button" class="small icon-btn cm-speak-btn" id="cm-speak-btn" aria-pressed="false" title="Read the commentary aloud"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path class="spk-waves" d="M15.5 8.5a5 5 0 0 1 0 7M18.6 5.4a9 9 0 0 1 0 13.2"/><path class="spk-off" d="M22 9l-6 6M16 9l6 6"/></g></svg></button>
+              <button type="button" class="small primary" id="cm-retry" hidden title="Ask the AI endpoint again for this comment, and turn commentary back on">Retry</button>
               <button type="button" class="small" id="cm-open" title="Show all of the commentary in the AI panel">All…</button>
               <button type="button" class="small" id="cm-off" title="Turn live commentary off">Off</button>
             </div>
@@ -637,6 +630,16 @@
       </div>
     </aside>
   </main>
+
+  <!-- The versus screen: over the whole window when a watched game starts. -->
+  <div id="versus" hidden aria-live="polite" title="Click to go to the game">
+    <div class="vs-shade"></div>
+    <div class="vs-slash"></div>
+    <div class="vs-side white" id="vs-white"></div>
+    <div class="vs-side black" id="vs-black"></div>
+    <div class="vs-badge" aria-hidden="true"><span>VS</span></div>
+    <div class="vs-foot"><span class="vs-event" id="vs-event"></span><span class="vs-h2h" id="vs-h2h" hidden></span></div>
+  </div>
 
   <!-- The AI chat: a panel floating on the right, collapsing to a handle on the edge. -->
   <aside id="ai-panel" class="collapsed" aria-label="AI chat">
@@ -947,7 +950,8 @@
         <div class="tp-progress" id="tp-progress" hidden>
           <div class="tp-progress-bar"><span id="tp-progress-fill"></span></div>
           <span id="tp-progress-text"></span>
-          <button type="button" class="small tp-review" id="tp-review" hidden>Review missed</button>
+          <button type="button" class="small tp-review" id="tp-results" hidden title="Statistics for the run and the positions it missed">Results…</button>
+          <button type="button" class="small" id="tp-review" hidden>Review missed</button>
           <span class="tp-show">
             <label class="check"><input type="radio" name="tp-show" value="all" checked> All</label>
             <label class="check"><input type="radio" name="tp-show" value="solved"> Solved</label>
@@ -960,6 +964,24 @@
       <div class="actions">
         <button type="button" id="tp-cancel">Close</button>
         <button type="button" class="primary" id="tp-load">Analyse</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- After an engine test: the run's figures and the positions it missed. -->
+  <dialog id="dlg-test-results">
+    <form method="dialog" id="form-test-results">
+      <h2>Test results</h2>
+      <p class="hint" id="tr-what"></p>
+      <div class="tr-stats" id="tr-stats"></div>
+      <div class="tr-head">
+        <b id="tr-missed-title"></b>
+        <span class="hint" id="tr-missed-hint"></span>
+      </div>
+      <div class="tr-list" id="tr-list"></div>
+      <div class="actions">
+        <button type="button" id="tr-review" hidden>Review missed</button>
+        <button type="submit" class="primary">Close</button>
       </div>
     </form>
   </dialog>
