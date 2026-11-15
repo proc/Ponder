@@ -41,6 +41,9 @@ type harness struct {
 	cfg   Config
 	// Every engineInfo event, in order.
 	engineInfos []game.EngineInfo
+	// Every ponderHit event, and how many moves the board showed then.
+	ponderHits  []PonderHit
+	hitsShownAt []int
 }
 
 func newHarness(t *testing.T, policy Policy) *harness {
@@ -58,6 +61,13 @@ func newHarness(t *testing.T, policy Policy) *harness {
 			case "engineInfo":
 				h.infos++
 				h.engineInfos = append(h.engineInfos, data.(game.EngineInfo))
+			case "ponderHit":
+				h.ponderHits = append(h.ponderHits, data.(PonderHit))
+				n := -1
+				if len(h.shown) > 0 {
+					n = len(h.shown[len(h.shown)-1].Moves)
+				}
+				h.hitsShownAt = append(h.hitsShownAt, n)
 			}
 		},
 		Show: func(v game.ExternalView) {
@@ -763,5 +773,103 @@ func TestSeekPlaysGamesOneAfterAnother(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if n := strings.Count(strings.Join(h.fake.Calls(), "\n"), "POST /api/challenge/"); n != 3 {
 		t.Errorf("%d challenges sent, want 3:\n%s", n, strings.Join(h.fake.Calls(), "\n"))
+	}
+}
+
+// Two games at once: each is listed with its position, for the small
+// boards; one is on the board and Watch puts the other there.
+func TestTwoGamesListedWithPositions(t *testing.T) {
+	h := newHarness(t, Policy{Casual: true, Humans: true, MaxGames: 2})
+	h.fake.Delay = 30 * time.Millisecond
+	h.connect()
+	if err := h.bot.SetAutoAccept(true); err != nil {
+		t.Fatal(err)
+	}
+	h.waitListening()
+	h.fake.Challenge("Alice", false, false, 120, 1, "black", "standard")
+	h.fake.Challenge("Bob", false, false, 120, 1, "white", "standard")
+	s := h.waitFor("two games under way", func(s Status) bool {
+		if len(s.Games) != 2 {
+			return false
+		}
+		for _, g := range s.Games {
+			if g.Finished || g.Moves < 2 || g.Fen == "" || g.LastMove == "" {
+				return false
+			}
+		}
+		return true
+	})
+	for _, g := range s.Games {
+		if f := strings.Fields(g.Fen); len(f) != 6 || strings.HasPrefix(g.Fen, "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w") {
+			t.Fatalf("game %s: position %q", g.ID, g.Fen)
+		}
+	}
+	other := s.Games[0].ID
+	if other == s.Watching {
+		other = s.Games[1].ID
+	}
+	if s.Watching == "" || other == s.Watching {
+		t.Fatalf("watching %q of %+v", s.Watching, s.Games)
+	}
+	if err := h.bot.Watch(other); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("the other game on the board", func(s Status) bool { return s.Watching == other })
+	h.mu.Lock()
+	last := h.shown[len(h.shown)-1]
+	h.mu.Unlock()
+	if last.ID != other {
+		t.Fatalf("the board shows %s, want %s", last.ID, other)
+	}
+}
+
+// With room for two games at once the search does not wait for a game to
+// end: it challenges again while one is being played, and holds back only
+// when two are.
+func TestSeekChallengesUpToTheGamesAtOnce(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap, seekPoll = 2*time.Second, 20*time.Millisecond, 100*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
+	h := newHarness(t, Policy{MaxGames: 2})
+	h.fake.MaxPlies = 16
+	h.fake.Delay = 20 * time.Millisecond
+	h.fake.Online = []fake.OnlineBot{{Name: "SlowBot", Rating: 1700}, {Name: "FastBot", Rating: 1710}, {Name: "OtherBot", Rating: 1720}}
+	h.connect()
+	// A game in progress does not stop the search from starting.
+	err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2, Color: "random"}, Games: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrong := ""
+	most := 0
+	challengedWhilePlaying := false
+	s := h.waitFor("three games played", func(s Status) bool {
+		live, done := 0, 0
+		for _, g := range s.Games {
+			if g.Finished {
+				done++
+			} else {
+				live++
+			}
+		}
+		most = max(most, live)
+		if live > 2 || (live == 2 && len(s.Outgoing) > 0) {
+			wrong = fmt.Sprintf("%d games in progress with %d challenges out", live, len(s.Outgoing))
+		}
+		if live == 1 && len(s.Outgoing) > 0 {
+			challengedWhilePlaying = true
+		}
+		return s.Seek == nil && done == 3
+	})
+	if wrong != "" {
+		t.Error(wrong)
+	}
+	if most != 2 || !challengedWhilePlaying {
+		t.Errorf("at most %d games at once (want 2); challenged while playing: %v", most, challengedWhilePlaying)
+	}
+	if len(s.Games) != 3 {
+		t.Errorf("%d games", len(s.Games))
+	}
+	time.Sleep(300 * time.Millisecond)
+	if n := strings.Count(strings.Join(h.fake.Calls(), "\n"), "POST /api/challenge/"); n != 3 {
+		t.Errorf("%d challenges sent, want 3", n)
 	}
 }

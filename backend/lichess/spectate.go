@@ -181,7 +181,59 @@ func (c *Client) StreamMoves(ctx context.Context, id string, fn func(MoveEvent))
 	})
 }
 
+// OngoingGames are the games a player is playing now, the latest first, at
+// most max of them.
+func (c *Client) OngoingGames(ctx context.Context, username string, max int) ([]GameExport, error) {
+	path := "/api/games/user/" + url.PathEscape(username) + exportQuery + "&ongoing=true&finished=false&max=" + strconv.Itoa(max)
+	req, err := c.request(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/x-ndjson")
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, apiError(res)
+	}
+	var out []GameExport
+	dec := json.NewDecoder(res.Body)
+	for len(out) < max {
+		var g GameExport
+		if err := dec.Decode(&g); err != nil {
+			break
+		}
+		if st := g.StatusName(); g.ID != "" && (st == "started" || st == "created") {
+			out = append(out, g)
+		}
+	}
+	return out, nil
+}
+
 // --- the spectator ---
+
+// MaxWatched is how many of a player's games are followed at once.
+const MaxWatched = 6
+
+// SpectateGame is one of the followed player's games, for the list of them.
+type SpectateGame struct {
+	ID          string `json:"id"`
+	URL         string `json:"url"`
+	White       string `json:"white"`
+	Black       string `json:"black"`
+	WhiteRating int    `json:"whiteRating,omitempty"`
+	BlackRating int    `json:"blackRating,omitempty"`
+	Side        string `json:"side"` // the followed player's colour
+	Label       string `json:"label"`
+	Fen         string `json:"fen"`
+	LastMove    string `json:"lastMove"` // UCI
+	Moves       int    `json:"moves"`
+	Live        bool   `json:"live"`
+	Result      string `json:"result"`
+	Shown       bool   `json:"shown"` // the one on the board
+}
 
 // SpectateStatus is sent to the UI as the "lichessWatch" event.
 type SpectateStatus struct {
@@ -191,19 +243,27 @@ type SpectateStatus struct {
 	GameID  string `json:"gameId"`
 	URL     string `json:"url"`
 	Message string `json:"message"`
+	// The player's games being followed: one is on the board.
+	Games []SpectateGame `json:"games"`
 }
 
-// Spectator follows the games of one Lichess player, live, on the board.
-// No engine plays: it only watches, game after game.
+// Spectator follows the games of one Lichess player, live. No engine plays:
+// it only watches, game after game. A player in several games at once has
+// them all followed; one of them is on the board (Show picks which).
 type Spectator struct {
 	mu     sync.Mutex
+	showMu sync.Mutex // one view goes to the board at a time, in order
 	emit   func(string, any)
 	show   func(game.ExternalView)
 	client *Client
 	cancel context.CancelFunc
 	gen    int
 	status SpectateStatus
-	g      *watched
+	games  map[string]*watched
+	order  []string        // the games, in the order they were found
+	shown  string          // the game on the board
+	skip   map[string]bool // games that cannot be shown (a variant)
+	wake   chan struct{}   // a game ended: look for the next one
 	// Poll is how often to look for the player's next game.
 	Poll time.Duration
 	// Save, when set, receives the PGN of each watched game that finishes
@@ -211,7 +271,7 @@ type Spectator struct {
 	Save func(pgn string)
 }
 
-// watched is the game being shown.
+// watched is a game being followed.
 type watched struct {
 	id, label    string
 	white, black ExportPlayer
@@ -241,7 +301,8 @@ type watched struct {
 }
 
 func NewSpectator(emit func(string, any), show func(game.ExternalView)) *Spectator {
-	return &Spectator{emit: emit, show: show, Poll: 5 * time.Second, status: SpectateStatus{State: "idle"}}
+	return &Spectator{emit: emit, show: show, Poll: 5 * time.Second, status: SpectateStatus{State: "idle"},
+		wake: make(chan struct{}, 1)}
 }
 
 // Active reports whether a player is being followed.
@@ -254,13 +315,44 @@ func (s *Spectator) Active() bool {
 func (s *Spectator) Status() SpectateStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.status
+	st := s.status
+	st.Games = []SpectateGame{}
+	for _, id := range s.order {
+		w := s.games[id]
+		g := SpectateGame{ID: w.id, URL: s.gameURL(w.id), White: w.white.Name(), Black: w.black.Name(),
+			WhiteRating: w.white.Rating, BlackRating: w.black.Rating, Side: w.side, Label: w.kind(),
+			Fen: w.pos.FEN(), Moves: len(w.moves), Live: !w.finished, Result: w.result, Shown: id == s.shown}
+		if n := len(w.moves); n > 0 {
+			g.LastMove = w.moves[n-1]
+		}
+		st.Games = append(st.Games, g)
+	}
+	return st
 }
 
 func (s *Spectator) publish() {
 	if s.emit != nil {
 		s.emit("lichessWatch", s.Status())
 	}
+}
+
+// push tells the UI about a game that changed: the board, when it is the
+// one shown, and the list of games.
+func (s *Spectator) push(gen int, id string) {
+	s.showMu.Lock()
+	s.mu.Lock()
+	w := s.games[id]
+	ok := gen == s.gen && w != nil && s.shown == id
+	var v game.ExternalView
+	if ok {
+		v = s.viewLocked(w)
+	}
+	s.mu.Unlock()
+	if ok {
+		s.show(v)
+	}
+	s.showMu.Unlock()
+	s.publish()
 }
 
 // Start follows username's games on the server at baseURL.
@@ -276,7 +368,7 @@ func (s *Spectator) Start(baseURL, username string) error {
 	gen := s.gen
 	s.client = NewClient(baseURL, "")
 	s.cancel = cancel
-	s.g = nil
+	s.games, s.order, s.shown, s.skip = map[string]*watched{}, nil, "", map[string]bool{}
 	s.status = SpectateStatus{Active: true, User: username, State: "looking", Message: "Looking for " + username + "'s game…"}
 	s.mu.Unlock()
 	s.publish()
@@ -291,6 +383,7 @@ func (s *Spectator) Stop() {
 	was := s.status.Active
 	s.cancel = nil
 	s.gen++
+	s.games, s.order, s.shown = nil, nil, ""
 	s.status = SpectateStatus{State: "idle"}
 	s.mu.Unlock()
 	if cancel != nil {
@@ -299,6 +392,21 @@ func (s *Spectator) Stop() {
 	if was {
 		s.publish()
 	}
+}
+
+// Show puts another of the followed games on the board.
+func (s *Spectator) Show(id string) error {
+	s.mu.Lock()
+	if s.games[id] == nil {
+		s.mu.Unlock()
+		return errors.New("that game is no longer followed")
+	}
+	gen := s.gen
+	s.shown = id
+	s.refreshLocked()
+	s.mu.Unlock()
+	s.push(gen, id)
+	return nil
 }
 
 func (s *Spectator) setStatus(gen int, f func(*SpectateStatus)) bool {
@@ -313,6 +421,45 @@ func (s *Spectator) setStatus(gen int, f func(*SpectateStatus)) bool {
 	return true
 }
 
+// refreshLocked brings the status in line with the games followed.
+func (s *Spectator) refreshLocked() {
+	st := &s.status
+	st.GameID, st.URL = "", ""
+	if s.shown != "" {
+		st.GameID, st.URL = s.shown, s.gameURL(s.shown)
+	}
+	live, sawLive := 0, false
+	for _, w := range s.games {
+		if !w.finished {
+			live++
+		}
+		sawLive = sawLive || w.seenLive
+	}
+	switch {
+	case live > 0:
+		st.State, st.Message = "live", ""
+	case len(s.games) > 0 && sawLive:
+		st.State, st.Message = "waiting", "Game over. Waiting for "+st.User+"'s next game…"
+	case len(s.games) > 0:
+		st.State, st.Message = "waiting", "Showing "+st.User+"'s last game. The next one appears when it starts."
+	}
+}
+
+// liveCount is how many followed games are still being played.
+func (s *Spectator) liveCount(gen int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	if gen == s.gen {
+		for _, w := range s.games {
+			if !w.finished {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	select {
 	case <-ctx.Done():
@@ -322,14 +469,35 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+// follow looks for the player's games. With none being played it asks for
+// the current game every Poll; while one is, it asks now and then for all
+// the games in progress, since the player may be in several.
 func (s *Spectator) follow(ctx context.Context, gen int, username string) {
-	last := ""
 	for ctx.Err() == nil {
-		g, err := s.client.CurrentGame(ctx, username)
+		wait := s.Poll
+		var err error
+		if s.liveCount(gen) == 0 {
+			var g GameExport
+			if g, err = s.client.CurrentGame(ctx, username); err == nil {
+				s.add(ctx, gen, username, g)
+			}
+		}
 		if ctx.Err() != nil {
 			return
 		}
-		wait := s.Poll
+		if err == nil && s.liveCount(gen) > 0 {
+			var list []GameExport
+			if list, err = s.client.OngoingGames(ctx, username, MaxWatched); err == nil {
+				// The oldest first, so that they line up in the order they began.
+				for i := len(list) - 1; i >= 0; i-- {
+					s.add(ctx, gen, username, list[i])
+				}
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			wait = 3 * s.Poll
+		}
 		if err != nil {
 			var api *APIError
 			msg := fmt.Sprintf("Could not reach Lichess (%v); trying again…", err)
@@ -339,47 +507,22 @@ func (s *Spectator) follow(ctx context.Context, gen int, username string) {
 			case errors.As(err, &api) && api.Status == http.StatusNotFound:
 				msg, wait = username+" has no games yet (or there is no such player). Waiting for a game…", 2*s.Poll
 			}
-			if !s.setStatus(gen, func(st *SpectateStatus) { st.State, st.Message = "waiting", msg }) {
-				return
-			}
-			if !sleepCtx(ctx, wait) {
-				return
-			}
-			continue
-		}
-		live := g.StatusName() == "started" || g.StatusName() == "created"
-		if live || g.ID != last {
-			if err := s.load(gen, username, g); err != nil {
-				s.setStatus(gen, func(st *SpectateStatus) { st.Message = err.Error() })
-			} else if live {
-				s.setStatus(gen, func(st *SpectateStatus) {
-					st.State, st.GameID, st.URL, st.Message = "live", g.ID, s.gameURL(g.ID), ""
-				})
-				s.stream(ctx, gen, g.ID)
-				if ctx.Err() != nil {
+			// Games being followed go on: their moves come on their own streams.
+			if s.liveCount(gen) == 0 {
+				if !s.setStatus(gen, func(st *SpectateStatus) { st.State, st.Message = "waiting", msg }) {
 					return
 				}
-				// After the game, look for the next one shortly.
-				wait = 2 * time.Second
-			} else {
-				s.setStatus(gen, func(st *SpectateStatus) {
-					st.State, st.GameID, st.URL = "waiting", g.ID, s.gameURL(g.ID)
-					st.Message = "Showing " + username + "'s last game. The next one appears when it starts."
-				})
 			}
-			last = g.ID
 		}
-		s.mu.Lock()
-		if gen == s.gen && s.g != nil && s.g.finished && s.status.State == "live" {
-			s.status.State = "waiting"
-			s.status.Message = "Game over. Waiting for " + username + "'s next game…"
-			s.mu.Unlock()
-			s.publish()
-		} else {
-			s.mu.Unlock()
-		}
-		if !sleepCtx(ctx, wait) {
+		select {
+		case <-ctx.Done():
 			return
+		case <-s.wake:
+			// A game ended: look for the next one shortly.
+			if !sleepCtx(ctx, min(wait, 2*time.Second)) {
+				return
+			}
+		case <-time.After(wait):
 		}
 	}
 }
@@ -388,10 +531,46 @@ func (s *Spectator) gameURL(id string) string {
 	return s.client.BaseURL + "/" + id
 }
 
-// load shows an exported game.
-func (s *Spectator) load(gen int, username string, g GameExport) error {
+// kind is what sort of game it is: "Rated blitz 5+3".
+func (w *watched) kind() string {
+	label := "Casual"
+	if w.rated {
+		label = "Rated"
+	}
+	if w.speed != "" {
+		label += " " + w.speed
+	}
+	if w.initial > 0 || w.increment > 0 {
+		label += fmt.Sprintf(" %g+%d", float64(w.initial)/60, w.increment)
+	}
+	return label
+}
+
+// add starts following an exported game, unless it is followed already.
+// It goes on the board when nothing is, or when the game there is over.
+func (s *Spectator) add(ctx context.Context, gen int, username string, g GameExport) {
+	s.mu.Lock()
+	known := gen != s.gen || s.games[g.ID] != nil || s.skip[g.ID]
+	s.mu.Unlock()
+	if known || g.ID == "" {
+		return
+	}
+	fail := func(err error) {
+		s.mu.Lock()
+		if gen != s.gen {
+			s.mu.Unlock()
+			return
+		}
+		s.skip[g.ID] = true
+		if len(s.games) == 0 {
+			s.status.Message = err.Error()
+		}
+		s.mu.Unlock()
+		s.publish()
+	}
 	if v := g.VariantKey(); v != "" && v != "standard" && v != "fromPosition" {
-		return fmt.Errorf("%s is playing %s, which Ponder cannot show", username, v)
+		fail(fmt.Errorf("%s is playing %s, which Ponder cannot show", username, v))
+		return
 	}
 	w := &watched{id: g.ID, white: g.Players.White, black: g.Players.Black, side: "white"}
 	if strings.EqualFold(g.Players.Black.ID(), username) {
@@ -403,7 +582,8 @@ func (s *Spectator) load(gen int, username string, g GameExport) error {
 	}
 	start, err := chess.ParseFEN(fen)
 	if err != nil {
-		return err
+		fail(err)
+		return
 	}
 	w.start, w.pos, w.startFEN = start, start, start.FEN()
 	for _, san := range strings.Fields(g.Moves) {
@@ -414,20 +594,12 @@ func (s *Spectator) load(gen int, username string, g GameExport) error {
 		w.moves = append(w.moves, m.UCI())
 		w.pos = w.pos.Make(m)
 	}
-	label := "Casual"
-	if g.Rated {
-		label = "Rated"
-	}
-	if g.Speed != "" {
-		label += " " + g.Speed
-	}
 	w.rated, w.speed = g.Rated, g.Speed
 	if g.Clock != nil {
 		w.initial, w.increment = g.Clock.Initial, g.Clock.Increment
-		label += fmt.Sprintf(" %g+%d", float64(g.Clock.Initial)/60, g.Clock.Increment)
 		w.wms, w.bms, w.clocked = g.Clock.Initial*1000, g.Clock.Initial*1000, true
 	}
-	w.label = "Watching " + username + " · " + label
+	w.label = "Watching " + username + " · " + w.kind()
 	if st := g.StatusName(); st != "started" && st != "created" && st != "" {
 		w.finished = true
 		w.result, w.reason = resultOf(GameState{Status: st, Winner: g.Winner})
@@ -437,26 +609,56 @@ func (s *Spectator) load(gen int, username string, g GameExport) error {
 	}
 	w.at = time.Now()
 	s.mu.Lock()
-	if gen != s.gen {
+	if gen != s.gen || s.games[g.ID] != nil {
 		s.mu.Unlock()
-		return nil
+		return
 	}
-	s.g = w
-	v := s.viewLocked()
+	live := 0
+	for _, o := range s.games {
+		if !o.finished {
+			live++
+		}
+	}
+	// A finished game is only shown when there is nothing else to show.
+	if (w.finished && len(s.games) > 0) || (!w.finished && live >= MaxWatched) {
+		s.mu.Unlock()
+		return
+	}
+	s.games[g.ID] = w
+	s.order = append(s.order, g.ID)
+	if cur := s.games[s.shown]; cur == nil || cur.finished {
+		s.shown = g.ID
+	}
+	// Games that are over make way for the new one, but for the one on the board.
+	if !w.finished {
+		keep := s.order[:0]
+		for _, id := range s.order {
+			if o := s.games[id]; o.finished && id != s.shown {
+				delete(s.games, id)
+				continue
+			}
+			keep = append(keep, id)
+		}
+		s.order = keep
+	}
+	s.refreshLocked()
 	s.mu.Unlock()
-	s.show(v)
-	return nil
+	s.push(gen, g.ID)
+	if !w.finished {
+		go s.stream(ctx, gen, g.ID)
+	}
 }
 
 func (s *Spectator) stream(ctx context.Context, gen int, id string) {
 	backoff := time.Second
 	for ctx.Err() == nil {
-		err := s.client.StreamMoves(ctx, id, func(e MoveEvent) { s.onMove(ctx, gen, e) })
+		err := s.client.StreamMoves(ctx, id, func(e MoveEvent) { s.onMove(ctx, gen, id, e) })
 		s.mu.Lock()
-		done := gen != s.gen || s.g == nil || s.g.id != id || s.g.finished
+		w := s.games[id]
+		done := gen != s.gen || w == nil || w.finished
 		var endStatus, endWinner string
 		if !done {
-			endStatus, endWinner = s.g.endStatus, s.g.endWinner
+			endStatus, endWinner = w.endStatus, w.endWinner
 		}
 		s.mu.Unlock()
 		if done || ctx.Err() != nil {
@@ -491,8 +693,8 @@ func (s *Spectator) stream(ctx context.Context, gen int, id string) {
 func (s *Spectator) syncMoves(gen int, g GameExport, force ...bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	w := s.g
-	if gen != s.gen || w == nil || w.id != g.ID {
+	w := s.games[g.ID]
+	if gen != s.gen || w == nil {
 		return
 	}
 	fen := g.InitialFen
@@ -520,8 +722,8 @@ func (s *Spectator) syncMoves(gen int, g GameExport, force ...bool) {
 
 func (s *Spectator) finish(gen int, id, status, winner string) {
 	s.mu.Lock()
-	w := s.g
-	if gen != s.gen || w == nil || w.id != id || w.finished {
+	w := s.games[id]
+	if gen != s.gen || w == nil || w.finished {
 		s.mu.Unlock()
 		return
 	}
@@ -530,17 +732,21 @@ func (s *Spectator) finish(gen int, id, status, winner string) {
 	if w.rated && w.result != "*" {
 		go s.ratingDiffs(gen, id)
 	}
-	v := s.viewLocked()
 	var save string
 	if s.Save != nil && w.seenLive && w.result != "*" {
 		pl := func(p ExportPlayer) pgnPlayer { return pgnPlayer{Name: p.Name(), Title: p.Title(), Rating: p.Rating} }
 		save, _ = gamePGN(w.rated, w.speed, s.gameURL(w.id), pl(w.white), pl(w.black), w.initial, w.increment,
 			w.startFEN, w.moves, w.result, w.reason, time.Now())
 	}
+	s.refreshLocked()
 	s.mu.Unlock()
-	s.show(v)
+	s.push(gen, id)
 	if save != "" {
 		go s.Save(save)
+	}
+	select {
+	case s.wake <- struct{}{}:
+	default:
 	}
 }
 
@@ -574,9 +780,9 @@ func bridge(pos chess.Position, target, last string, depth int) ([]chess.Move, b
 	return nil, false
 }
 
-func (s *Spectator) onMove(ctx context.Context, gen int, e MoveEvent) {
+func (s *Spectator) onMove(ctx context.Context, gen int, id string, e MoveEvent) {
 	s.mu.Lock()
-	w := s.g
+	w := s.games[id]
 	if gen != s.gen || w == nil || w.finished {
 		s.mu.Unlock()
 		return
@@ -618,9 +824,8 @@ func (s *Spectator) onMove(ctx context.Context, gen int, e MoveEvent) {
 				if err == nil && fenKey(next.FEN()) == target {
 					w.moves = append(w.moves, m.UCI())
 					w.pos = next
-					v := s.viewLocked()
 					s.mu.Unlock()
-					s.show(v)
+					s.push(gen, id)
 					return
 				}
 			}
@@ -657,9 +862,8 @@ func (s *Spectator) onMove(ctx context.Context, gen int, e MoveEvent) {
 			go s.resync(ctx, gen, w.id, e.Fen)
 		}
 	}
-	v := s.viewLocked()
 	s.mu.Unlock()
-	s.show(v)
+	s.push(gen, id)
 }
 
 // plyOf is the number of moves played before a FEN's position, from its
@@ -709,8 +913,8 @@ func (s *Spectator) resync(ctx context.Context, gen int, id, fen string) {
 		s.syncMoves(gen, g, true)
 	}
 	s.mu.Lock()
-	w := s.g
-	if gen != s.gen || w == nil || w.id != id {
+	w := s.games[id]
+	if gen != s.gen || w == nil {
 		s.mu.Unlock()
 		return
 	}
@@ -720,9 +924,8 @@ func (s *Spectator) resync(ctx context.Context, gen int, id, fen string) {
 			w.start, w.pos, w.startFEN, w.moves = p, p, p.FEN(), nil
 		}
 	}
-	v := s.viewLocked()
 	s.mu.Unlock()
-	s.show(v)
+	s.push(gen, id)
 }
 
 // ratingDiffs shows how the finished game changed the ratings.
@@ -734,19 +937,17 @@ func (s *Spectator) ratingDiffs(gen int, id string) {
 		return
 	}
 	s.mu.Lock()
-	w := s.g
-	if gen != s.gen || w == nil || w.id != id {
+	w := s.games[id]
+	if gen != s.gen || w == nil {
 		s.mu.Unlock()
 		return
 	}
 	w.ratingDiff = d
-	v := s.viewLocked()
 	s.mu.Unlock()
-	s.show(v)
+	s.push(gen, id)
 }
 
-func (s *Spectator) viewLocked() game.ExternalView {
-	w := s.g
+func (s *Spectator) viewLocked(w *watched) game.ExternalView {
 	player := func(p ExportPlayer) game.PlayerConfig {
 		pc := game.PlayerConfig{Type: "lichess", Name: p.Name()}
 		if t := p.Title(); t != "" && t != "BOT" {

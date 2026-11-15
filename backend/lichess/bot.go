@@ -133,6 +133,10 @@ type GameView struct {
 	DrawOffer string `json:"drawOffer,omitempty"`
 	Finished  bool   `json:"finished"`
 	Message   string `json:"message,omitempty"`
+	// The position now and the last move (UCI), for a small board of each
+	// game when the engine plays several at once.
+	Fen      string `json:"fen,omitempty"`
+	LastMove string `json:"lastMove,omitempty"`
 }
 
 // Status is sent to the UI as the "lichess" event.
@@ -1280,6 +1284,13 @@ func (r *runner) onState(st GameState) {
 		cmds = r.engineCommandsLocked(st)
 		r.lookupTablebaseLocked()
 	}
+	// The opponent played the move the engine was pondering on.
+	hitPly, hitSide := -1, r.side()
+	for _, c := range cmds {
+		if c == "ponderhit" {
+			hitPly = len(r.moves)
+		}
+	}
 	finished := r.finished
 	watched := b.watching == r.id
 	view, ok := r.viewLocked()
@@ -1303,7 +1314,19 @@ func (r *runner) onState(st GameState) {
 	if watched && ok && b.hooks.Show != nil {
 		b.hooks.Show(view)
 	}
+	// Said at once, with the move on the board: the engine's next line can
+	// be a while in coming.
+	if watched && hitPly >= 0 && b.hooks.Emit != nil {
+		b.hooks.Emit("ponderHit", PonderHit{Side: hitSide, Ply: hitPly})
+	}
 	b.emit()
+}
+
+// PonderHit is sent to the UI as the "ponderHit" event when the opponent
+// plays the reply the engine was pondering on: Ply moves have been played.
+type PonderHit struct {
+	Side string `json:"side"`
+	Ply  int    `json:"ply"`
 }
 
 // engineCommandsLocked is what to tell the engine now that the game stands
@@ -1651,13 +1674,20 @@ func (r *runner) gameViewLocked() GameView {
 	if theirs := (r.color == chess.White && r.state.BDraw) || (r.color == chess.Black && r.state.WDraw); theirs && !r.finished && r.play {
 		offer = "theirs"
 	}
-	return GameView{
+	v := GameView{
 		ID: r.id, URL: r.url(), Opponent: name, OpponentTitle: title, OpponentRating: rating,
 		Color: map[chess.Color]string{chess.White: "white", chess.Black: "black"}[r.color],
 		Rated: r.rated, Speed: r.speed, TC: r.tc, Status: status, Result: r.result,
 		Moves: len(r.moves), MyTurn: !r.finished && r.pos.Turn == r.color, Finished: r.finished, Message: r.message,
 		Playing: r.play, DrawOffer: offer,
 	}
+	if r.started {
+		v.Fen = r.pos.FEN()
+		if n := len(r.moves); n > 0 {
+			v.LastMove = r.moves[n-1]
+		}
+	}
+	return v
 }
 
 // viewLocked describes the game for the board.

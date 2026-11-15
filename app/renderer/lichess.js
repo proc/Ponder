@@ -56,18 +56,56 @@ async function lichessCommand(cmd, args) {
   }
 }
 
+// Your engine starts another game while one of its games is on the board:
+// the new game takes the board (and gets the versus screen), unless that is
+// turned off in Settings → General. The row of small boards has the others.
+let botAutoSwitch = (() => { try { return localStorage.getItem('botAutoSwitch') !== 'off'; } catch { return true; } })();
+function setBotAutoSwitch(on) {
+  botAutoSwitch = Boolean(on);
+  try { localStorage.setItem('botAutoSwitch', botAutoSwitch ? 'on' : 'off'); } catch { /* not kept */ }
+}
+window.setBotAutoSwitch = setBotAutoSwitch;
+window.botAutoSwitchOn = () => botAutoSwitch;
+
+function switchToNewBotGame(prev, next) {
+  if (!botAutoSwitch || prev.state !== 'connected' || !next.watching) return;
+  if (!(state?.external?.kind === 'bot' && state.external.live)) return;
+  const had = new Set((prev.games ?? []).map((g) => g.id));
+  const fresh = (next.games ?? []).find((g) => !had.has(g.id) && !g.finished && g.playing && g.id !== next.watching);
+  if (fresh) lichessCommand('lichessWatch', { id: fresh.id });
+}
+
+// A game of your engine's that ends while another is on the board.
+function koForBackgroundGames(prev, next) {
+  if (next.state !== 'connected' && next.state !== 'reconnecting') return;
+  const was = new Map((prev.games ?? []).map((g) => [g.id, g]));
+  for (const g of next.games ?? []) {
+    const before = was.get(g.id);
+    if (!g.finished || !g.playing || !before || before.finished || g.id === state?.external?.id) continue;
+    if (!['1-0', '0-1', '1/2-1/2'].includes(g.result)) continue;
+    window.showBackgroundKo?.(g, next.account?.username || 'Your engine');
+  }
+}
+
 function lichessStatus(next) {
   const prev = lx.status;
   lx.status = next;
+  switchToNewBotGame(prev, next);
+  koForBackgroundGames(prev, next);
+  window.trackMatchHistory?.(next);
   // A new challenge waiting for an answer.
   const before = new Set((prev.incoming ?? []).map((c) => c.id));
   if ((next.incoming ?? []).some((c) => !before.has(c.id))) sounds.play('challenge');
   // The answer to a challenge sent: declined (with the reason), or none.
   if (next.message && next.message !== prev.message && challengeNews(next.message)) notify(next.message, { title: 'Challenge', kind: 'warn' });
+  window.trackChallenges?.('engine', prev, next);
   renderLichess();
+  renderWatchStrip();
   renderChallengePop();
   renderDrawPop();
   renderLichessSettingsStatus();
+  // Auto challenge takes up again when the engine connects.
+  if (next.state === 'connected' && prev.state !== 'connected') runAutoChallenge();
   // Once the bot is connected, list the bots online without waiting for a click.
   if (next.state === 'connected' && prev.state !== 'connected' && !Array.isArray(ob.bots)) loadOnlineBots();
   if (typeof syncAnalysis === 'function') { syncAnalysis(); renderAnalysis(); }
@@ -89,6 +127,8 @@ const lxButton = (text, onclick, className = 'small') => {
 const lxWho = (name, title, rating) => {
   const parts = [];
   if (title) parts.push(el('span', { className: 'lx-title', textContent: title }));
+  const flag = flagSpan(name);
+  if (flag) parts.push(flag);
   parts.push(el('span', { className: 'lx-name', textContent: name || '?' }));
   if (rating) parts.push(el('span', { className: 'lx-rating', textContent: String(rating) }));
   return el('span', { className: 'lx-who' }, parts);
@@ -404,6 +444,7 @@ $('#lx-watch-stop').onclick = () => lichessCommand('lichessSpectateStop');
 function lichessWatchStatus(st) {
   lx.watch = st;
   renderLichessWatch();
+  renderWatchStrip();
   if (Array.isArray(ob?.bots)) renderOnlineBots(); // the TV of the bot being watched lights up
 }
 
@@ -411,15 +452,99 @@ function renderLichessWatch() {
   const w = lx.watch;
   $('#lx-watch-stop').hidden = !w.active;
   $('#lx-watch-go').textContent = w.active ? 'Watch another' : 'Watch';
-  let text = 'Follow any player\'s games live on the board, one game after another. No engine plays; analysis can run while you watch. No token needed.';
+  let text = 'Follow any player\'s games live on the board, one game after another, and all of them when the player is in several at once. No engine plays; analysis can run while you watch. No token needed.';
   if (w.active) {
-    if (w.state === 'live') text = `Watching ${w.user} live. The next game follows automatically.`;
+    const live = (w.games ?? []).filter((g) => g.live).length;
+    if (w.state === 'live' && live > 1) text = `Watching ${w.user} live in ${live} games at once: click one of the small boards above the moves to put it on the board.`;
+    else if (w.state === 'live') text = `Watching ${w.user} live. The next game follows automatically.`;
     else text = w.message || `Watching ${w.user}…`;
   }
   const box = $('#lx-watch-state');
   box.replaceChildren(document.createTextNode(text + ' '));
   if (w.active && w.url) box.append(lxLink(w.url, 'Open on Lichess ↗'));
   $('#lx-watch').classList.toggle('on', w.active);
+}
+
+// Several games at once (the player you are watching, or your own engine,
+// is in more than one): a small board for each, as it stands now. The one
+// on the board is marked; a click puts another there.
+function watchMiniBoard(g) {
+  const pieces = parseBoard(g.fen);
+  const flip = g.side === 'black';
+  const squares = [];
+  for (let row = 0; row < 8; row++) {
+    for (let col = 0; col < 8; col++) {
+      const file = flip ? 7 - col : col;
+      const rank = flip ? row + 1 : 8 - row;
+      const sq = FILES[file] + rank;
+      const piece = pieces[sq];
+      const node = el('div', { className: 'square ' + ((file + rank) % 2 ? 'dark' : 'light') });
+      if (g.lastMove && (sq === g.lastMove.slice(0, 2) || sq === g.lastMove.slice(2, 4))) node.classList.add('last');
+      if (piece) node.append(pieceImage(piece.toLowerCase(), piece === piece.toUpperCase()));
+      squares.push(node);
+    }
+  }
+  return el('div', { className: 'ws-board', ariaHidden: 'true' }, squares);
+}
+
+function watchPick(id, bot) {
+  // Chosen by hand: no versus screen for it.
+  window.watchPicked = id;
+  if (bot) lxWatch(id);
+  else lichessCommand('lichessSpectateShow', { id });
+}
+
+// Your engine's games in progress (and the one on the board, if it is
+// over), in the shape of a watched player's games: the oldest first.
+function botStripGames() {
+  const s = lx.status;
+  if (s.state !== 'connected' && s.state !== 'reconnecting') return [];
+  const onBoard = state?.external?.kind === 'bot' ? state.external.id : '';
+  const me = s.account?.username ?? 'Your engine';
+  return (s.games ?? []).filter((g) => g.fen && (!g.finished || (g.id === onBoard && g.id === s.watching))).reverse().map((g) => {
+    const white = g.color === 'white';
+    return {
+      id: g.id, bot: true, side: g.color, fen: g.fen, lastMove: g.lastMove ?? '', moves: g.moves, live: !g.finished, result: g.result,
+      white: white ? me : g.opponent, black: white ? g.opponent : me,
+      whiteRating: white ? 0 : g.opponentRating, blackRating: white ? g.opponentRating : 0,
+      label: [g.rated ? 'Rated' : 'Casual', g.speed, g.tc].filter(Boolean).join(' '),
+      shown: g.id === onBoard && g.id === s.watching,
+      note: !g.finished && g.myTurn ? 'your engine to move' : '',
+    };
+  });
+}
+
+function renderWatchStrip() {
+  const w = lx.watch;
+  // A player being watched comes first; else your engine's own games.
+  const games = w?.active ? w.games ?? [] : botStripGames();
+  const strip = $('#watch-strip');
+  strip.hidden = games.length < 2;
+  if (strip.hidden) { strip.replaceChildren(); return; }
+  const left = strip.scrollLeft;
+  strip.replaceChildren(...games.map((g) => {
+    const other = g.side === 'black' ? 'white' : 'black';
+    const rating = g[other + 'Rating'];
+    const result = { '1-0': '1–0', '0-1': '0–1', '1/2-1/2': '½–½' }[g.result] ?? 'Ended';
+    const toMove = g.fen.split(' ')[1] === 'b' ? 'Black' : 'White';
+    const state = g.live
+      ? el('span', { className: 'ws-state live', textContent: g.moves ? `Move ${Math.floor((g.moves + 1) / 2)} · ${g.note || toMove + ' to move'}` : 'Starting' })
+      : el('span', { className: 'ws-state', textContent: result });
+    const card = el('button', { type: 'button', className: 'ws-game' + (g.shown ? ' on' : '') + (g.live ? ' live' : ' over') }, [
+      watchMiniBoard(g),
+      el('span', { className: 'ws-text' }, [
+        el('span', { className: 'ws-name' }, ['vs ', ...[flagSpan(g[other])].filter(Boolean), g[other]]),
+        el('span', { className: 'ws-kind', textContent: [rating || null, g.label].filter(Boolean).join(' · ') }),
+        state,
+        g.shown ? el('span', { className: 'ws-tag', textContent: 'On the board' }) : null,
+      ].filter(Boolean)),
+    ]);
+    card.title = `${g.white} – ${g.black} · ${g.label}` + (g.shown ? ' (on the board)' : ': click to put it on the board');
+    if (g.shown) card.setAttribute('aria-current', 'true');
+    if (!g.shown) card.onclick = () => watchPick(g.id, g.bot);
+    return card;
+  }));
+  strip.scrollLeft = left;
 }
 
 $('#lx-challenge').onsubmit = async (e) => {
@@ -469,18 +594,49 @@ function renderSeekGames() {
 }
 $('#lx-seek-games').addEventListener('input', () => { renderSeekGames(); saveSeekForm(); });
 
-$('#lx-seek-go').onclick = async () => {
+// Starts the random-bot challenger for so many games (0: no limit).
+async function startSeek(games) {
   const min = +$('#lx-seek-min').value || 0;
   const max = +$('#lx-seek-max').value || 0;
-  if (min && max && min > max) { lxSetNote('The lowest rating is above the highest.'); return; }
+  if (min && max && min > max) { lxSetNote('The lowest rating is above the highest.'); return null; }
   saveSeekForm();
-  await lichessCommand('lichessSeek', {
+  return lichessCommand('lichessSeek', {
     rated: $('#lx-rated').checked, color: $('#lx-color').value,
     limit: +$('#lx-time').value, increment: +$('#lx-inc').value, minRating: min, maxRating: max,
-    games: seekGames() === 0 ? -1 : seekGames(), // the backend's "no limit" is below zero
+    games: games === 0 ? -1 : games, // the backend's "no limit" is below zero
   });
+}
+$('#lx-seek-go').onclick = () => startSeek(seekGames());
+// Stop also turns Auto challenge off: it would only start again.
+$('#lx-seek-stop').onclick = () => { setAutoChallenge(false); lichessCommand('lichessSeekStop'); };
+
+// Auto challenge: while it is on, your engine challenges random bots by
+// itself, without end, with the clock and rating range of the form. It
+// starts when the box is ticked and each time the engine connects, and
+// stops when the box is cleared (or Stop is pressed).
+let autoChallenge = (() => { try { return localStorage.getItem('lichessAutoChallenge') === 'on'; } catch { return false; } })();
+function setAutoChallenge(on) {
+  autoChallenge = Boolean(on);
+  try { localStorage.setItem('lichessAutoChallenge', autoChallenge ? 'on' : 'off'); } catch { /* not kept */ }
+  renderAutoChallenge();
+}
+function renderAutoChallenge() {
+  $('#lx-seek-auto').checked = autoChallenge;
+  // No number of games to it: it goes on until turned off.
+  $('#lx-seek').classList.toggle('auto', autoChallenge);
+}
+async function runAutoChallenge() {
+  if (!autoChallenge || lx.status.state !== 'connected') return;
+  const seek = lx.status.seek;
+  if (seek?.active && !seek.games) return; // already going, without end
+  if (!(await startSeek(0))) setAutoChallenge(false); // could not start: say so, not pretend
+}
+$('#lx-seek-auto').onchange = (e) => {
+  setAutoChallenge(e.target.checked);
+  if (autoChallenge) runAutoChallenge();
+  else if (lx.status.seek?.active) lichessCommand('lichessSeekStop');
 };
-$('#lx-seek-stop').onclick = () => lichessCommand('lichessSeekStop');
+renderAutoChallenge();
 
 // One challenge at a time: why the engine (or you) cannot send another now.
 function engineBusy() {
@@ -501,9 +657,12 @@ function renderChallengeLocks() {
   const eb = engineBusy();
   $('#lx-send').disabled = Boolean(eb);
   $('#lx-send').title = eb;
-  const seekBusy = eb && !lx.status.seek?.active ? eb : '';
+  // The random-bot challenger may start while your engine is playing: it
+  // challenges whenever there is room for another game at once.
+  const out = lx.status.outgoing?.[0];
+  const seekBusy = out && !lx.status.seek?.active ? `Your engine's challenge to ${out.user} is waiting for an answer: cancel it first` : '';
   $('#lx-seek-go').disabled = Boolean(seekBusy);
-  $('#lx-seek-go').title = seekBusy || 'Challenge a random bot in this rating range with the time control above, one a minute at most; if it declines or does not answer, try another until one accepts';
+  $('#lx-seek-go').title = seekBusy || 'Challenge a random bot in this rating range with the time control above, one a minute at most; if it declines or does not answer, try another until one accepts. With several games asked for it keeps challenging while your engine has room for another game at once';
   const mb = meBusy();
   if ($('#lx-me-send')) { $('#lx-me-send').disabled = Boolean(mb); $('#lx-me-send').title = mb; }
 }
@@ -514,6 +673,7 @@ function renderSeek() {
   $('#lx-seek-go').hidden = on;
   $('#lx-seek-stop').hidden = !on;
   for (const id of ['#lx-seek-min', '#lx-seek-max', '#lx-seek-games']) $(id).disabled = on;
+  if (typeof autoChallenge !== 'undefined' && autoChallenge) $('#lx-seek-games').disabled = true;
   const box = $('#lx-seek-state');
   box.hidden = !on;
   if (on) {
@@ -1095,10 +1255,6 @@ const ob = {
 const OB_SPEEDS = ['bullet', 'blitz', 'rapid', 'classical'];
 const OB_SHORT = { bullet: 'Bullet', blitz: 'Blitz', rapid: 'Rapid', classical: 'Classical' };
 
-function flagEmoji(code) {
-  if (!/^[A-Z]{2}$/.test(code ?? '')) return '';
-  return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65));
-}
 const obName = (b) => b.username || b.name || b.id;
 const obPerf = (b, speed) => b.perfs?.[speed];
 const obRating = (b, speed) => (obPerf(b, speed)?.games ? obPerf(b, speed).rating : null);
@@ -1421,6 +1577,7 @@ function lichessAccountStatus(next) {
   const had = offers(prev);
   if ([...offers(next)].some((o) => !had.has(o))) sounds.play('challenge');
   if (next.message && next.message !== prev.message && challengeNews(next.message)) notify(next.message, { title: 'Challenge', kind: 'warn' });
+  window.trackChallenges?.('you', prev, next);
   renderMe();
   renderChallengePop();
   if (ob.bots) renderOnlineBots(); // Play needs you signed in

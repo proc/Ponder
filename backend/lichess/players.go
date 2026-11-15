@@ -3,6 +3,8 @@ package lichess
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -89,4 +91,54 @@ func (c *Client) Players(ctx context.Context, names []string, perf string) Playe
 	}
 	wg.Wait()
 	return out
+}
+
+// Flags are players' country flags as their Lichess profiles give them
+// ("US", "GB-SCT", "_rainbow"…), by lower-case id; "" for a player with
+// none. Up to 300 players a request (POST /api/users).
+func (c *Client) Flags(ctx context.Context, ids []string) (map[string]string, error) {
+	out := map[string]string{}
+	var clean []string
+	for _, id := range ids {
+		if id = strings.ToLower(strings.TrimSpace(id)); id != "" && !strings.ContainsAny(id, ", ") {
+			clean = append(clean, id)
+		}
+	}
+	for start := 0; start < len(clean); start += 300 {
+		batch := clean[start:min(start+300, len(clean))]
+		req, err := c.request(ctx, "POST", "/api/users", nil)
+		if err != nil {
+			return out, err
+		}
+		req.Body = io.NopCloser(strings.NewReader(strings.Join(batch, ",")))
+		req.ContentLength = int64(len(strings.Join(batch, ",")))
+		req.Header.Set("Content-Type", "text/plain")
+		req.Header.Set("Accept", "application/json")
+		res, err := c.HTTP.Do(req)
+		if err != nil {
+			return out, err
+		}
+		var users []struct {
+			ID      string `json:"id"`
+			Profile struct {
+				Flag string `json:"flag"`
+			} `json:"profile"`
+		}
+		if res.StatusCode != http.StatusOK {
+			err = apiError(res)
+		} else {
+			err = json.NewDecoder(res.Body).Decode(&users)
+		}
+		res.Body.Close()
+		if err != nil {
+			return out, err
+		}
+		for _, id := range batch {
+			out[id] = ""
+		}
+		for _, u := range users {
+			out[strings.ToLower(u.ID)] = u.Profile.Flag
+		}
+	}
+	return out, nil
 }

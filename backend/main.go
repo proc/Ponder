@@ -1182,6 +1182,18 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return lichess.NewClient(a.BaseURL, a.Token).Players(ctx, a.Users, a.Perf), nil
+	case "lichessFlags":
+		// Players' country flags, from their public profiles.
+		var a struct {
+			BaseURL string
+			IDs     []string
+		}
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		return lichess.NewClient(a.BaseURL, "").Flags(ctx, a.IDs)
 	case "lichessUsersStatus":
 		// Online, playing, and the game being played; public.
 		var a struct {
@@ -1207,6 +1219,13 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			mgr.FreezeExternal("Stopped watching")
 		}
 		return nil, nil
+	case "lichessSpectateShow":
+		// Another of the watched player's games, onto the board.
+		var a struct{ ID string }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		return nil, spectator.Show(a.ID)
 	case "lichessSpectateStatus":
 		return spectator.Status(), nil
 	case "lichessChat":

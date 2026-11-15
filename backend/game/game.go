@@ -1049,6 +1049,7 @@ func (m *Manager) ShowExternal(v ExternalView) error {
 	if same {
 		g.started = m.g.started
 	}
+	g.seen[start.Key()]++
 	for _, s := range v.Moves {
 		mv, err := g.pos.ParseUCIMove(s)
 		if err != nil {
@@ -1057,6 +1058,7 @@ func (m *Manager) ShowExternal(v ExternalView) error {
 		san := g.pos.SAN(mv)
 		g.pos = g.pos.Make(mv)
 		g.moves = append(g.moves, MoveRecord{UCI: mv.UCI(), SAN: san, FEN: g.pos.FEN(), Opening: bookOpening(&g.pos, g.bookSoFar())})
+		g.seen[g.pos.Key()]++
 	}
 	if v.WhiteMs > 0 || v.BlackMs > 0 {
 		for i, ms := range [2]int64{v.WhiteMs, v.BlackMs} {
@@ -1069,12 +1071,32 @@ func (m *Manager) ShowExternal(v ExternalView) error {
 		if !validResult(g.result) {
 			g.result = "*"
 		}
+		// A server may say only that the game was drawn: the position says why.
+		if g.result == "1/2-1/2" && (g.reason == "" || g.reason == "Draw") {
+			g.reason = drawReason(g)
+		}
 	} else if v.Running {
 		g.extRunning, g.turnStart = true, v.At
 	}
 	m.g = g
 	m.emitStateLocked()
 	return nil
+}
+
+// drawReason says why a drawn game whose moves are all known was drawn,
+// from its last position: a draw nothing on the board explains was agreed.
+func drawReason(g *current) string {
+	switch {
+	case len(g.pos.LegalMoves()) == 0:
+		return "Draw by stalemate"
+	case g.pos.InsufficientMaterial():
+		return "Draw by insufficient material"
+	case g.seen[g.pos.Key()] >= 3:
+		return "Draw by threefold repetition"
+	case g.pos.Halfmove >= 100:
+		return "Draw by the fifty-move rule"
+	}
+	return "Draw by agreement"
 }
 
 // Reindex gives the loaded game from source its new place in the file

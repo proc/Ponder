@@ -185,6 +185,18 @@ const sounds = (() => {
     g.setValueAtTime(gain, t);
     g.exponentialRampToValueAtTime(0.0001, t + dur);
   });
+  // The knockout: the heaviest blow, a flash of cymbal, and a falling cry
+  // that echoes three times, each fainter and lower.
+  function ko() {
+    impact(0, { gain: 0.75, dur: 0.42, from: 7000, to: 260, low: 140 });
+    crash(0, 0.5, 0.16);
+    fm(70, 0, 0.3, { ratio: 1.41, index: 8, gain: 0.12, bright: 0.08 });
+    [[0.04, 1, 0.11], [0.3, 0.9, 0.06], [0.54, 0.8, 0.032]].forEach(([at, pitch, gain]) => {
+      fm(560 * pitch, at, 0.26, { ratio: 2, index: 2.4, gain, slideTo: 300 * pitch, bright: 0.5 });
+      fm(840 * pitch, at, 0.26, { ratio: 1, index: 1.2, gain: gain * 0.5, slideTo: 430 * pitch });
+      impact(at, { gain: gain * 2.2, dur: 0.1, from: 3000, to: 500, low: 0 });
+    });
+  }
   // FM brass (each note doubled, slightly apart), bass and bell.
   const brass = (notes, at, dur, gain = 0.07) => notes.forEach((f) => {
     fm(f, at, dur, { index: 2.6, gain, bright: 0.4 });
@@ -235,17 +247,20 @@ const sounds = (() => {
     arcade: {
       // A light jab.
       move: () => { whoosh(0, 0.07, 1400, 3600, 0.12); impact(0.03, { gain: 0.2, dur: 0.06, from: 3800, to: 900, low: 210 }); },
-      // A heavy punch landing.
+      // A hard kick landing: the swing, a sharp crack, and the body of the
+      // blow dropping away under it.
       capture: () => {
-        whoosh(0, 0.08, 700, 2600, 0.22);
-        impact(0.05, { gain: 0.5, dur: 0.24, low: 165 });
-        fm(92, 0.05, 0.16, { ratio: 1.41, index: 7, gain: 0.1, bright: 0.1 });
+        whoosh(0, 0.07, 500, 3200, 0.2);
+        crash(0.055, 0.05, 0.3);
+        impact(0.055, { gain: 0.5, dur: 0.2, from: 2600, to: 220, low: 130 });
+        fm(310, 0.055, 0.14, { index: 1.6, gain: 0.09, slideTo: 85, bright: 0.2 });
       },
-      // Two quick steps and a block.
+      // A one-two: a light blow, then a solid one.
       castle: () => {
-        whoosh(0, 0.07, 900, 2400, 0.14); whoosh(0.09, 0.07, 1200, 3000, 0.14);
-        fm(392, 0.17, 0.2, { ratio: 3.5, index: 2.5, gain: 0.1, bright: 0.05, hold: 0.2 });
-        impact(0.17, { gain: 0.22, dur: 0.07, low: 0 });
+        whoosh(0, 0.06, 900, 2600, 0.13);
+        impact(0.04, { gain: 0.24, dur: 0.07, from: 3400, to: 800, low: 200 });
+        whoosh(0.13, 0.06, 700, 2200, 0.15);
+        impact(0.18, { gain: 0.3, dur: 0.16, from: 3000, to: 300, low: 125 });
       },
       // Charging up a special move.
       promote: () => {
@@ -265,29 +280,36 @@ const sounds = (() => {
         impact(0.3, { gain: 0.5, dur: 0.3 }); crash(0.3, 0.7, 0.14);
         brass([392, 466, 587, 784], 0.3, 0.75); fbass(98, 0.3, 0.75);
       },
-      // "You win": a brass fanfare climbing home.
+      // The end of a round, as a fighting game of the time has it: the
+      // knockout blow with the cry echoing away (ko), then a short tune of
+      // our own for who it went to.
+      // "You win": a march of brass stabs up to a held chord.
       win: () => {
-        const steps = [[[262, 330, 392], 65.4, 0, 0.12], [[262, 330, 392], 65.4, 0.15, 0.12], [[349, 440, 523], 87.3, 0.3, 0.2],
-          [[392, 494, 587], 98, 0.54, 0.2], [[523, 659, 784, 1047], 130.8, 0.78, 1.0]];
-        for (const [notes, root, at, dur] of steps) { brass(notes, at, dur); fbass(root, at, dur); }
-        impact(0, { gain: 0.3, dur: 0.15 }); impact(0.78, { gain: 0.45, dur: 0.3 }); crash(0.78, 0.9, 0.14);
-        [1047, 1319, 1568, 2093].forEach((f, i) => bell(f, 0.84 + i * 0.07, 0.5, 0.04));
+        ko();
+        const steps = [[[233, 294, 349], 58.3, 0.8, 0.1], [[233, 294, 349], 58.3, 0.93, 0.1], [[311, 392, 466], 77.8, 1.06, 0.2],
+          [[349, 440, 523], 87.3, 1.3, 0.2], [[466, 587, 698, 932], 116.5, 1.54, 1.0]];
+        for (const [notes, root, at, dur] of steps) { brass(notes, at, dur); fbass(root, at, dur); impact(at, { gain: 0.22, dur: 0.12, low: 90 }); }
+        crash(1.54, 0.9, 0.14);
+        [932, 1175, 1397, 1865].forEach((f, i) => bell(f, 1.6 + i * 0.07, 0.5, 0.04));
       },
-      // "K.O.": the blow, then the brass sinking.
+      // "You lose": the brass sinking, slow.
       loss: () => {
-        impact(0, { gain: 0.65, dur: 0.35, low: 150 });
-        brass([294, 349, 440], 0.05, 0.3); fbass(73.4, 0.05, 0.3);
-        brass([277, 330, 415], 0.38, 0.3); fbass(69.3, 0.38, 0.3);
-        brass([220, 262, 349], 0.71, 1.0); fbass(55, 0.71, 1.0);
-        fm(440, 0.71, 1.0, { index: 2, gain: 0.05, slideTo: 110 });
+        ko();
+        brass([294, 349, 440], 0.8, 0.32); fbass(73.4, 0.8, 0.32);
+        brass([277, 330, 415], 1.14, 0.32); fbass(69.3, 1.14, 0.32);
+        brass([220, 262, 349], 1.48, 1.1); fbass(55, 1.48, 1.1);
+        fm(440, 1.48, 1.1, { index: 2, gain: 0.05, slideTo: 110 });
       },
-      // Time over: two level stabs.
-      draw: () => { brass([392, 523, 587], 0, 0.14); brass([392, 523, 587], 0.2, 0.4); fbass(98, 0, 0.6, 0.12); },
-      // The closing gong.
+      // "Draw game": the bell, then two level stabs.
+      draw: () => {
+        bell(988, 0, 0.5, 0.1); bell(988, 0.22, 0.7, 0.1); impact(0, { gain: 0.3, dur: 0.15, low: 110 });
+        brass([392, 523, 587], 0.6, 0.14); brass([392, 523, 587], 0.8, 0.6); fbass(98, 0.6, 0.8, 0.12);
+      },
+      // A game you watched: the knockout, and a short flourish for the winner.
       end: () => {
-        impact(0, { gain: 0.35, dur: 0.25, low: 120 });
-        fm(110, 0, 1.3, { ratio: 1.41, index: 4, gain: 0.14, bright: 0.05, hold: 0.3 });
-        brass([220, 330, 440], 0, 0.9, 0.04);
+        ko();
+        brass([294, 440, 587], 0.8, 0.12); fbass(73.4, 0.8, 0.13); impact(0.8, { gain: 0.22, dur: 0.12, low: 90 });
+        brass([392, 587, 784], 0.96, 0.8); fbass(98, 0.96, 0.8); impact(0.96, { gain: 0.3, dur: 0.2, low: 90 }); crash(0.96, 0.7, 0.12);
       },
       // The timer running down.
       lowtime: () => { bell(1568, 0, 0.12, 0.09); bell(1568, 0.14, 0.12, 0.09); bell(1568, 0.28, 0.2, 0.09); },

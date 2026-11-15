@@ -10,7 +10,7 @@
   <main class="app">
     <section class="table">
       <div class="player" id="player-top">
-        <span class="name"></span><span class="score-chip" hidden></span><span class="kind"></span><span class="captured"></span>
+        <span class="pflag" hidden></span><span class="name"></span><span class="score-chip" hidden></span><span class="kind"></span><span class="captured"></span>
         <span class="game-actions">
           <button type="button" class="act resign" title="Resign the game" hidden>⚑ Resign</button>
           <button type="button" class="act draw" title="Agree a draw" hidden>½ Draw</button>
@@ -51,20 +51,10 @@
             <g id="shapes"></g>
           </svg>
           <div id="promotion" hidden></div>
-          <div id="game-over" hidden role="alertdialog" aria-labelledby="go-title" aria-describedby="go-reason">
-            <div class="go-card">
-              <div class="go-badge" id="go-badge"></div>
-              <h2 id="go-title"></h2>
-              <p class="go-reason" id="go-reason"></p>
-              <p class="go-rating-line" id="go-rating" hidden></p>
-              <div class="go-players" id="go-players"></div>
-              <div class="go-actions" id="go-actions"></div>
-            </div>
-          </div>
         </div>
       </div>
       <div class="player" id="player-bottom">
-        <span class="name"></span><span class="score-chip" hidden></span><span class="kind"></span><span class="captured"></span>
+        <span class="pflag" hidden></span><span class="name"></span><span class="score-chip" hidden></span><span class="kind"></span><span class="captured"></span>
         <span class="game-actions">
           <button type="button" class="act resign" title="Resign the game" hidden>⚑ Resign</button>
           <button type="button" class="act draw" title="Agree a draw" hidden>½ Draw</button>
@@ -101,6 +91,10 @@
           <span class="eco"></span><span class="name"></span>
         </div>
       </div>
+
+      <!-- Several games at once (a watched player's, or your engine's): a
+           small board for each; a click puts that one on the board. -->
+      <div id="watch-strip" role="group" aria-label="Games being watched" hidden></div>
 
       <div class="workspace" data-tab="moves">
         <div class="panel moves-panel">
@@ -433,7 +427,7 @@
                 <button type="submit" class="primary small" id="lx-watch-go">Watch</button>
                 <button type="button" class="small" id="lx-watch-stop" hidden>Stop</button>
               </form>
-              <p class="hint" id="lx-watch-state">Follow any player's games live on the board, one game after another. No engine plays; analysis can run while you watch. No token needed.</p>
+              <p class="hint" id="lx-watch-state">Follow any player's games live on the board, one game after another, and all of them when the player is in several at once. No engine plays; analysis can run while you watch. No token needed.</p>
             </section>
             <section class="lx-section lx-online" id="lx-online">
               <h4>Online bots <span class="count" id="lx-online-count"></span>
@@ -550,9 +544,10 @@
                   <span>Or a random bot online, <span id="lx-seek-speed">blitz</span> rating</span>
                   <input type="number" id="lx-seek-min" min="0" max="4000" step="50" placeholder="any"> –
                   <input type="number" id="lx-seek-max" min="0" max="4000" step="50" placeholder="any">
-                  <label class="lx-seek-games" title="How many games to play, one after another: when a game ends, another random bot is challenged. 0: keep going until you press Stop.">for <input type="number" id="lx-seek-games" min="0" max="999" step="1" value="5"> <span id="lx-seek-games-unit">game</span></label>
+                  <label class="lx-seek-games" title="How many games to play: random bots are challenged until that many games have started, as many at once as your engine's rules allow (Games at once). 0: keep going until you press Stop.">for <input type="number" id="lx-seek-games" min="0" max="999" step="1" value="5"> <span id="lx-seek-games-unit">game</span></label>
                   <button type="button" class="small primary" id="lx-seek-go" title="Challenge a random bot in this rating range with the time control above; if it declines or does not answer, try another until one accepts">Challenge random bot</button>
                   <button type="button" class="small" id="lx-seek-stop" hidden>Stop</button>
+                  <label class="check lx-seek-auto" title="While this is on, your engine challenges random bots by itself, without end, with the clock above and this rating range: as many games at once as its rules allow, the next challenge when there is room. It starts now and each time the engine connects; clear the box (or press Stop) to end it"><input type="checkbox" id="lx-seek-auto"> Auto challenge</label>
                 </div>
                 <p class="hint lx-seek-state" id="lx-seek-state" hidden></p>
                 <div id="lx-outgoing" class="lx-list"></div>
@@ -630,6 +625,62 @@
       </div>
     </aside>
   </main>
+
+  <!-- The result card: in the middle of the window when a game ends. -->
+  <div id="game-over" hidden role="alertdialog" aria-labelledby="go-title" aria-describedby="go-reason">
+    <div class="go-card">
+      <div class="go-badge" id="go-badge"></div>
+      <h2 id="go-title"></h2>
+      <p class="go-reason" id="go-reason"></p>
+      <p class="go-rating-line" id="go-rating" hidden></p>
+      <div class="go-players" id="go-players"></div>
+      <div class="go-actions" id="go-actions"></div>
+    </div>
+  </div>
+
+  <!-- Your engine's finished Lichess games, floating while it plays. -->
+  <section class="panel card mh" id="match-history" aria-label="Match history" hidden>
+    <div class="mh-head" id="mh-head" title="Drag to move · double-click to fold">
+      <h3>Match history</h3>
+      <span class="mh-tally" id="mh-tally"></span>
+    </div>
+    <div class="mh-list" id="mh-list"></div>
+    <div class="mh-foot"><button type="button" class="link" id="mh-clear" hidden>Clear history</button></div>
+  </section>
+
+  <!-- Floating windows that are hidden: a button for each brings it back. -->
+  <div id="float-tray">
+    <button type="button" id="engine-pill" title="Show the engine window" hidden>
+      <span class="pill-name"></span><span class="pill-depth" hidden><small>Depth</small><b></b></span>
+    </button>
+  </div>
+
+  <!-- Challenges sent, floating over the app with how each one stands. -->
+  <section class="panel float-win" id="ch-float" aria-label="Challenges sent" hidden>
+    <div class="float-head" id="ch-float-head" title="Drag to move · double-click to fold">
+      <h3>Challenges</h3>
+      <span class="lx-meta" id="ch-float-count"></span>
+      <button type="button" class="float-toggle" id="ch-float-fold"></button>
+    </div>
+    <div class="chf-list" id="ch-float-list" aria-live="polite"></div>
+    <p class="chf-next" id="ch-float-next" hidden></p>
+  </section>
+
+  <!-- The result screen: over the whole window when a game ends. -->
+  <div id="ko" hidden aria-live="polite" title="Click to close">
+    <div class="ko-shade"></div><div class="ko-flash"></div><div class="ko-rays"></div>
+    <div class="ko-stack">
+      <div class="ko-word" id="ko-word"></div>
+      <div class="ko-sub" id="ko-sub"></div>
+      <div class="ko-cards">
+        <div class="ko-side white" id="ko-white"></div>
+        <div class="ko-score" id="ko-score"></div>
+        <div class="ko-side black" id="ko-black"></div>
+      </div>
+      <div class="ko-reason" id="ko-reason"></div>
+      <button type="button" class="ko-ai" id="ko-ai" title="Ask the AI model to go over this game, in the AI panel" hidden>Analyze with AI</button>
+    </div>
+  </div>
 
   <!-- The versus screen: over the whole window when a watched game starts. -->
   <div id="versus" hidden aria-live="polite" title="Click to go to the game">
@@ -797,6 +848,8 @@
           </select></label>
           <label class="check"><input type="checkbox" id="result-card"> Show the result on the board when a game ends</label>
           <label class="check" title="When a game you are watching starts, the two players' cards come in to face each other for a moment before the game"><input type="checkbox" id="versus-on"> Show the versus screen when a watched game starts</label>
+          <label class="check" title="When a game ends, its result fills the window for a moment in the manner of a 1990s fighting game: K.O., the winner and the score"><input type="checkbox" id="ko-on"> Show the result screen when a game ends</label>
+          <label class="check" title="Your engine can play several Lichess games at once. With this on, a game that starts while another of its games is on the board takes the board, with the versus screen; with it off, the new game only joins the row of small boards and you switch by clicking it"><input type="checkbox" id="bot-switch"> Switch the board to your engine's new game when it starts another</label>
           <label class="check" title="A red mark on the corner of each piece that more enemy pieces attack than its own side defends, with the difference"><input type="checkbox" id="attack-marks"> Mark pieces with more attackers than defenders</label>
           <p class="hint">Pieces slide to their new square and a captured piece lifts off and flies into the captured pieces of the player who took it, for every move: yours, the engine's, a Lichess opponent's, and stepping through a game one move at a time.</p>
         </div>
@@ -1092,8 +1145,12 @@
   <script src="review.js"></script>
   <script src="explorer.js"></script>
   <script src="puzzles.js"></script>
+  <script src="flags.js"></script>
   <script src="lichess.js"></script>
+  <script src="challenge-float.js"></script>
+  <script src="float-window.js"></script>
   <script src="chat.js"></script>
+  <script src="match-history.js"></script>
   <script src="players.js"></script>
   <script src="wac.js"></script>
   <script src="positions.js"></script>

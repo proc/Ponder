@@ -196,3 +196,71 @@ func TestSpectateKeepsAllMoves(t *testing.T) {
 		})
 	}
 }
+
+// A player in two games at once: both are followed, one is on the board,
+// and Show puts the other one there.
+func TestSpectateFollowsSeveralGames(t *testing.T) {
+	h := newSpect(t)
+	h.fake.MaxPlies = 60
+	first := h.fake.AutoGame("maia1", "SlowBot", 60, 0)
+	second := h.fake.AutoGame("SlowBot", "grumpy", 60, 0)
+	if err := h.sp.Start(h.srv.URL, "SlowBot"); err != nil {
+		t.Fatal(err)
+	}
+	games := func(st SpectateStatus) map[string]SpectateGame {
+		m := map[string]SpectateGame{}
+		for _, g := range st.Games {
+			m[g.ID] = g
+		}
+		return m
+	}
+	h.waitFor("both games followed", func(_ game.ExternalView, st SpectateStatus) bool {
+		g := games(st)
+		return len(g) == 2 && g[first].Moves >= 4 && g[second].Moves >= 4
+	})
+	_, st, _ := h.last()
+	g := games(st)
+	onBoard := st.GameID
+	other := first
+	if onBoard == first {
+		other = second
+	}
+	if !g[onBoard].Shown || g[other].Shown || g[first].Side != "black" || g[second].Side != "white" || g[second].Black != "grumpy" {
+		t.Fatalf("games %+v, on the board %q", st.Games, onBoard)
+	}
+	// Only the game on the board is sent to it.
+	h.mu.Lock()
+	for _, v := range h.views {
+		if v.ID != onBoard {
+			h.mu.Unlock()
+			t.Fatalf("a view of %s while %s is on the board", v.ID, onBoard)
+		}
+	}
+	h.mu.Unlock()
+	if err := h.sp.Show(other); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("the other game on the board", func(v game.ExternalView, st SpectateStatus) bool {
+		return v.ID == other && st.GameID == other && games(st)[other].Shown
+	})
+	if err := h.sp.Show("nosuchgame"); err == nil {
+		t.Fatal("showing an unknown game did not fail")
+	}
+	// Both are followed to the end, each with all its moves.
+	h.waitFor("both over", func(_ game.ExternalView, st SpectateStatus) bool {
+		g := games(st)
+		return len(g) == 2 && !g[first].Live && !g[second].Live && st.State == "waiting"
+	})
+	_, st, _ = h.last()
+	for _, id := range []string{first, second} {
+		moves, _, _, _ := h.fake.Game(id)
+		if g := games(st)[id]; g.Moves != len(moves) || g.Result == "" || g.Result == "*" {
+			t.Fatalf("%s: %+v, %d moves played", id, g, len(moves))
+		}
+	}
+	// The next game takes the board, and the finished ones go.
+	third := h.fake.AutoGame("SlowBot", "maia5", 60, 0)
+	h.waitFor("the next game", func(v game.ExternalView, st SpectateStatus) bool {
+		return v.ID == third && len(st.Games) == 1 && st.Games[0].ID == third
+	})
+}

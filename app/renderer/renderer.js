@@ -915,6 +915,13 @@ function renderPlayers() {
     const player = state.players?.[side];
     box.dataset.side = side;
     $('.name', box).textContent = player ? player.name : side === 'white' ? 'White' : 'Black';
+    // The country flag of a Lichess player, before the name.
+    const flagBox = $('.pflag', box);
+    const code = flagFor(state.external?.users?.[side]);
+    const emoji = flagEmoji(code);
+    flagBox.hidden = !emoji;
+    flagBox.textContent = emoji;
+    flagBox.title = emoji ? flagName(code) : '';
     let kind = side;
     if (player?.type === 'engine' || player?.type === 'human' || player?.type === 'lichess') kind += ' · ' + player.type;
     if (player?.rating) kind += ' · ' + player.rating;
@@ -1396,12 +1403,18 @@ let engineLog = {}; // side -> [{ ply, depth, score, nodes, line }]
 let engineSearch = {};
 
 // A ponder hit: the opponent played the reply the engine was thinking
-// about. A label rises from the piece that just moved and fades, once.
+// about. It is called out over the piece that just moved, once, the
+// moment the move arrives (the backend says so with the move itself).
 const ponderHitsShown = new Set();
 function popPonderHit(data) {
   const key = `${state?.game}:${data.side}:${data.ply}`;
   if (!state || ponderHitsShown.has(key)) return;
   ponderHitsShown.add(key);
+  // At once, as the piece sets off for its square: waiting for it to
+  // arrive made the call feel late.
+  showPonderHit(data);
+}
+function showPonderHit(data) {
   // Only for the move just played, on the live board.
   const move = state.moves[data.ply - 1];
   if (!move || data.ply !== state.moves.length || !isLive()) return;
@@ -1412,7 +1425,7 @@ function popPonderHit(data) {
   const rank = +to[1];
   const col = flipped ? 7 - file : file;
   const row = flipped ? rank - 1 : 8 - rank;
-  const pop = el('div', { className: 'ponder-pop', textContent: 'Ponder hit' });
+  const pop = el('div', { className: 'ponder-pop' }, [el('span', { textContent: 'Ponder hit!' })]);
   pop.setAttribute('role', 'status');
   pop.title = `${state.players?.[data.side]?.name ?? 'The engine'} expected this move and was already thinking about its answer`;
   // Centred on the piece, but kept inside the board on the edge files.
@@ -1420,7 +1433,8 @@ function popPonderHit(data) {
   pop.style.top = `${row * 12.5}%`;
   $('.board-wrap').append(pop);
   const done = () => pop.remove();
-  pop.addEventListener('animationend', done);
+  // Its own animation, not the burst behind it (which ends sooner).
+  pop.addEventListener('animationend', (e) => { if (!e.pseudoElement) done(); });
   setTimeout(done, 2500); // in case animations are off
 }
 
@@ -1503,12 +1517,180 @@ function renderEngineHead(side) {
   const stats = $(`#engine-${side} .stats`);
   if (!stats) return;
   const info = engineInfo[side];
+  // The depth has a place of its own, in large figures.
+  const badge = $(`#engine-${side} .depth-badge`);
+  if (badge) {
+    badge.hidden = !info?.depth;
+    if (info?.depth) $('b', badge).textContent = info.depth;
+    badge.title = info?.depth ? `The search has reached depth ${info.depth}${info.pondering ? ", on its opponent's time" : ''}` : '';
+  }
+  if ($(`#engine-${side}`).classList.contains('float-hidden')) syncEnginePill();
   stats.textContent = info
-    ? [info.pondering ? 'pondering' : '', `depth ${info.depth}`, info.nodes ? `${formatCount(info.nodes)} nodes` : '',
+    ? [info.pondering ? 'pondering' : '', info.nodes ? `${formatCount(info.nodes)} nodes` : '',
       info.nps ? `${formatCount(info.nps)} n/s` : ''].filter(Boolean).join(' · ')
     : '';
   stats.title = !info ? '' : info.pondering ? "Thinking on its opponent's time" : 'Its search for its move';
 }
+
+// While your engine's Lichess game is on the board, its window leaves the
+// side panel and floats over the app: drag it by its header, fold it down
+// to the header with the arrow (or a double-click). Where it is and whether
+// it is folded are remembered.
+const engineFloat = (() => { try { return JSON.parse(localStorage.getItem('engineFloat')) || {}; } catch { return {}; } })();
+function saveEngineFloat() {
+  try { localStorage.setItem('engineFloat', JSON.stringify(engineFloat)); } catch { /* not kept */ }
+}
+
+// Puts the window where it was left (bottom right at first), inside the app.
+function placeEngineFloat(panel) {
+  const m = 8;
+  // The size it was dragged to, as far as the app's window allows.
+  const sized = engineFloat.w > 0 && engineFloat.h > 0;
+  const folded = panel.classList.contains('folded');
+  panel.classList.toggle('sized', sized && !folded);
+  panel.style.width = sized ? Math.round(Math.max(220, Math.min(window.innerWidth - 2 * m, engineFloat.w))) + 'px' : '';
+  panel.style.height = sized && !folded ? Math.round(Math.max(110, Math.min(window.innerHeight - 2 * m, engineFloat.h))) + 'px' : '';
+  const r = panel.getBoundingClientRect();
+  const fit = (v, size, room) => Math.round(Math.max(m, Math.min(room - size - m, v ?? room - size - 2 * m)));
+  panel.style.left = fit(engineFloat.x, r.width, window.innerWidth) + 'px';
+  panel.style.top = fit(engineFloat.y, r.height, window.innerHeight) + 'px';
+}
+
+// The floating window hidden: a button at the bottom right, with the depth
+// the search is at, brings it back.
+function syncEnginePill() {
+  const pill = $('#engine-pill');
+  const panel = document.querySelector('.engine.floating.float-hidden');
+  pill.hidden = !panel;
+  if (!panel) return;
+  const side = panel.id.replace('engine-', '');
+  const depth = engineInfo[side]?.depth;
+  $('.pill-name', pill).textContent = state.players?.[side]?.name ?? 'Engine';
+  $('.pill-depth', pill).hidden = !depth;
+  if (depth) $('.pill-depth b', pill).textContent = depth;
+}
+function hideEngineFloat(hidden) {
+  engineFloat.hidden = Boolean(hidden);
+  saveEngineFloat();
+  renderEngineInfo();
+}
+$('#engine-pill').onclick = () => hideEngineFloat(false);
+
+function foldEngineFloat(panel, folded) {
+  engineFloat.folded = Boolean(folded);
+  saveEngineFloat();
+  floatEngine(panel, true);
+}
+
+function floatEngine(panel, on) {
+  if (on !== panel.classList.contains('floating')) {
+    panel.classList.toggle('floating', on);
+    if (on) document.body.append(panel);
+    else {
+      $('#info').insertBefore(panel, $('#chat'));
+      panel.classList.remove('folded', 'sized', 'float-hidden');
+      for (const k of ['left', 'top', 'width', 'height']) panel.style[k] = '';
+    }
+  }
+  if (!on) return;
+  const head = $('.head', panel);
+  const toggle = $('.float-toggle', panel);
+  if (!head.dataset.floatWired) {
+    head.dataset.floatWired = '1';
+    toggle.onclick = () => foldEngineFloat(panel, !engineFloat.folded);
+    toggle.addEventListener('pointerdown', (e) => e.stopPropagation());
+    const close = $('.float-close', panel);
+    close.onclick = () => hideEngineFloat(true);
+    close.addEventListener('pointerdown', (e) => e.stopPropagation());
+    head.addEventListener('dblclick', (e) => {
+      if (panel.classList.contains('floating') && !e.target.closest('button')) foldEngineFloat(panel, !engineFloat.folded);
+    });
+    head.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || !panel.classList.contains('floating')) return;
+      e.preventDefault();
+      const r = panel.getBoundingClientRect();
+      const dx = e.clientX - r.left;
+      const dy = e.clientY - r.top;
+      try { head.setPointerCapture(e.pointerId); } catch { /* not a real pointer */ }
+      panel.classList.add('dragging');
+      const move = (ev) => {
+        engineFloat.x = ev.clientX - dx;
+        engineFloat.y = ev.clientY - dy;
+        placeEngineFloat(panel);
+      };
+      const up = () => {
+        try { head.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+        panel.classList.remove('dragging');
+        head.removeEventListener('pointermove', move);
+        head.removeEventListener('pointerup', up);
+        head.removeEventListener('pointercancel', up);
+        // Kept as it ended up: inside the window.
+        engineFloat.x = parseFloat(panel.style.left);
+        engineFloat.y = parseFloat(panel.style.top);
+        saveEngineFloat();
+      };
+      head.addEventListener('pointermove', move);
+      head.addEventListener('pointerup', up);
+      head.addEventListener('pointercancel', up);
+    });
+  }
+  if (!$('.float-grip', panel)) {
+    // The corner to drag the window's size by; a double-click gives it its
+    // own size back.
+    const grip = el('div', { className: 'float-grip', title: 'Drag to resize · double-click to reset' });
+    panel.append(grip);
+    grip.addEventListener('dblclick', () => {
+      delete engineFloat.w;
+      delete engineFloat.h;
+      saveEngineFloat();
+      placeEngineFloat(panel);
+    });
+    grip.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const r = panel.getBoundingClientRect();
+      const dw = r.width - e.clientX;
+      const dh = r.height - e.clientY;
+      // The corner moves; the window's top left stays where it is.
+      engineFloat.x = r.left;
+      engineFloat.y = r.top;
+      try { grip.setPointerCapture(e.pointerId); } catch { /* not a real pointer */ }
+      panel.classList.add('resizing');
+      const move = (ev) => {
+        engineFloat.w = Math.max(220, Math.min(ev.clientX + dw, window.innerWidth - 8 - r.left));
+        engineFloat.h = Math.max(110, Math.min(ev.clientY + dh, window.innerHeight - 8 - r.top));
+        placeEngineFloat(panel);
+      };
+      const up = () => {
+        try { grip.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+        panel.classList.remove('resizing');
+        grip.removeEventListener('pointermove', move);
+        grip.removeEventListener('pointerup', up);
+        grip.removeEventListener('pointercancel', up);
+        if (engineFloat.w > 0) {
+          engineFloat.w = parseFloat(panel.style.width);
+          engineFloat.h = parseFloat(panel.style.height);
+        }
+        saveEngineFloat();
+      };
+      grip.addEventListener('pointermove', move);
+      grip.addEventListener('pointerup', up);
+      grip.addEventListener('pointercancel', up);
+    });
+  }
+  panel.classList.toggle('float-hidden', Boolean(engineFloat.hidden));
+  const folded = Boolean(engineFloat.folded);
+  panel.classList.toggle('folded', folded);
+  toggle.textContent = folded ? '▸' : '▾';
+  toggle.title = folded ? 'Show the engine\'s lines' : 'Fold the window down to this bar';
+  toggle.setAttribute('aria-label', toggle.title);
+  toggle.setAttribute('aria-expanded', String(!folded));
+  head.title = 'Drag to move · double-click to fold';
+  placeEngineFloat(panel);
+}
+window.addEventListener('resize', () => {
+  for (const panel of document.querySelectorAll('.engine.floating')) placeEngineFloat(panel);
+});
 
 // An engine's window, in the manner of the Analysis window: a header (who,
 // how deep, how fast), then one row per move it searched, newest first: the
@@ -1518,13 +1700,16 @@ function renderEngineInfo() {
     const panel = $(`#engine-${side}`);
     const player = state.players?.[side];
     panel.hidden = !player || player.type !== 'engine';
-    if (panel.hidden) continue;
+    if (panel.hidden) { floatEngine(panel, false); continue; }
     if (!panel.firstChild) {
       panel.append(
         el('div', { className: 'head' }, [
           el('span', { className: 'side-dot ' + side, title: side === 'white' ? 'White' : 'Black' }),
           el('span', { className: 'engine-name' }),
+          el('span', { className: 'depth-badge', hidden: true }, [el('small', { textContent: 'Depth' }), el('b')]),
           el('span', { className: 'stats' }),
+          el('button', { type: 'button', className: 'float-toggle' }),
+          el('button', { type: 'button', className: 'float-toggle float-close', textContent: '✕', title: 'Hide the engine window (a button at the bottom right brings it back)', ariaLabel: 'Hide the engine window' }),
         ]),
         el('div', { className: 'engine-sum', hidden: true }),
         el('div', { className: 'lines' }),
@@ -1537,6 +1722,8 @@ function renderEngineInfo() {
     $('.engine-name', panel).textContent = player.name;
     $('.engine-name', panel).title = player.name;
     renderEngineHead(side);
+    // Your engine's Lichess game: its window floats over the app.
+    floatEngine(panel, state.external?.kind === 'bot');
 
     const log = engineLog[side] ?? [];
     const openLines = engineLineOpen[side] ??= new Set();
@@ -1608,7 +1795,10 @@ function renderEngineInfo() {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
       });
     }
+    // Its rows have changed its height: keep the floating window in view.
+    if (panel.classList.contains('floating')) placeEngineFloat(panel);
   }
+  syncEnginePill();
 }
 
 // ---------------------------------------------------------------------------
@@ -1860,6 +2050,7 @@ function renderGameInfo() {
     const d = diff?.[side];
     return el('div', { className: `gi-player ${side}` + (pt === '1' ? ' won' : '') + (live && state.turn === side ? ' to-move' : '') }, [
       el('span', { className: `gi-dot ${side}`, title: side === 'white' ? 'White' : 'Black' }),
+      ...[flagSpan(ext?.users?.[side])].filter(Boolean),
       el('span', { className: 'gi-name', textContent: name, title: name }),
       ...(kind ? [el('span', { className: 'gi-kind', textContent: kind })] : []),
       el('span', { className: 'gi-rating' }, rating ? [String(rating), ...(d != null ? [el('span', { className: 'gi-diff ' + (d > 0 ? 'up' : d < 0 ? 'down' : ''), textContent: ` ${d > 0 ? '+' : d < 0 ? '−' : '±'}${Math.abs(d)}` })] : [])] : []),
@@ -2026,7 +2217,7 @@ function playStateSounds(prev, next, newGame) {
   if (newGame) {
     lowTime = {};
     // The versus screen has a sound of its own, in place of the start sound.
-    if (window.versusWanted?.(next)) return;
+    if (window.versusWanted?.(next, prev)) return;
     if ((next.active && !next.loaded) || (next.external?.live && next.moves.length === 0)) sounds.play('start');
     return;
   }
@@ -2106,6 +2297,7 @@ function showGameOver(st) {
   } else {
     notifyGameOver(st, head);
   }
+  window.showKo?.(st);
   if (!resultCard) return;
   renderGameOver(st, true);
 }
@@ -2118,6 +2310,7 @@ function ratingDiffArrived(st) {
     notifyGameOver(st, resultHeadline(st));
   }
   if (gameOverFor === st.game && !$('#game-over').hidden) renderGameOver(st, false);
+  window.updateKo?.();
 }
 
 function renderGameOver(st, focus) {
@@ -2127,7 +2320,7 @@ function renderGameOver(st, focus) {
   box.className = head.kind;
   $('#go-badge').textContent = head.badge;
   $('#go-title').textContent = head.title;
-  $('#go-reason').textContent = (st.reason ?? '').replace(/^(White|Black) wins /, '') || st.result.replace('1/2-1/2', '½-½');
+  $('#go-reason').textContent = (st.reason ?? '').replace(/^(White|Black) wins /, '').replace(/^Draw\s+(?=\S)/, '') || st.result.replace('1/2-1/2', '½-½');
   const pts = st.result === '1-0' ? ['1', '0'] : st.result === '0-1' ? ['0', '1'] : ['½', '½'];
   const diff = st.external?.ratingDiff;
   const side = (s, pt) => {
@@ -2167,6 +2360,11 @@ function renderGameOver(st, focus) {
     const analyse = el('button', { type: 'button', className: 'primary', textContent: 'Computer analysis' });
     analyse.onclick = () => { hideGameOver(); showTab('moves'); startReview(); };
     acts.push(analyse);
+  }
+  if (window.canAnalyseWithAi?.()) {
+    const ai = el('button', { type: 'button', textContent: 'Analyze with AI', title: 'Ask the AI model to go over this game, in the AI panel (the model is set in Settings → AI)' });
+    ai.onclick = () => { hideGameOver(); window.analyseGameWithAi(); };
+    acts.push(ai);
   }
   if (!st.external) {
     const again = el('button', { type: 'button', textContent: 'New game' });
@@ -2240,14 +2438,27 @@ function applyState(next) {
   if (newGame && next.loaded && next.moves.length > 1) viewPly = 1;
   if (newGame) { engineInfo = {}; engineStrings = {}; engineLog = {}; engineSearch = {}; engineScores = []; engineLineOpen = {}; ponderHitsShown.clear(); }
   else if (next.moves.length < (prev?.moves.length ?? 0)) engineScores.length = next.moves.length + 1; // takeback
+  // Your engine's next Lichess game brings its window back, open, however
+  // it was left (hidden, or folded down to its header).
+  if (newGame && next.external?.kind === 'bot' && next.external.live && (engineFloat.hidden || engineFloat.folded)) {
+    engineFloat.hidden = false;
+    engineFloat.folded = false;
+    saveEngineFloat();
+  }
   // A Lichess game is shown from your engine's side.
   if (newGame && next.external) flipped = next.external.side === 'black';
   if (prev) playStateSounds(prev, next, newGame);
   if (gameOverFor != null && (newGame || next.result === '*')) hideGameOver();
+  // The board's game going on (or another taking the board) ends its result
+  // screen; not that of a game that ended off the board.
+  if ((newGame || next.result === '*') && typeof ko !== 'undefined' && !ko.bg) { window.hideKo?.(true); ko.shown = null; }
   window.syncPlayersInfo?.();
-  if (newGame) window.maybeVersus?.();
+  // The row of small boards marks the game that is on the board.
+  if (newGame && typeof renderWatchStrip === 'function') renderWatchStrip();
+  if (newGame) window.maybeVersus?.(prev);
   window.renderPositionBar?.();
   window.syncChat?.();
+  window.syncMatchHistory?.();
   window.syncCommentary?.();
   if (prev && !newGame && next.external?.ratingDiff && JSON.stringify(next.external.ratingDiff) !== JSON.stringify(prev.external?.ratingDiff)) {
     setTimeout(() => ratingDiffArrived(state), 0);
@@ -2272,6 +2483,11 @@ api.onEvent((event, data) => {
   if (event === 'aiChat') { window.onAiChat?.(data); window.onAiCommentary?.(data); return; }
   if (event === 'state') {
     applyState(data);
+  } else if (event === 'ponderHit') {
+    // With the opponent's move, before the engine has said anything more.
+    noteEngineSearch({ ...data, ponderHit: true });
+    popPonderHit(data);
+    renderEngineInfo(); // the count of hits under the header
   } else if (event === 'engineInfo') {
     // The move an engine chose comes with its last line when there was one;
     // otherwise only the moves (for the arrows) are new.
@@ -3517,6 +3733,8 @@ $('#moves-figurines').onchange = (e) => setMovesPref('figurines', e.target.check
 $('#anim-speed').onchange = (e) => setAnimSpeed(e.target.value);
 $('#result-card').onchange = (e) => setResultCard(e.target.checked);
 $('#versus-on').onchange = (e) => window.setVersus?.(e.target.checked);
+$('#ko-on').onchange = (e) => window.setKo?.(e.target.checked);
+$('#bot-switch').onchange = (e) => window.setBotAutoSwitch?.(e.target.checked);
 $('#attack-marks').onchange = (e) => {
   attackMarks = e.target.checked;
   try { localStorage.setItem('attackMarks', attackMarks ? 'on' : 'off'); } catch { /* storage unavailable */ }
@@ -3546,6 +3764,8 @@ async function openSettings(pane) {
   $('#result-card').checked = resultCard;
   $('#attack-marks').checked = attackMarks;
   if (typeof vs !== 'undefined') $('#versus-on').checked = vs.on;
+  if (typeof ko !== 'undefined') $('#ko-on').checked = ko.on;
+  $('#bot-switch').checked = window.botAutoSwitchOn?.() ?? true;
   window.fillAiSettings?.();
   $('#moves-scores').checked = movesPrefs.scores;
   $('#sound-volume').value = Math.round(sounds.volume * 100);
@@ -3676,7 +3896,7 @@ function syncAnalysis() {
 
 // The computer's processor load, on the Analysis button while the analysis
 // is on: asked for once a second.
-const cpu = { timer: null, load: null, cores: 0 };
+const cpu = { timer: null, load: null, cores: 0, paused: false };
 function watchCpu(on) {
   if (on === !!cpu.timer) return;
   if (!on) {
@@ -3699,6 +3919,19 @@ function watchCpu(on) {
 }
 function renderCpu() {
   const box = $('#analysis-cpu');
+  // The analysis is on but not searching (paused by you, by a game ending,
+  // or while an engine plays): the meter gives way to the word.
+  if (cpu.paused && cpu.timer) {
+    box.hidden = false;
+    box.classList.add('paused');
+    box.classList.remove('busy');
+    $('#analysis-cpu-pct').textContent = 'Paused';
+    box.removeAttribute('aria-valuenow');
+    box.title = 'The analysis is paused';
+    box.setAttribute('aria-label', box.title);
+    return;
+  }
+  box.classList.remove('paused');
   const pct = cpu.load === null ? null : Math.round(cpu.load * 100);
   box.hidden = pct === null;
   // A meter: the bar fills with the load, the figure beside it.
@@ -3741,7 +3974,9 @@ function renderAnalysis() {
     && analysis.data?.state !== 'over' && analysis.data?.state !== 'error';
   $('#btn-analysis').classList.toggle('on', analysis.on);
   $('#btn-analysis').classList.toggle('working', thinking);
+  cpu.paused = analysis.on && (analysis.held || analysis.paused);
   watchCpu(analysis.on);
+  renderCpu();
   const panel = $('#analysis');
   panel.hidden = !on;
   panel.classList.toggle('held', analysis.held && !analysis.paused);

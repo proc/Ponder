@@ -442,3 +442,32 @@ func TestPlayableExternal(t *testing.T) {
 		t.Fatalf("ExternalKind %q %q %v", id, kind, live)
 	}
 }
+
+// A server that says only "Draw" leaves the reason to the position.
+func TestExternalDrawReason(t *testing.T) {
+	shuffle := []string{"g1f3", "g8f6", "f3g1", "f6g8", "g1f3", "g8f6", "f3g1", "f6g8"}
+	for _, tc := range []struct {
+		name, fen string
+		moves     []string
+		reason    string
+		want      string
+	}{
+		{"repetition", chess.StartFEN, shuffle, "Draw", "Draw by threefold repetition"},
+		{"agreed", chess.StartFEN, []string{"e2e4", "e7e5"}, "Draw", "Draw by agreement"},
+		{"bare kings", "8/8/4k3/8/8/3K4/8/8 w - - 0 1", []string{"d3d4"}, "", "Draw by insufficient material"},
+		{"stalemate", "7k/5Q2/8/8/8/8/8/K7 w - - 0 1", []string{"f7g6"}, "Draw", "Draw by stalemate"},
+		{"fifty moves", "8/8/4k3/8/8/3K4/R7/8 w - - 99 80", []string{"a2a3"}, "Draw", "Draw by the fifty-move rule"},
+		{"said already", chess.StartFEN, shuffle, "Draw on time", "Draw on time"},
+	} {
+		m := NewManager(func(string, any) {})
+		v := ExternalView{ID: tc.name, Kind: "spectate", Side: "white", StartFEN: tc.fen, Moves: tc.moves,
+			White: PlayerConfig{Type: "remote", Name: "A"}, Black: PlayerConfig{Type: "remote", Name: "B"},
+			Finished: true, Result: "1/2-1/2", Reason: tc.reason}
+		if err := m.ShowExternal(v); err != nil {
+			t.Fatal(err)
+		}
+		if got := m.State().Reason; got != tc.want {
+			t.Errorf("%s: reason %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

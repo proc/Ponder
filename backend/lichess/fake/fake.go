@@ -8,8 +8,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -577,6 +579,17 @@ func (s *Server) public(w http.ResponseWriter, r *http.Request) bool {
 				"profile":   map[string]string{"flag": flags[i%len(flags)], "bio": b.Name + " is a test bot that plays random moves."},
 			}))
 		}
+	case path == "/api/users" && r.Method == "POST":
+		// Several players' profiles at once: a list of ids in the body.
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 64*1024))
+		var out []map[string]any
+		for _, id := range strings.Split(string(body), ",") {
+			if id = strings.TrimSpace(id); id != "" && !strings.HasPrefix(strings.ToLower(id), "ghost") {
+				out = append(out, fakeProfile(id))
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, line(out))
 	case path == "/api/users/status":
 		ids := strings.Split(r.URL.Query().Get("ids"), ",")
 		s.mu.Lock()
@@ -645,6 +658,23 @@ func (s *Server) public(w http.ResponseWriter, r *http.Request) bool {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, out)
+	case len(parts) == 4 && parts[0] == "api" && parts[1] == "games" && parts[2] == "user":
+		// The player's games in progress, the latest first.
+		s.mu.Lock()
+		var ids []string
+		for id, g := range s.games {
+			if g.auto && g.Status == "started" && (g.white.ID == strings.ToLower(parts[3]) || g.black.ID == strings.ToLower(parts[3])) {
+				ids = append(ids, id)
+			}
+		}
+		sort.Sort(sort.Reverse(sort.StringSlice(ids)))
+		var out strings.Builder
+		for _, id := range ids {
+			out.WriteString(line(s.exportLocked(s.games[id])) + "\n")
+		}
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		fmt.Fprint(w, out.String())
 	case len(parts) == 3 && parts[0] == "game" && parts[1] == "export":
 		s.mu.Lock()
 		g := s.games[parts[2]]

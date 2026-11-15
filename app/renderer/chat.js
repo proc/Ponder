@@ -20,6 +20,21 @@ const chat = {
 
 const chatKinds = new Set(['bot', 'play', 'spectate']);
 
+// In your engine's games and your own the chat floats over the app, in its
+// own window at the top right (a game you only watch has no chat to show:
+// its note stays in the side column).
+const chatFloat = floatWindow($('#chat'), {
+  key: 'chatFloat', name: 'chat', head: $('#chat .chat-head'),
+  size: { w: 340, h: 360 },
+  start: (w) => ({ x: window.innerWidth - w - 16, y: 64 }),
+  pill: () => {
+    const unread = chat.unread.player + chat.unread.spectator;
+    return [el('span', { className: 'pill-name', textContent: 'Chat' }),
+      ...(unread ? [el('span', { className: 'chat-unread', textContent: String(unread) })] : [])];
+  },
+});
+const chatFloats = () => chat.kind === 'bot' || chat.kind === 'play';
+
 // Called whenever the game on the board changes.
 function syncChat() {
   const ext = state?.external;
@@ -35,6 +50,8 @@ function syncChat() {
     $('#chat-text').value = '';
     chat.drawn = '';
     if (id) loadChat(id);
+    // A new game brings the window back, open.
+    if (id && chatFloats()) chatFloat.reopen();
   }
   renderChat();
 }
@@ -85,9 +102,11 @@ function renderChat() {
   const card = $('#chat');
   if (!chat.gameId) {
     if (!card.hidden) card.hidden = true;
+    chatFloat.set(false);
     return;
   }
   if (card.hidden) card.hidden = false;
+  chatFloat.set(chatFloats());
   const ext = state?.external;
   const usable = Boolean(chat.view);
   const box = $('#chat-lines');

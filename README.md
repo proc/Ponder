@@ -94,7 +94,7 @@ rest holds the moves or game list beside engine analysis and game details.
   shows an activity icon, which turns while the engine is thinking and
   stands still while it is paused, and a meter marked CPU of the computer's
   processor load (all cores, every program) with the figure beside it, read once a
-  second. When a game you are
+  second; while the analysis is paused the meter reads **Paused** instead. When a game you are
   watching ends (someone's on Lichess, your engine's, a tournament game),
   the analysis pauses by itself (as soon as the result is in) and takes up
   again when the next game starts, or when a game it lost the connection
@@ -130,9 +130,28 @@ rest holds the moves or game list beside engine analysis and game details.
   three rising chords and a crash, in place of the usual game-start sound;
   it follows the Sounds setting). After a few seconds they go off the way
   they came; a click or Esc
-  sends them away at once. A game joined part way through, tournament
+  sends them away at once. The next match of a player you are already watching gets it too, even
+  when it is picked up a few moves in. A game you join part way through, tournament
   games and your own games do not show it. Turn it off under **Settings →
   General**.
+- **Result screen** – when a game ends (one you play, your engine's, or
+  one you watch; not a tournament's games), the result fills the window in
+  the manner of a 1990s fighting game: a word slams in with a flash
+  (**CHECKMATE**, **TIME OVER**, **K.O.** for a resignation or anything
+  else decisive, **DRAW GAME**), then who won ("You win", "Your engine
+  loses", "Magnus wins"; for a draw, why: "Threefold repetition",
+  "Stalemate", "Fifty-move rule", "Insufficient material", "By agreement"),
+  then both players' cards with the score between
+  them, the winner's lit and the loser's greyed and knocked askew, with
+  ratings and their changes once Lichess sends them, and how the game
+  ended. It goes after about five seconds, or at once on a click or Esc,
+  leaving the result card. When your engine plays several Lichess games at
+  once, one that ends while another is on the board gets the screen too,
+  marked *Another game*, with its sound; the board stays on the game it
+  shows. An **Analyze with AI** button under the result
+  goes straight to the AI's analysis of the game (not for another game's
+  result: put that game on the board first). Turn the screen off under
+  **Settings → General**.
 - **Captures** – a captured piece lifts off its square and flies, spinning,
   shrinking and fading, into the captured pieces on the bar of the player who took it,
   where it lands in its place. It follows the move animation setting (off:
@@ -212,11 +231,16 @@ rest holds the moves or game list beside engine analysis and game details.
   The other tabs (Games, Tournament, …) get more room, and on a narrow side
   panel the windows go below them instead. Text grows with the screen.
   Before a game starts, the tabbed panel takes the whole side.
-- **When a game ends** a card over the board says who won and how: *You
+- **When a game ends** a card in the middle of the window says who won and how (a draw with its reason, such as threefold repetition; Lichess
+  says only that a game was drawn, so Ponder reads the reason off the final
+  position, and a draw the board does not explain is given as by agreement): *You
   won!* (green), *You lost* (red) or *Draw* when you played (or *Your engine
   won/lost* for its Lichess games), otherwise *White wins* / *Black wins*
-  with the players' names. It has **Computer analysis**, **New game** and
-  **Close** (or Esc, or click beside it); each player bar shows its score (1,
+  with the players' names. It has **Computer analysis**, **Analyze with AI**
+  (opens the AI panel on a new chat and asks the model to go over the game:
+  how it went, the opening, the turning points and each side's decisive
+  mistakes; you can carry the conversation on from its answer), **New game**
+  and **Close** (or Esc, or click beside it); each player bar shows its score (1,
   0 or ½), a win or loss sound plays, and if Ponder is not the window in
   front, a desktop notification says the result. After a **rated Lichess
   game** (yours, your engine's, or one you watch), the card, the
@@ -604,9 +628,11 @@ Moves, captures, castling, check, promotion, the start and end of a game
 seconds, and illegal moves each have a sound. They are generated in code
 (`app/renderer/sounds.js`), with a wooden set for the minimalist theme, a
 synth set for cyberpunk and a 1990s 16-bit arcade fighting-game set for dusk (FM-synth
-brass, bass and bells with noise for the blows: a jab for a move, a heavy
-punch for a capture, a charge-up for a promotion, brass fanfares for the
-start, a win and the versus screen, a sinking "K.O." for a loss). **Settings** turns them off or changes the volume.
+brass, bass and bells with noise for the blows: a jab for a move, a hard
+kick for a capture, a one-two for castling, a charge-up for a promotion, brass fanfares for the
+start, a win and the versus screen, and at the end of a game a knockout blow whose cry
+echoes away, followed by a short brass tune for a win, a loss, a draw or a
+game you watched). **Settings** turns them off or changes the volume.
 
 While a game is being played, its controls sit on the player bars beside
 the board: each person has **⚑ Resign** on their own bar, and the bar
@@ -682,8 +708,12 @@ wide window these sit in two columns. Opening another tab gives it its
 usual room, and the usual layout comes back when the game ends.
 
 On a ponder hit (the opponent plays the reply your engine was thinking
-about) a **Ponder hit** label in the theme's accent colour pops up over the piece that just moved,
-floats upward and fades, with a short rising two-note sound of its own
+about) **PONDER HIT!** is called out over the piece that just moved, the
+instant the move arrives (as the piece sets off, not when the engine next
+reports), the way
+a 1990s fighting game calls a hit: heavy italic capitals in fire with a dark
+edge slam in at a tilt over a burst of rays, shake, then rise and fade (the
+same in every theme), with a short rising two-note sound of its own
 (in both sound sets; it follows the Sounds setting and is heard in zen mode
 too).
 
@@ -748,6 +778,94 @@ games — another bot, say — live on the board, one game after another, from
 that player's side. No engine plays and no token or connection is needed;
 you can turn Analysis on while you watch. **Stop** leaves the last position
 on the board. Lichess shows other people's games a few moves behind.
+
+**Several games at once** – a player in more than one game at a time (a
+simul, correspondence games) has them all followed, up to six. A row of
+small boards appears under the status line, one per game, each showing its
+position as it is played, the opponent, the move number and, once it is
+over, the result. One game is on the board, outlined in the row; click
+another to put that one there. A game that starts while another is being
+played joins the row (it is found within about a quarter of a minute) and
+does not take the board; when the game on the board is over, the next new
+game does. Finished games leave the row when a new one starts. Every game
+followed to its end is saved to the database, if watched games are kept.
+
+**Several engine games at once** – when your engine plays more than one
+game at a time (Games at once in its rules), the same row of small boards
+appears under the status line as when you watch a player in several games:
+one per game in progress, with the opponent, rating, move number and whose
+move it is. The game on the board is outlined; click another to put it
+there, with the engine's window, scores and chat following. A game that
+starts while another is on the board takes the board, with the versus
+screen, and the earlier one stays in the row; turn **Switch the board to
+your engine's new game when it starts another** off in Settings → General
+to have the new game only join the row. A finished game stays in the row
+only while it is the one on the board.
+
+**Country flags** – Lichess players and bots show the flag from their
+Lichess profile beside their name: on the player bars, the Game card, the
+versus and result screens, the row of small boards, the match history, the
+challenge window and the lists in the Lichess tab (challenges, games, bots
+online). Hover a flag for the country's name. Ponder asks Lichess for the
+flags of the names it shows, many at once, and keeps them for the session;
+a player who has not set a flag has none. Players of local games (you, an
+engine) have no country to show. The flags are emoji: macOS and Linux draw
+them, Windows shows the two letters of the country instead.
+
+**Match history** – while your engine plays on Lichess (one of its games
+on the board, or one in progress), a floating **Match history** window
+lists its finished games, newest first: a small picture of the final
+position, **Won** / **Lost** / **Draw** and how (checkmate, resignation, on
+time…), the opponent and their rating, the number of moves, the colour it
+played, the clock and when. A tally of wins, draws and losses heads it.
+Click a game to put it on the board (or, once Ponder no longer has it, to
+open it on Lichess). The last 60 games are kept on this computer, so the
+history outlasts a restart; **Clear history** empties it. Like the chat
+it moves, resizes, folds and hides (a **Match history** button at the
+bottom right brings it back), and it comes back open each time your engine
+starts playing again.
+
+**Floating chat** – in your engine's Lichess games and your own, the
+game's chat leaves the side panel and floats over the app in its own
+window, at the top right at first. Drag it by its header to move it, drag
+its bottom right corner to resize it (a double-click there gives it its own
+size back), fold it down to its header with the arrow or a double-click on
+the header (the rooms and their unread counts stay in view), and hide it
+with ✕: a **Chat** button at the bottom right, with the number of unread
+messages, brings it back. Where it is, its size and whether it is folded or
+hidden are remembered; each new game shows it again, unfolded. A game you
+only watch has no chat Ponder can show, so its note stays in the side panel.
+
+**Challenge window** – a challenge sent to another bot or player (by your
+engine, by you, or by the random-bot challenger) shows in a small window
+floating over the app, with how it stands: waiting for an answer, with the
+seconds left before it is withdrawn and a Cancel button; accepted; declined,
+with the reason given; no answer; or withdrawn. An answered challenge stays
+a few seconds (✕ dismisses it at once) and the window closes when none is
+left. While your engine is challenging random bots, a challenge that was
+declined or not answered stays in the window, marked so, until the next one
+goes out, and the window counts down to it ("Next challenge in 42 s"). The
+window opens at the bottom right of the app; drag it by its header to move it,
+fold it with the arrow or a double-click. It is hidden in zen mode.
+
+**Floating engine window** – while your engine's Lichess game is on the
+board, the engine's window (its search, lines and messages) leaves the side
+panel and floats over the app. Drag it by its header to move it anywhere in
+the window; the arrow in the header, or a double-click on it, folds it down
+to the header (name, depth, nodes and speed) and opens it again. Drag its
+bottom right corner to resize it: the list of lines takes the room, and a
+double-click on the corner gives the window its own size back. Where you
+left it, its size and whether it is folded are remembered. The ✕ in its
+header hides it: a button at the bottom right, with the engine's name and
+the depth its search is at, brings it back. When your engine's next game
+starts the window is shown again, unfolded, however you left it; its place
+and size are kept.
+
+**Depth** – every engine window shows the depth its search has reached in
+large figures in a badge beside the engine's name, apart from the nodes and
+speed. It starts at the bottom
+right, goes back into the side panel when another kind of game is on the
+board, and is hidden in zen mode.
 
 **Live search** – while your engine's Lichess game is on the board, its
 engine window follows the search as it happens (up to 25 times a second):
@@ -846,11 +964,21 @@ is open (or it is playing, or looking for a random bot), its Challenge
 buttons are off until the challenge is answered or you cancel it; the same
 goes for the challenges you send from your own account.
 
-Set **for N games** beside it to have it carry on: when a game ends,
-another random bot is challenged, until that many games have been played (0:
-until you press **Stop**). No challenge goes out while your engine has a
-game in progress, whoever started it; the line under the button says which
-game it is on.
+Set **for N games** beside it to have it carry on: it goes on challenging
+random bots until that many games have started (0: until you press
+**Stop**). It only holds back while your engine is in as many games as its
+rules allow at once (**Games at once**, whoever started them): with room
+for two it challenges another bot while one game is being played, and the
+next challenge goes out when a game ends. It can be started while your
+engine is playing. The line under the button says which game it is on.
+
+**Auto challenge** – the checkbox beside the button keeps the random-bot
+challenger running by itself: while it is ticked your engine challenges
+random bots without end (no number of games), with the clock and rating
+range of the form, as many games at once as its rules allow. It starts when
+you tick it and again each time the engine connects (so also when Ponder
+starts, if it connects automatically), and ends when you clear the box or
+press **Stop**, which clears it too. It is off until you turn it on.
 
 **Challenge random bot** picks a bot online at random whose rating, at the
 speed of the chosen clock (bullet, blitz, rapid…), is within the range you

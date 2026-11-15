@@ -27,7 +27,8 @@ function versusCard(side) {
   const perf = prof?.perfs?.[speed];
   const rating = p.rating || (perf?.games ? `${perf.rating}${perf.prov ? '?' : ''}` : '');
   const title = prof?.title || (p.type === 'engine' ? 'BOT' : '');
-  const flag = typeof flagEmoji === 'function' ? flagEmoji(prof?.profile?.flag) : '';
+  const code = prof?.profile?.flag || flagFor(user) || '';
+  const flag = flagEmoji(code);
   const king = pieceImage('k', side === 'white');
   king.className = 'vs-piece';
   king.alt = '';
@@ -42,7 +43,7 @@ function versusCard(side) {
     el('div', { className: 'vs-name' }, [
       ...(title ? [el('span', { className: 'lx-title', textContent: title })] : []),
       el('span', { className: 'vs-name-text', textContent: p.name || (side === 'white' ? 'White' : 'Black'), title: p.name ?? '' }),
-      ...(flag ? [el('span', { className: 'vs-flag', textContent: flag })] : []),
+      ...(flag ? [el('span', { className: 'vs-flag', textContent: flag, title: flagName(code) })] : []),
     ]),
     el('div', { className: 'vs-rating', textContent: rating || '—' }),
     el('div', { className: 'vs-facts' }, facts.length ? facts.map((f) => el('span', { textContent: f })) : [el('span', { className: 'vs-wait', textContent: user && !pl.data && !pl.error ? 'Looking them up…' : '' })]),
@@ -101,21 +102,191 @@ function showVersus() {
 }
 
 // Whether a game with this state gets the versus screen.
-function versusWanted(st) {
-  const ext = st?.external;
+// prev is the state it replaces.
+function versusWanted(st, prev) {
+  const watched = (s) => s?.external?.kind === 'spectate' || s?.external?.kind === 'bot';
   // A game you watch, as it starts: not one joined half way, not the quick
   // succession of a tournament's games, not your own.
-  const watching = ext?.live && (ext.kind === 'spectate' || ext.kind === 'bot');
-  return !!(vs.on && watching && st.moves.length <= 2 && !puzzleView);
+  if (!vs.on || puzzleView || !watched(st) || !st.external.live) return false;
+  // One of several games of the same player, picked by hand: it is under
+  // way, not starting.
+  if (window.watchPicked && window.watchPicked === st.external.id) return false;
+  // The next match of someone you were already watching is found a little
+  // after it starts (Lichess is asked every so often), a few moves in: it
+  // gets the screen all the same.
+  const next = watched(prev) && prev.external.id !== st.external.id;
+  return next || st.moves.length <= 2;
 }
 window.versusWanted = versusWanted;
 
 // Called when a new game comes onto the board.
-function maybeVersus() {
-  if (!versusWanted(state)) { hideVersus(true); return; }
+function maybeVersus(prev) {
+  if (!versusWanted(state, prev)) { hideVersus(true); return; }
   showVersus();
 }
 window.maybeVersus = maybeVersus;
 
 $('#versus').addEventListener('click', () => hideVersus());
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#versus').hidden) hideVersus(); });
+
+// ---------------------------------------------------------------------------
+// The result screen: when a game ends, its result fills the window the way a
+// 1990s fighting game ends a round. A word slams in ("K.O.", "TIME OVER",
+// "DRAW GAME"), then who won, then the two players with the score between
+// them: the winner's card lit, the loser's knocked askew. It holds a few
+// seconds and goes; a click or Esc sends it away at once. The result card
+// is underneath when it leaves. Settings → General turns it off.
+// ---------------------------------------------------------------------------
+// bg: a game of your engine's that ended off the board (it plays several at
+// once), shown in place of the board's game.
+const ko = { game: null, bg: null, timers: [], on: (() => { try { return localStorage.getItem('koScreen') !== 'off'; } catch { return true; } })() };
+const KO_HOLD = 5200;
+const KO_OUT = 450;
+
+function setKo(on) {
+  ko.on = Boolean(on);
+  try { localStorage.setItem('koScreen', ko.on ? 'on' : 'off'); } catch { /* not kept */ }
+  if (!ko.on) hideKo(true);
+}
+window.setKo = setKo;
+
+// The words for a result: the big one, and the line under it.
+function koWords(st) {
+  const reason = (st.reason ?? '').toLowerCase();
+  const winner = st.result === '1-0' ? 'white' : st.result === '0-1' ? 'black' : null;
+  const name = (s) => st.players?.[s]?.name || (s === 'white' ? 'White' : 'Black');
+  if (st.result === '1/2-1/2') {
+    // Why it was drawn: "Threefold repetition", "Stalemate", "On time".
+    const why = (st.reason ?? '').replace(/^Draw\b\s*(by\s+)?(the\s+)?/i, '').trim();
+    const how = !why ? '' : /^agreement$/i.test(why) ? 'By agreement' : why[0].toUpperCase() + why.slice(1);
+    return { kind: 'draw', word: 'DRAW GAME', sub: how, winner };
+  }
+  if (!winner) return { kind: 'draw', word: 'GAME OVER', sub: '', winner };
+  const word = /time|flag|clock/.test(reason) ? 'TIME OVER' : /mate/.test(reason) ? 'CHECKMATE' : 'K.O.';
+  const mine = resultSide(st);
+  if (mine) {
+    const engine = st.external && st.external.kind !== 'play';
+    const won = mine === winner;
+    return { kind: won ? 'win' : 'loss', word, sub: engine ? (won ? 'Your engine wins' : 'Your engine loses') : (won ? 'You win' : 'You lose'), winner };
+  }
+  return { kind: 'win', word, sub: `${name(winner)} wins`, winner };
+}
+
+function koCard(st, side, winner) {
+  const p = st.players?.[side] ?? {};
+  const diff = st.external?.ratingDiff?.[side];
+  const king = pieceImage('k', side === 'white');
+  king.className = 'vs-piece';
+  king.alt = '';
+  const state_ = winner == null ? 'even' : winner === side ? 'won' : 'lost';
+  const rating = [];
+  if (p.rating) {
+    rating.push(el('span', { textContent: p.rating }));
+    if (diff != null) rating.push(el('span', { className: 'ko-diff ' + (diff > 0 ? 'up' : diff < 0 ? 'down' : ''), textContent: ratingDelta(diff) }));
+  }
+  return el('div', { className: `ko-card ${side} ${state_}` }, [
+    el('div', { className: 'ko-tag', textContent: state_ === 'won' ? 'Winner' : state_ === 'lost' ? 'Defeated' : 'Draw' }),
+    el('div', { className: 'vs-colour' }, [king, el('span', { textContent: side === 'white' ? 'White' : 'Black' })]),
+    el('div', { className: 'ko-name', title: p.name ?? '' }, [
+      ...[flagSpan(st.external?.users?.[side], 'ko-flag')].filter(Boolean), p.name || (side === 'white' ? 'White' : 'Black')]),
+    el('div', { className: 'ko-rating' }, rating),
+  ]);
+}
+
+// The game the screen is for: the board's, or one that ended off it.
+const koState = () => ko.bg ?? (state && state.game === ko.game ? state : null);
+
+function renderKo() {
+  const box = $('#ko');
+  const st = koState();
+  if (box.hidden || !st || st.result === '*') return;
+  const w = koWords(st);
+  box.dataset.kind = w.kind;
+  $('#ko-word').textContent = w.word;
+  $('#ko-word').classList.toggle('long', w.word.length > 5);
+  $('#ko-sub').textContent = w.sub;
+  $('#ko-white').replaceChildren(koCard(st, 'white', w.winner));
+  $('#ko-black').replaceChildren(koCard(st, 'black', w.winner));
+  const pts = st.result === '1-0' ? ['1', '0'] : st.result === '0-1' ? ['0', '1'] : st.result === '1/2-1/2' ? ['½', '½'] : ['–', '–'];
+  $('#ko-score').replaceChildren(el('b', { textContent: pts[0] }), el('span', { textContent: '–' }), el('b', { textContent: pts[1] }));
+  const moves = Math.ceil(st.moves.length / 2);
+  // A draw's reason is the line under the word already.
+  const reason = st.result === '1/2-1/2' ? '' : (st.reason ?? '').replace(/^(White|Black) wins /, '');
+  $('#ko-reason').textContent = [ko.bg ? 'Another game' : '', reason && reason[0].toUpperCase() + reason.slice(1),
+    moves ? `${moves} move${moves === 1 ? '' : 's'}` : ''].filter(Boolean).join(' · ');
+}
+// The rating changes come a moment after the result.
+window.updateKo = renderKo;
+
+function hideKo(now = false) {
+  const box = $('#ko');
+  ko.timers.forEach(clearTimeout);
+  ko.timers = [];
+  if (box.hidden) { ko.bg = null; return; }
+  if (now) { box.hidden = true; box.className = ''; ko.bg = null; return; }
+  box.classList.remove('in');
+  box.classList.add('out');
+  ko.timers.push(setTimeout(() => { box.hidden = true; box.className = ''; ko.bg = null; }, KO_OUT));
+}
+window.hideKo = hideKo;
+
+// Called once a game's result is in (not for a tournament's games).
+function showKo(st, bg = null) {
+  if (!ko.on || !st || st.result === '*' || puzzleView) return;
+  if (ko.game === st.game && !$('#ko').hidden) { renderKo(); return; }
+  // Once a game: a finished game is reported again (its rating changes).
+  if (ko.shown === st.game) return;
+  ko.shown = st.game;
+  hideVersus(true);
+  const box = $('#ko');
+  ko.timers.forEach(clearTimeout);
+  ko.timers = [];
+  ko.game = st.game;
+  ko.bg = bg;
+  box.className = '';
+  box.hidden = false;
+  // Analyze with AI goes over the board's game: not for one off the board.
+  $('#ko-ai').hidden = Boolean(bg) || !window.canAnalyseWithAi?.();
+  renderKo();
+  void box.offsetWidth;
+  box.classList.add('in');
+  ko.timers.push(setTimeout(() => hideKo(), KO_HOLD));
+}
+window.showKo = showKo;
+
+// Your engine plays several games at once: one that ends off the board gets
+// the screen too, with its sound. Its state is made from the game list.
+const KO_STATUS = {
+  mate: (w) => `${w} wins by checkmate`, resign: (w) => `${w} wins by resignation`,
+  outoftime: (w) => (w ? `${w} wins on time` : 'Draw on time'), timeout: (w) => (w ? `${w} wins on time` : 'Draw on time'),
+  stalemate: () => 'Draw by stalemate',
+};
+function showBackgroundKo(g, me) {
+  const white = g.color === 'white';
+  const engine = { type: 'engine', name: me };
+  const opp = { type: 'lichess', name: g.opponent, rating: g.opponentRating ? String(g.opponentRating) : '' };
+  const winner = g.result === '1-0' ? 'White' : g.result === '0-1' ? 'Black' : '';
+  // A draw Lichess gives no reason for: the fifty-move counter can say.
+  const fifty = Number((g.fen ?? '').split(' ')[4]) >= 100;
+  const reason = KO_STATUS[g.status]?.(winner) ?? (g.result === '1/2-1/2' ? (fifty ? 'Draw by the fifty-move rule' : '') : `${winner} wins`);
+  const st = {
+    game: 'bot:' + g.id, result: g.result, reason, moves: { length: g.moves ?? 0 },
+    players: { white: white ? engine : opp, black: white ? opp : engine },
+    external: { kind: 'bot', id: g.id, live: false, users: { white: white ? me : g.opponent, black: white ? g.opponent : me } },
+  };
+  if (!ko.on || !$('#ko').hidden) return; // not over the board's own result
+  const end = endSound(st);
+  if (end) sounds.play(end);
+  showKo(st, st);
+}
+window.showBackgroundKo = showBackgroundKo;
+
+// Analyze with AI: the screen and the result card go, the AI panel opens.
+$('#ko-ai').addEventListener('click', (e) => {
+  e.stopPropagation();
+  hideKo(true);
+  if (typeof hideGameOver === 'function') hideGameOver();
+  window.analyseGameWithAi?.();
+});
+$('#ko').addEventListener('click', () => hideKo());
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#ko').hidden) hideKo(); }, true);

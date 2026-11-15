@@ -76,6 +76,9 @@ func ponderGame(t *testing.T, ponder bool, reply func(sorted []string, ply int) 
 		time.Sleep(20 * time.Millisecond)
 	}
 	lines := sent()
+	h.mu.Lock()
+	lastPonderHits, lastHitsShownAt = append([]PonderHit(nil), h.ponderHits...), append([]int(nil), h.hitsShownAt...)
+	h.mu.Unlock()
 	h.bot.Resign(id)
 	h.waitFor("the end", func(s Status) bool { _, ok := finishedGame(s); return ok })
 	data, _ := os.ReadFile(log)
@@ -86,6 +89,13 @@ func ponderGame(t *testing.T, ponder bool, reply func(sorted []string, ply int) 
 }
 
 const startPos = "position fen " + chess.StartFEN
+
+// The ponderHit events of the last ponderGame, and how many moves the board
+// showed when each was sent.
+var (
+	lastPonderHits  []PonderHit
+	lastHitsShownAt []int
+)
 
 func TestPonderHitAndMiss(t *testing.T) {
 	// The engine plays a2a3 expecting a7a5. The opponent plays it (a hit),
@@ -106,6 +116,12 @@ func TestPonderHitAndMiss(t *testing.T) {
 	)
 	text := strings.Join(lines, "\n")
 	t.Log("\n" + text)
+
+	// The hit is told to the UI once, with the opponent's move: the board
+	// already shows that move (a2a3 a7a5), and the miss is not told.
+	if len(lastPonderHits) != 1 || lastPonderHits[0] != (PonderHit{Side: "white", Ply: 2}) || lastHitsShownAt[0] != 2 {
+		t.Errorf("ponderHit events %+v, with %v moves on the board", lastPonderHits, lastHitsShownAt)
+	}
 
 	// Exactly as UCI has it: the first lines, one by one.
 	head := []string{startPos, "go wtime", startPos + " moves a2a3 a7a5", "go ponder wtime", "ponderhit"}

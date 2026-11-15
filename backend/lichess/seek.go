@@ -11,9 +11,10 @@ import (
 
 // Challenging random bots: pick an online bot rated within a range, send a
 // challenge, and try the next one until a challenge is accepted. With more
-// than one game asked for it then waits for that game to end and challenges
-// another bot, until the number of games is reached. No challenge goes out
-// while the engine has a game in progress.
+// than one game asked for it goes on challenging, until the number of games
+// is reached. It only holds back while the engine is in as many games as
+// its rules allow at once (Policy.MaxGames): the next challenge goes out
+// when one of them ends.
 
 // SeekParams is the challenge to send, without a username, and the rating
 // range (0: no bound) at the time control's speed.
@@ -38,8 +39,9 @@ type SeekStatus struct {
 	Message   string `json:"message"`
 	GameID    string `json:"gameId"`           // the accepted challenge's game
 	NextAt    int64  `json:"nextAt,omitempty"` // when the next challenge goes out (Unix ms), while waiting
-	// Games started so far, of Games (0: no limit); Playing while one of
-	// them is in progress and the next challenge waits for it to end.
+	// Games started so far, of Games (0: no limit); Playing while the engine
+	// is in as many games as it may play at once and the next challenge
+	// waits for one to end.
 	Played  int  `json:"played"`
 	Games   int  `json:"games"`
 	Playing bool `json:"playing"`
@@ -61,20 +63,23 @@ var (
 	seekPoll          = time.Second      // how often a game in progress is looked at
 )
 
-// playingLocked reports whether the engine has a game in progress, or one
-// about to start: no challenge is sent meanwhile.
-func (b *Bot) playingLocked() bool {
+// fullLocked reports whether the engine is in as many games as it may play
+// at once (in progress, or about to start), and how many that is: no
+// challenge is sent meanwhile.
+func (b *Bot) fullLocked() (bool, int) {
+	n := 0
 	for _, r := range b.games {
 		if !r.finished {
-			return true
+			n++
 		}
 	}
 	for id, at := range b.accepted {
 		if b.games[id] == nil && time.Since(at) <= acceptedWait {
-			return true
+			n++
 		}
 	}
-	return false
+	limit := max(1, b.cfg.Policy.MaxGames)
+	return n >= limit, limit
 }
 
 func (b *Bot) seekStatusLocked() *SeekStatus {
@@ -93,8 +98,16 @@ func (b *Bot) StartSeek(p SeekParams) error {
 	if p.MinRating > 0 && p.MaxRating > 0 && p.MinRating > p.MaxRating {
 		return errors.New("the lowest rating is above the highest")
 	}
+	// Games in progress do not stand in the way: it challenges while there
+	// is room for another, and waits when there is none.
 	b.mu.Lock()
-	busy := b.busyLocked()
+	busy := ""
+	if b.sending {
+		busy = "A challenge is already being sent."
+	}
+	for _, ch := range b.outgoing {
+		busy = fmt.Sprintf("Your challenge to %s is waiting for an answer. Cancel it to challenge someone else.", ch.DestName())
+	}
 	b.mu.Unlock()
 	if busy != "" {
 		return errors.New(busy)
@@ -160,15 +173,18 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 	played := 0
 	waiting := false // said that it waits for a game to end
 	for ctx.Err() == nil {
-		// Never while the engine is playing: the next challenge goes out
-		// once its game is over.
+		// Not while the engine is in as many games as it may play at once:
+		// the next challenge goes out when one of them is over.
 		b.mu.Lock()
-		playing := b.playingLocked()
+		playing, most := b.fullLocked()
 		b.mu.Unlock()
 		if playing {
 			if !waiting {
 				waiting = true
 				msg := "Your engine is playing: the next challenge goes out when the game ends."
+				if most > 1 {
+					msg = fmt.Sprintf("Your engine is playing %d games, as many as it may at once: the next challenge goes out when one ends.", most)
+				}
 				if !b.seekUpdate(sk, func(st *SeekStatus) { st.Playing, st.Current, st.Rating, st.NextAt, st.Message = true, "", 0, 0, msg }) {
 					return
 				}
@@ -180,7 +196,7 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 		}
 		if waiting {
 			waiting = false
-			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Playing, st.Message = false, "The game is over: looking for the next bot…" }) {
+			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Playing, st.Message = false, "A game is over: looking for the next bot…" }) {
 				return
 			}
 		}
@@ -274,15 +290,14 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			if limit > 0 {
 				of = fmt.Sprintf(" of %d", limit)
 			}
-			msg := fmt.Sprintf("%s accepted: game %d%s. The next challenge goes out when it ends.", name, played, of)
+			msg := fmt.Sprintf("%s accepted: game %d%s.", name, played, of)
 			if !b.seekUpdate(sk, func(st *SeekStatus) {
-				st.Played, st.Playing, st.Current, st.Rating, st.Message = played, true, "", 0, msg
+				st.Played, st.Current, st.Rating, st.Message = played, "", 0, msg
 			}) {
 				return
 			}
-			waiting = true
 			// The game starts from the event stream: give it a moment to
-			// show up, so that it is seen as in progress.
+			// show up, so that it is counted as in progress.
 			for end := time.Now().Add(acceptedWait); time.Now().Before(end); {
 				b.mu.Lock()
 				_, started := b.games[id]

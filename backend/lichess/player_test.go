@@ -1,6 +1,7 @@
 package lichess
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -364,5 +365,21 @@ func TestPlayersInfo(t *testing.T) {
 	}
 	if !strings.Contains(string(info.Crosstable), "nbGames") {
 		t.Fatalf("crosstable %s", info.Crosstable)
+	}
+}
+
+func TestFlags(t *testing.T) {
+	f := fake.New("secret", "TestBot")
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	got, err := NewClient(srv.URL, "").Flags(context.Background(), []string{"Alice", "maia9", "ghost1", "", "bad,id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got["alice"] == "" || got["maia9"] == "" || got["ghost1"] != "" {
+		t.Fatalf("flags %v", got)
+	}
+	if _, ok := got["bad,id"]; ok {
+		t.Fatalf("an id with a comma was sent: %v", got)
 	}
 }

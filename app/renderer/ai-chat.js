@@ -584,6 +584,20 @@ $('#aic-text').addEventListener('keydown', (e) => {
 $('#aic-new').onclick = newAiChat;
 $('#aic-settings').onclick = () => openSettings('ai');
 
+// "Analyze with AI", from the result of a game: the AI panel opens on a new
+// chat and the model is asked to go over the game on the board (the chat
+// sends it the game as PGN). The conversation can go on from its answer.
+const AI_ANALYSE_PROMPT = 'Analyse this game. Say how it went in a few sentences, then go through the opening, the turning points '
+  + 'and the decisive mistakes of each side, giving move numbers, and end with what each player should take from it.';
+window.canAnalyseWithAi = () => Boolean(api.ai?.chat && state?.moves?.length);
+window.analyseGameWithAi = () => {
+  if (!window.canAnalyseWithAi()) return;
+  setAiPanel(true, { focus: false });
+  if (aic.busy) { notify?.('The model is still answering: ask again when it has finished.', { title: 'AI', kind: 'info' }); return; }
+  if (aic.chat.messages.length) newAiChat(); // its own chat, not the end of another
+  sendAiChat(AI_ANALYSE_PROMPT);
+};
+
 window.openAiChat = async (focus = true) => {
   if (!aic.model) {
     try { const s = await api.ai.settings(); aic.model = s.model || ''; } catch { /* no AI in this build */ }
