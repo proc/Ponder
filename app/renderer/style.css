@@ -2814,3 +2814,117 @@ body.puzzling .player { visibility: hidden; }
 .tr-fig { color: var(--muted); font-variant-numeric: tabular-nums; }
 .tr-pv { font: 0.8rem var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 620px) { .tr-row { grid-template-columns: minmax(0, 1fr) auto; } .tr-row .tp-mini { display: none; } }
+
+/* The easter egg: a pixel cat on a rainbow, across the whole window. */
+.nyan { position: fixed; inset: 0; z-index: 90; pointer-events: none; overflow: hidden; }
+.nyan-cat { position: absolute; left: 0; aspect-ratio: 22 / 14; filter: drop-shadow(0 3px 6px rgb(0 0 0 / .35)); }
+.nyan-cat svg { display: block; height: 100%; width: auto; image-rendering: pixelated; }
+.nyan-piece {
+  position: absolute;
+  background: linear-gradient(to bottom, #ff3b3b 0 16.7%, #ff9a1f 16.7% 33.3%, #ffe23b 33.3% 50%, #4cd964 50% 66.7%, #3b9bff 66.7% 83.3%, #8e5bff 83.3%);
+}
+.nyan-star { position: absolute; color: #fff; text-shadow: 0 0 6px #fff, 0 0 12px #9ff; animation: nyan-twinkle .6s steps(2) infinite; }
+@keyframes nyan-twinkle { 50% { opacity: .25; transform: scale(.7); } }
+.nyan.still .nyan-cat { position: absolute; left: 50%; top: 40%; height: 90px; transform: translateX(-50%); animation: nyan-fade 2.5s ease both; }
+@keyframes nyan-fade { 0%, 100% { opacity: 0; } 15%, 80% { opacity: 1; } }
+
+/* Esper, the commentator: a pixel pawn in a headset with a comic speech bubble. */
+.pip { position: fixed; z-index: 55; width: 120px; height: 140px; --pip-ink: #241a1d; --pip-paper: #fffdf6; --pip-caption: #ffd84a; }
+.pip[hidden] { display: none; }
+.pip .pip-sprite, .pip .pip-sprite:hover:not(:disabled), .pip .pip-sprite:active:not(:disabled), .pip .pip-sprite:focus, .pip .pip-sprite:focus-visible {
+  position: relative; display: block; width: 120px; height: 140px; padding: 0; border: 0; border-radius: 0;
+  background: none; box-shadow: none; outline: none; cursor: grab; touch-action: none; -webkit-tap-highlight-color: transparent;
+}
+/* Keyboard focus: a ring round Esper's own outline, not a box. */
+.pip .pip-sprite:focus-visible svg { filter: drop-shadow(0 0 0 var(--accent)) drop-shadow(2px 0 0 var(--accent)) drop-shadow(-2px 0 0 var(--accent)) drop-shadow(0 2px 0 var(--accent)) drop-shadow(0 -2px 0 var(--accent)); }
+.pip.dragging .pip-sprite { cursor: grabbing; }
+.pip-body { position: absolute; inset: 0; display: block; animation: pip-bob 1.6s steps(2, jump-none) infinite; }
+.pip-body svg { display: block; width: 120px; height: 140px; image-rendering: pixelated; filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.15)); }
+.pip-shadow { position: absolute; left: 26px; right: 26px; bottom: -3px; height: 9px; border-radius: 50%; background: rgba(0, 0, 0, 0.22); z-index: -1; }
+.pip.talking .pip-body { animation-duration: 0.5s; }
+.pip-sprite.hop { animation: pip-hop 0.5s cubic-bezier(0.3, 0.7, 0.4, 1); }
+.pip-sprite.hop .pip-shadow { animation: pip-hop-shadow 0.5s cubic-bezier(0.3, 0.7, 0.4, 1); }
+@keyframes pip-bob { 0% { transform: translateY(0); } 100% { transform: translateY(-3px); } }
+@keyframes pip-hop { 0% { transform: translateY(0) scale(1, 1); } 15% { transform: translateY(2px) scale(1.06, 0.92); } 45% { transform: translateY(-16px) scale(0.96, 1.05); } 75% { transform: translateY(0) scale(1.04, 0.95); } 100% { transform: none; } }
+@keyframes pip-hop-shadow { 45% { transform: scale(0.6); opacity: 0.5; } }
+
+/* The bubble: paper with a thick ink line and a hard offset shadow, the
+   tail drawn as part of it so that one outline goes round both. */
+.pip-bubble {
+  position: absolute; bottom: calc(100% + 16px); right: 42px;
+  width: max-content; min-width: 240px; max-width: min(400px, 75vw);
+  padding: 0.7rem 1rem 0.6rem; border-radius: 22px;
+  background: var(--pip-paper); color: var(--pip-ink);
+  filter: drop-shadow(0 2.5px 0 var(--pip-ink)) drop-shadow(0 -2.5px 0 var(--pip-ink)) drop-shadow(2.5px 0 0 var(--pip-ink)) drop-shadow(-2.5px 0 0 var(--pip-ink)) drop-shadow(5px 6px 0 rgba(20, 12, 16, 0.28));
+  transform-origin: 100% 100%;
+}
+.pip-bubble[hidden] { display: none; }
+.pip-bubble::after {
+  content: ''; position: absolute; bottom: -21px; right: 16px; width: 32px; height: 22px;
+  background: var(--pip-paper); clip-path: polygon(0 0, 62% 0, 100% 100%);
+}
+.pip.to-right .pip-bubble { right: auto; left: 42px; transform-origin: 0 100%; }
+.pip.to-right .pip-bubble::after { right: auto; left: 16px; clip-path: polygon(38% 0, 100% 0, 0 100%); }
+.pip.below .pip-bubble { bottom: auto; top: calc(100% + 22px); transform-origin: 100% 0; }
+.pip.below.to-right .pip-bubble { transform-origin: 0 0; }
+.pip.below .pip-bubble::after { bottom: auto; top: -21px; clip-path: polygon(0 100%, 62% 100%, 100% 0); }
+.pip.below.to-right .pip-bubble::after { clip-path: polygon(38% 100%, 100% 100%, 0 0); }
+.pip-bubble.pop { animation: pip-pop 0.42s cubic-bezier(0.2, 1.4, 0.4, 1); }
+@keyframes pip-pop { 0% { transform: scale(0.2) rotate(-6deg); opacity: 0; } 60% { opacity: 1; } 100% { transform: none; } }
+
+.pip-head { display: flex; align-items: center; gap: 0.4rem; margin: -0.15rem 0 0.3rem; }
+.pip-tag {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 800 0.74rem/1 var(--font, system-ui); letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 0.22rem 0.45rem; background: var(--pip-caption); color: var(--pip-ink); border: 2px solid var(--pip-ink); border-radius: 3px; transform: rotate(-2deg); }
+.pip.summary .pip-tag { background: #ff5a4e; color: #fff; }
+.pip-x { margin-left: auto; }
+.pip-text {
+  margin: 0; max-height: 13rem; overflow-y: auto; overflow-wrap: anywhere; user-select: text;
+  font: 600 1.1rem/1.4 "Chalkboard SE", "Comic Neue", "Comic Sans MS", "Marker Felt", var(--font, system-ui);
+}
+.pip.thinking .pip-text::before { content: 'Hmm'; color: #7a6a6e; font-style: italic; animation: pip-hmm 1.2s steps(1) infinite; }
+@keyframes pip-hmm { 0% { content: 'Hmm'; } 25% { content: 'Hmm.'; } 50% { content: 'Hmm..'; } 75% { content: 'Hmm...'; } }
+.pip.error .pip-text { color: #c42b2b; }
+/* The next comment being thought of while the last stays: a little thought
+   bubble of three dots beside Esper's head. */
+.pip-think {
+  position: absolute; top: -4px; left: -12px; display: none; gap: 3px; padding: 5px 7px;
+  border: 2px solid var(--pip-ink); border-radius: 12px; background: var(--pip-paper); box-shadow: 2px 2px 0 rgba(20, 12, 16, 0.25);
+}
+.pip.to-right .pip-think { left: auto; right: -14px; }
+.pip.pondering .pip-think { display: flex; }
+.pip-think i { width: 5px; height: 5px; border-radius: 50%; background: var(--pip-ink); animation: pip-dot 1s ease-in-out infinite; }
+.pip-think i:nth-child(2) { animation-delay: 0.15s; }
+.pip-think i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes pip-dot { 0%, 60%, 100% { transform: translateY(0); opacity: 0.45; } 30% { transform: translateY(-3px); opacity: 1; } }
+.pip-foot { display: flex; justify-content: flex-end; gap: 0.3rem; margin-top: 0.35rem; }
+.pip-foot:not(:has(.pip-btn:not([hidden]))) { display: none; }
+.pip-btn {
+  min-width: 0; padding: 0.12rem 0.45rem; border: 2px solid var(--pip-ink); border-radius: 7px;
+  background: var(--pip-paper); color: var(--pip-ink); font: 700 0.8rem/1.35 var(--font, system-ui); cursor: pointer;
+  box-shadow: 2px 2px 0 var(--pip-ink);
+}
+.pip-btn:hover:not(:disabled) { background: var(--pip-caption); }
+.pip-btn:active:not(:disabled) { transform: translate(1px, 1px); box-shadow: 1px 1px 0 var(--pip-ink); }
+.pip-btn:disabled { opacity: 0.45; cursor: default; }
+.pip-btn.on { background: #cfe0ff; }
+.pip-x { padding: 0 0.35rem; box-shadow: none; border-width: 0; background: transparent; font-size: 0.8rem; }
+.pip-retry { background: #ffd2cc; }
+@media (prefers-reduced-motion: reduce) {
+  .pip-body, .pip-sprite.hop, .pip-sprite.hop .pip-shadow, .pip-bubble.pop, .pip-think i { animation: none; }
+}
+
+/* Settings → AI: the commentators to choose from. */
+.cmt-cast { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.5rem; margin: 0.4rem 0; }
+.cmt-cast.off { opacity: 0.6; }
+.cmt-card, .cmt-card:hover:not(:disabled) {
+  display: grid; justify-items: center; gap: 0.15rem; padding: 0.7rem 0.6rem 0.75rem; white-space: normal; text-align: center;
+  border: 1px solid var(--line); border-radius: 12px; background: var(--panel-2);
+}
+.cmt-card:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.cmt-card.on, .cmt-card.on:hover:not(:disabled) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.cmt-art svg { display: block; width: 60px; height: 70px; image-rendering: pixelated; margin-bottom: 0.25rem; }
+.cmt-name { font-weight: 650; }
+.cmt-piece { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.cmt-blurb { font-size: 0.8rem; line-height: 1.35; color: var(--muted); }

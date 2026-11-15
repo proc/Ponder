@@ -1,10 +1,27 @@
 'use strict';
-// AI commentary: the game is sent to an OpenAI-compatible chat endpoint
-// (oMLX, LM Studio, Ollama, llama.cpp, vLLM, or a hosted one) that is asked
-// for commentary as JSON, which becomes annotations on the moves. Nothing
-// here touches Electron, so it can be run and tested with plain Node.
+// AI commentary: the game is sent to an AI model that is asked for
+// commentary as JSON, which becomes annotations on the moves, and the AI
+// panel's chat and the live commentary talk to the same model. The model is
+// reached through one of the providers below: OpenAI, Claude (Anthropic),
+// Google AI (Gemini), or any OpenAI-compatible server (oMLX, LM Studio,
+// Ollama, llama.cpp, vLLM, or a hosted one). Nothing here touches Electron,
+// so it can be run and tested with plain Node.
 
-const DEFAULTS = { baseUrl: 'http://localhost:8000/v1', model: '' };
+const DEFAULTS = { baseUrl: 'http://localhost:8000/v1', model: '', provider: 'local' };
+
+// kind: the API it speaks. OpenAI and Google AI are spoken to in the
+// OpenAI chat-completions form (Google offers it for Gemini); Claude through
+// Anthropic's own SDK.
+const PROVIDERS = {
+  local: { name: 'Local or other server', kind: 'openai', needsKey: false },
+  openai: { name: 'OpenAI', kind: 'openai', baseUrl: 'https://api.openai.com/v1', needsKey: true, modelHint: 'e.g. a GPT model: press Check for the list' },
+  anthropic: { name: 'Claude (Anthropic)', kind: 'anthropic', needsKey: true, defaultModel: 'claude-opus-5-5', modelHint: 'claude-opus-5-5' },
+  google: { name: 'Google AI (Gemini)', kind: 'openai', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', needsKey: true, modelHint: 'e.g. a Gemini model: press Check for the list' },
+};
+const providerOf = (settings) => PROVIDERS[settings?.provider] ? settings.provider : 'local';
+const who = (settings) => (providerOf(settings) === 'local' ? 'The AI endpoint' : PROVIDERS[providerOf(settings)].name.replace(/ \(.*\)$/, ''));
+// The base address requests go to: the provider's, or the one typed.
+const baseOf = (settings) => PROVIDERS[providerOf(settings)].baseUrl ?? normalizeBase(settings.baseUrl);
 
 // The address as typed, made into the API's base: "localhost:8000" becomes
 // "http://localhost:8000/v1"; a path given is kept.
@@ -95,7 +112,19 @@ function send(url, { method, headers, body, signal, onData }) {
   });
 }
 
-async function call(url, { method = 'GET', body, key, signal, sendImpl = send }) {
+// The error message in a provider's answer: { error: { message } }, or
+// Google's [ { error: { message } } ].
+function errorDetail(text) {
+  let detail = text.slice(0, 300);
+  try {
+    let j = JSON.parse(text);
+    if (Array.isArray(j)) j = j[0];
+    detail = j?.error?.message ?? j?.error ?? j?.message ?? detail;
+  } catch { /* as it is */ }
+  return typeof detail === 'string' ? detail : JSON.stringify(detail);
+}
+
+async function call(url, { method = 'GET', body, key, signal, sendImpl = send, name = 'The AI endpoint' }) {
   const headers = { Accept: 'application/json' };
   const payload = body ? JSON.stringify(body) : undefined;
   if (payload) {
@@ -107,40 +136,157 @@ async function call(url, { method = 'GET', body, key, signal, sendImpl = send })
   try {
     res = await sendImpl(url, { method, headers, body: payload, signal });
   } catch (err) {
-    if (signal?.aborted) throw new Error(signal.reason?.name === 'TimeoutError' ? 'The AI endpoint took too long to answer' : 'Stopped');
-    throw new Error(`Could not reach the AI endpoint at ${new URL(url).origin} (${err.code ?? err.message}). Is the server running?`);
+    if (signal?.aborted) throw new Error(signal.reason?.name === 'TimeoutError' ? `${name} took too long to answer` : 'Stopped');
+    throw new Error(`Could not reach ${name === 'The AI endpoint' ? 'the AI endpoint' : name} at ${new URL(url).origin} (${err.code ?? err.message}).${name === 'The AI endpoint' ? ' Is the server running?' : ''}`);
   }
   const { status, text } = res;
   if (status < 200 || status >= 300) {
-    let detail = text.slice(0, 300);
-    try { const j = JSON.parse(text); detail = j.error?.message ?? j.error ?? j.message ?? detail; } catch { /* as it is */ }
-    throw new Error(`The AI endpoint answered ${status}${detail ? `: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}` : ''}`);
+    const detail = errorDetail(text);
+    throw new Error(`${name} answered ${status}${status === 401 || status === 403 ? ' (check the API key in Settings → AI)' : ''}${detail ? `: ${detail}` : ''}`);
   }
-  try { return JSON.parse(text); } catch { throw new Error('The AI endpoint did not answer in JSON; is it an OpenAI-compatible API?'); }
+  try { return JSON.parse(text); } catch { throw new Error(`${name} did not answer in JSON; is it an OpenAI-compatible API?`); }
 }
 
-// The models the endpoint offers, by id.
+// The models the provider offers, by id. Google's ids come as
+// "models/gemini-…": the name alone is what is asked for.
 async function listModels(settings, opts = {}) {
-  const base = normalizeBase(settings.baseUrl);
-  const data = await call(`${base}/models`, { key: settings.key, ...opts });
-  return (data.data ?? data.models ?? []).map((m) => m.id ?? m.name).filter(Boolean);
+  const p = providerOf(settings);
+  if (PROVIDERS[p].needsKey && !settings.key) throw new Error(`${who(settings)} needs an API key: add yours in Settings → AI`);
+  if (PROVIDERS[p].kind === 'anthropic') return anthropicModels(settings, opts);
+  const data = await call(`${baseOf(settings)}/models`, { key: settings.key, name: who(settings), ...opts });
+  let ids = (data.data ?? data.models ?? []).map((m) => m.id ?? m.name).filter(Boolean).map((id) => String(id).replace(/^models\//, ''));
+  // Of OpenAI's many models (speech, images, embeddings…), the chat ones.
+  if (p === 'openai') ids = ids.filter((id) => /^(gpt-|o\d|chatgpt-)/.test(id) && !/(audio|realtime|transcribe|tts|image|search|embedding)/.test(id));
+  if (p === 'google') ids = ids.filter((id) => /gemini|gemma/.test(id) && !/(embedding|image|tts|audio)/.test(id));
+  return ids.sort();
+}
+
+// The model to ask: the one set, or else the provider's own choice, or the
+// first the endpoint lists.
+async function pickModel(settings, opts) {
+  const set = String(settings.model ?? '').trim();
+  if (set) return set;
+  const p = PROVIDERS[providerOf(settings)];
+  if (p.defaultModel) return p.defaultModel;
+  let models = [];
+  try { models = await listModels(settings, opts); } catch (err) {
+    if (/Stopped|too long|Could not reach|API key|answered 40[13]/.test(err.message)) throw err;
+  }
+  // Google: a Flash model, quick enough for commentary.
+  const model = (providerOf(settings) === 'google' ? models.find((m) => /flash/.test(m) && !/lite|preview|exp/.test(m)) : null) ?? models[0] ?? '';
+  if (!model) throw new Error(`${who(settings)} lists no model: set the model’s name in Settings → AI`);
+  return model;
+}
+
+// Settings for the request: OpenAI's newer models take no temperature but
+// their own; other servers are given one.
+const temperatureFor = (settings, t) => (providerOf(settings) === 'openai' ? {} : { temperature: t });
+
+// --- Claude (Anthropic) -------------------------------------------------------
+// Through Anthropic's official SDK (@anthropic-ai/sdk), loaded when Claude is
+// first asked so that the app runs without it for the other providers.
+// Models that take the server-side fallback: a request Claude declines on
+// safety grounds is answered by another model in the same call.
+const ANTHROPIC_FALLBACK_MODELS = new Set(['claude-fable-5-2', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5']);
+// Models with adaptive thinking, whose reasoning can be shown summarized.
+const anthropicAdaptive = (model) => /^claude-(fable|mythos|opus-5|opus-4-[678]|sonnet-5|sonnet-4-6|haiku-5)/.test(model);
+
+function anthropicClient(settings, AnthropicImpl) {
+  let Anthropic = AnthropicImpl;
+  if (!Anthropic) {
+    let mod;
+    try { mod = require('@anthropic-ai/sdk'); } catch {
+      throw new Error('Claude needs the Anthropic SDK, which is not installed: run "npm install @anthropic-ai/sdk" in Ponder’s folder, then start Ponder again');
+    }
+    Anthropic = mod.default ?? mod.Anthropic ?? mod;
+  }
+  if (!settings.key) throw new Error('Claude needs an API key: add yours in Settings → AI');
+  return { Anthropic, client: new Anthropic({ apiKey: settings.key }) };
+}
+
+// What a failed Claude request is called, most particular first.
+function anthropicError(Anthropic, err, model) {
+  const is = (name) => typeof Anthropic[name] === 'function' && err instanceof Anthropic[name];
+  if (is('APIUserAbortError')) return new Error('Stopped');
+  if (is('AuthenticationError')) return new Error('Claude did not accept the API key (401): check it in Settings → AI');
+  if (is('PermissionDeniedError')) return new Error(`Claude: this API key may not use ${model} (403)`);
+  if (is('NotFoundError')) return new Error(`Claude has no model "${model}" (404): choose another in Settings → AI (Check lists them)`);
+  if (is('RateLimitError')) return new Error('Claude is getting too many requests from this key (429): try again in a moment');
+  if (is('InternalServerError')) return new Error(`Claude had a server error (${err.status}): try again in a moment`);
+  if (is('APIConnectionError')) return new Error(`Could not reach Claude (${err.message})`);
+  if (is('APIError')) return new Error(`Claude answered ${err.status ?? 'with an error'}: ${err.message}`);
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+async function anthropicModels(settings, { signal, Anthropic: impl } = {}) {
+  const { Anthropic, client } = anthropicClient(settings, impl);
+  const ids = [];
+  try {
+    for await (const m of client.models.list({}, { signal })) ids.push(m.id);
+  } catch (err) { throw anthropicError(Anthropic, err, ''); }
+  return ids;
+}
+
+// The conversation in Claude's form: the system messages as the system
+// prompt; the rest beginning with the user and ending with the user.
+function anthropicMessages(messages) {
+  const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+  const rest = messages.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, content: m.content }));
+  if (!rest.length || rest[0].role !== 'user') rest.unshift({ role: 'user', content: '(The conversation so far follows.)' });
+  if (rest.at(-1).role !== 'user') rest.push({ role: 'user', content: 'Go on.' });
+  return { system, messages: rest };
+}
+
+async function anthropicChat(settings, messages, opts = {}) {
+  const { signal, onDelta, onThinking } = opts;
+  const { Anthropic, client } = anthropicClient(settings, opts.Anthropic);
+  const model = String(settings.model ?? '').trim() || PROVIDERS.anthropic.defaultModel;
+  const conv = anthropicMessages(messages);
+  const params = { model, max_tokens: 64000, messages: conv.messages };
+  if (conv.system) params.system = conv.system;
+  if (anthropicAdaptive(model)) params.thinking = { type: 'adaptive', display: 'summarized' };
+  let text = '';
+  let thinking = '';
+  try {
+    const stream = ANTHROPIC_FALLBACK_MODELS.has(model)
+      ? client.beta.messages.stream({ ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }, { signal })
+      : client.messages.stream(params, { signal });
+    for await (const event of stream) {
+      if (event.type !== 'content_block_delta') continue;
+      if (event.delta.type === 'text_delta') {
+        const piece = text ? event.delta.text : event.delta.text.replace(/^\s+/, '');
+        text += event.delta.text;
+        if (piece) onDelta?.(piece);
+      } else if (event.delta.type === 'thinking_delta') {
+        thinking += event.delta.thinking;
+        onThinking?.(event.delta.thinking);
+      }
+    }
+    const final = await stream.finalMessage();
+    if (final.stop_reason === 'refusal' && !text.trim()) throw new Error('Claude declined to answer this request');
+  } catch (err) {
+    if (signal?.aborted) {
+      // Stopped part way: what came so far is the answer.
+      if (text.trim()) return { text: text.trim(), thinking: thinking.trim(), model, stopped: true };
+      throw new Error('Stopped');
+    }
+    throw anthropicError(Anthropic, err, model);
+  }
+  if (!text.trim()) throw new Error('The model gave an empty answer');
+  return { text: text.trim(), thinking: thinking.trim(), model };
 }
 
 // Asks for commentary on the game: { summary, comments, model }.
 async function annotate(settings, game, opts = {}) {
-  const base = normalizeBase(settings.baseUrl);
-  let model = String(settings.model ?? '').trim();
-  if (!model) {
-    let models = [];
-    try { models = await listModels(settings, opts); } catch (err) {
-      if (/Stopped|too long|Could not reach/.test(err.message)) throw err;
-    }
-    model = models[0] ?? '';
-    if (!model) throw new Error('The AI endpoint lists no model: set the model’s name in Settings → AI');
+  if (PROVIDERS[providerOf(settings)].needsKey && !settings.key) throw new Error(`${who(settings)} needs an API key: add yours in Settings → AI`);
+  if (PROVIDERS[providerOf(settings)].kind === 'anthropic') {
+    const reply = await anthropicChat(settings, buildMessages(game), opts);
+    return { ...parseReply(reply.text, (game.moves ?? []).length), model: reply.model };
   }
-  const data = await call(`${base}/chat/completions`, {
-    method: 'POST', key: settings.key, ...opts,
-    body: { model, messages: buildMessages(game), temperature: 0.4, stream: false },
+  const model = await pickModel(settings, opts);
+  const data = await call(`${baseOf(settings)}/chat/completions`, {
+    method: 'POST', key: settings.key, name: who(settings), ...opts,
+    body: { model, messages: buildMessages(game), ...temperatureFor(settings, 0.4), stream: false },
   });
   const msg = data.choices?.[0]?.message;
   const text = typeof msg?.content === 'string' ? msg.content : Array.isArray(msg?.content) ? msg.content.map((p) => p.text ?? '').join('') : '';
@@ -154,17 +300,12 @@ async function annotate(settings, game, opts = {}) {
 // "Thinking" a model does aloud (<think>…</think>) is left out.
 async function chat(settings, messages, opts = {}) {
   const { signal, onDelta, onThinking, sendImpl = send } = opts;
-  const base = normalizeBase(settings.baseUrl);
-  let model = String(settings.model ?? '').trim();
-  if (!model) {
-    let models = [];
-    try { models = await listModels(settings, { signal, sendImpl }); } catch (err) {
-      if (/Stopped|too long|Could not reach/.test(err.message)) throw err;
-    }
-    model = models[0] ?? '';
-    if (!model) throw new Error('The AI endpoint lists no model: set the model’s name in Settings → AI');
-  }
-  const payload = JSON.stringify({ model, messages, temperature: 0.5, stream: true });
+  if (PROVIDERS[providerOf(settings)].needsKey && !settings.key) throw new Error(`${who(settings)} needs an API key: add yours in Settings → AI`);
+  if (PROVIDERS[providerOf(settings)].kind === 'anthropic') return anthropicChat(settings, messages, opts);
+  const base = baseOf(settings);
+  const name = who(settings);
+  const model = await pickModel(settings, { signal, sendImpl });
+  const payload = JSON.stringify({ model, messages, ...temperatureFor(settings, 0.5), stream: true });
   const headers = { Accept: 'text/event-stream, application/json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) };
   if (settings.key) headers.Authorization = `Bearer ${settings.key}`;
   let raw = '';      // everything the model said, thinking included
@@ -212,12 +353,11 @@ async function chat(settings, messages, opts = {}) {
       if (shown.trim()) return { text: shown.trim(), thinking: thought.trim(), model, stopped: true };
       throw new Error('Stopped');
     }
-    throw new Error(`Could not reach the AI endpoint at ${new URL(base).origin} (${err.code ?? err.message}). Is the server running?`);
+    throw new Error(`Could not reach ${name === 'The AI endpoint' ? 'the AI endpoint' : name} at ${new URL(base).origin} (${err.code ?? err.message}).${name === 'The AI endpoint' ? ' Is the server running?' : ''}`);
   }
   if (res.status < 200 || res.status >= 300) {
-    let detail = res.text.slice(0, 300);
-    try { const j = JSON.parse(res.text); detail = j.error?.message ?? j.error ?? j.message ?? detail; } catch { /* as it is */ }
-    throw new Error(`The AI endpoint answered ${res.status}${detail ? `: ${typeof detail === 'string' ? detail : JSON.stringify(detail)}` : ''}`);
+    const detail = errorDetail(res.text);
+    throw new Error(`${name} answered ${res.status}${res.status === 401 || res.status === 403 ? ' (check the API key in Settings → AI)' : ''}${detail ? `: ${detail}` : ''}`);
   }
   if (!raw) {
     // Not streamed: the whole answer is one JSON object.
@@ -227,10 +367,10 @@ async function chat(settings, messages, opts = {}) {
       const think = msg?.reasoning_content ?? msg?.reasoning;
       if (typeof think === 'string') reasoning += think;
       feed(text);
-    } catch { throw new Error('The AI endpoint did not answer in a form this app reads; is it an OpenAI-compatible API?'); }
+    } catch { throw new Error(`${name} did not answer in a form this app reads; is it an OpenAI-compatible API?`); }
   }
   if (!shown.trim()) throw new Error('The model gave an empty answer');
   return { text: shown.trim(), thinking: thought.trim(), model };
 }
 
-module.exports = { chat, DEFAULTS, normalizeBase, buildMessages, parseReply, listModels, annotate };
+module.exports = { chat, DEFAULTS, PROVIDERS, normalizeBase, buildMessages, parseReply, listModels, annotate, anthropicMessages };

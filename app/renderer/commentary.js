@@ -97,23 +97,44 @@ function cmSpoken(text) {
     .replace(/½-½|1\/2-1\/2/g, 'a draw').replace(/\b1-0\b/g, 'White wins').replace(/\b0-1\b/g, 'Black wins');
 }
 
-// Says a comment. A comment still being read gives way to the new one: the
-// commentary keeps up with the game rather than falling behind it.
+// Says a comment. A comment is never cut off by the next: the next waits
+// for it to finish (one at most waits; a newer one takes its place), and no
+// further comment is asked for while one is waiting, so the commentary does
+// not fall behind the game. A comment played from its ▶ button, or the
+// voice test, is said at once.
 function speakCommentary(text, { force = false } = {}) {
   if (!cmCanSpeak || (!cm.speak && !force) || !String(text ?? '').trim()) return;
   const synth = window.speechSynthesis;
-  synth.cancel();
+  if (force) { cm.pendingSpeech = ''; synth.cancel(); }
+  else if (cm.speaking) { cm.pendingSpeech = text; renderCommentary(); return; }
   const u = new SpeechSynthesisUtterance(cmSpoken(text));
   const voice = cmVoices().find((v) => v.name === cm.voice);
   if (voice) { u.voice = voice; u.lang = voice.lang; }
   u.rate = cm.rate;
-  u.onstart = () => { cm.speaking = true; renderCommentary(); };
-  u.onend = u.onerror = () => { cm.speaking = false; renderCommentary(); };
+  cm.speaking = true;
+  cm.spokenText = text;
+  cm.utterance = u; // kept, or it can be collected before it ends and say nothing of it
+  u.onstart = () => renderCommentary();
+  u.onend = u.onerror = () => {
+    if (cm.utterance !== u) return; // cancelled for another
+    cm.utterance = null;
+    cm.speaking = false;
+    cm.spokenText = '';
+    const next = cm.pendingSpeech;
+    cm.pendingSpeech = '';
+    if (next) speakCommentary(next);
+    renderCommentary();
+    // The comment that was waiting is being said: the next may be asked for.
+    if (state) syncCommentary();
+  };
   synth.speak(u);
 }
 function stopSpeaking() {
+  cm.utterance = null;
+  cm.pendingSpeech = '';
   if (cmCanSpeak) window.speechSynthesis.cancel();
   cm.speaking = false;
+  cm.spokenText = '';
 }
 function setSpeak(on) {
   cm.speak = Boolean(on) && cmCanSpeak;
@@ -296,7 +317,8 @@ function syncCommentary() {
   if (state.game !== cm.game) {
     // Another game: its own commentary, starting from where it stands.
     if (cm.busy) api.ai.chatCancel?.('commentary');
-    stopSpeaking(); // the last game's commentary is over
+    // The last game's comment being said is finished; one waiting is not.
+    cm.pendingSpeech = '';
     Object.assign(cm, { game: state.game, feed: [], lastPly: n, wasLive: live, summed: false, note: '' });
     renderCommentary();
   }
@@ -304,7 +326,9 @@ function syncCommentary() {
   if (!cm.on) { cm.wasLive = live; renderCommentary(); return; }
   if (live) {
     cm.wasLive = true;
-    if (!cm.busy && n - cm.lastPly >= cm.every * 2) askCommentary('comment');
+    // Not while a comment is waiting to be read aloud: the next one then
+    // covers all the moves since, when it is its turn.
+    if (!cm.busy && !cm.pendingSpeech && n - cm.lastPly >= cm.every * 2) askCommentary('comment');
   } else if (cm.wasLive && !cm.summed && n > 0 && state.result && state.result !== '*') {
     // The game has just ended: the summary takes over from any comment in the air.
     cm.summed = true;
@@ -387,7 +411,10 @@ function cmMoveStrip(c) {
 function renderCommentary() {
   // The card beside the board: the latest comment.
   const card = $('#commentary');
-  const last = cm.feed.at(-1);
+  // While the next comment is being thought of, the one before stays.
+  let last = cm.feed.at(-1);
+  const thinking = Boolean(last?.live && !last.text);
+  if (thinking && cm.feed.length > 1) last = cm.feed.at(-2);
   const show = Boolean(state?.players) && (cm.on || cm.feed.length > 0);
   if (card.hidden !== !show) card.hidden = !show;
   if (show) {
@@ -396,9 +423,10 @@ function renderCommentary() {
     const body = last ? last.text : cmLive() ? `Commentary is on: the first comment comes after ${cm.every === 1 ? 'the next move' : `the next ${cm.every} moves`}.` : 'Commentary is on: it starts with the next game played.';
     // The same comment growing: its new words fade in. Another comment, or
     // the hint: set plainly.
-    if (text.dataset.of !== (last ? `${cm.game}:${cm.feed.length}` : '')) { text.dataset.of = last ? `${cm.game}:${cm.feed.length}` : ''; text.dataset.text = ''; text.textContent = ''; }
+    const of = last ? `${cm.game}:${cm.feed.indexOf(last)}` : '';
+    if (text.dataset.of !== of) { text.dataset.of = of; text.dataset.text = ''; text.textContent = ''; }
     if (last) aicSoftText(text, body); else if (text.textContent !== body) { text.textContent = body; text.dataset.text = body; }
-    text.classList.toggle('live', Boolean(last?.live));
+    text.classList.toggle('live', Boolean(last?.live) || thinking);
     text.classList.toggle('waiting', Boolean(last?.live && !last.text));
     text.classList.toggle('error', Boolean(last?.error));
     text.classList.toggle('hint', !last);
@@ -444,6 +472,7 @@ function renderCommentary() {
   if (atEnd && (grew || cm.busy)) feed.scrollTop = feed.scrollHeight;
   $('#cm-note').textContent = cm.note || 'Each comment sends the model the position and all the moves so far (Settings → AI sets the model).';
   $('#cm-note').classList.toggle('error', Boolean(cm.note));
+  window.renderCommentator?.(); // Pip, when on, says it instead of the card
 }
 
 // The panel's two views.

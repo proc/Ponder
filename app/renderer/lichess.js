@@ -441,8 +441,27 @@ $('#lx-watch-form').onsubmit = async (e) => {
 };
 $('#lx-watch-stop').onclick = () => lichessCommand('lichessSpectateStop');
 
+// The screens for games of the watched player that are not on the board:
+// the versus screen for one that starts, the result screen for one that ends.
+function screensForWatchedGames(prev, next) {
+  if (!prev?.active || !next.active || prev.user !== next.user) return;
+  const was = new Map((prev.games ?? []).map((g) => [g.id, g]));
+  // Before the first game is known, every game found is one joined.
+  if (!was.size) return;
+  for (const g of next.games ?? []) {
+    const before = was.get(g.id);
+    if (g.shown) continue;
+    // A game found a few moves in (Lichess is asked every so often) is
+    // still starting; not one long under way, found on joining.
+    if (!before && g.live && (g.moves ?? 0) <= 12) window.showWatchVersus?.(g);
+    else if (before?.live && !g.live) window.showWatchKo?.(g);
+  }
+}
+
 function lichessWatchStatus(st) {
+  const prev = lx.watch;
   lx.watch = st;
+  screensForWatchedGames(prev, st);
   renderLichessWatch();
   renderWatchStrip();
   if (Array.isArray(ob?.bots)) renderOnlineBots(); // the TV of the bot being watched lights up
@@ -1371,7 +1390,7 @@ function renderOnlineBots() {
     const who = el('span', { className: 'who', title: 'Show details' }, [
       el('span', { className: 'state' + (st?.playing ? ' playing' : st && !st.online ? ' off' : ''), title: st?.playing ? 'Playing' : st && !st.online ? 'Offline' : 'Online' }),
       ...(flag ? [el('span', { className: 'flag', textContent: flag, title: b.profile.flag })] : []),
-      el('span', { className: 'lx-title', textContent: b.title || 'BOT' }),
+      // Every one of them is a bot: no BOT before each name.
       el('span', { className: 'name', textContent: name }),
     ]);
     who.onclick = () => { if (ob.open.has(b.id)) ob.open.delete(b.id); else ob.open.add(b.id); renderOnlineBots(); };

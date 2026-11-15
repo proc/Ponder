@@ -131,7 +131,10 @@ rest holds the moves or game list beside engine analysis and game details.
   it follows the Sounds setting). After a few seconds they go off the way
   they came; a click or Esc
   sends them away at once. The next match of a player you are already watching gets it too, even
-  when it is picked up a few moves in. A game you join part way through, tournament
+  when it is picked up a few moves in, and so does a new game of a player
+  you watch who is in several at once: its cards come up over the game on
+  the board, marked *Another game*. When a game starts while a result
+  screen is up, its cards wait for that to go. A game you join part way through, tournament
   games and your own games do not show it. Turn it off under **Settings →
   General**.
 - **Result screen** – when a game ends (one you play, your engine's, or
@@ -146,9 +149,11 @@ rest holds the moves or game list beside engine analysis and game details.
   ratings and their changes once Lichess sends them, and how the game
   ended. It goes after about five seconds, or at once on a click or Esc,
   leaving the result card. When your engine plays several Lichess games at
-  once, one that ends while another is on the board gets the screen too,
-  marked *Another game*, with its sound; the board stays on the game it
-  shows. An **Analyze with AI** button under the result
+  once, or the player you watch is in several, one that ends while another
+  is on the board gets the screen too, marked *Another game*, with its
+  sound; the board stays on the game it shows. When the board's game ends
+  and the next one takes the board straight away, the screen stays up for
+  its few seconds. An **Analyze with AI** button under the result
   goes straight to the AI's analysis of the game (not for another game's
   result: put that game on the board first). Turn the screen off under
   **Settings → General**.
@@ -365,21 +370,52 @@ annotations** takes them off. There is no time limit: it waits for the
 answer however long the model takes (a local model can need many minutes on
 a long game), showing how long it has waited, until you press **Stop**.
 
-The model is reached through an OpenAI-compatible API, set under **Settings
-→ AI**:
+The model is chosen under **Settings → AI**:
 
-- **Endpoint** – `http://localhost:8000/v1` by default, for a local server
-  such as oMLX, LM Studio, Ollama, llama.cpp or vLLM (`localhost:8000` is
-  enough to type); any other OpenAI-compatible address works too.
-- **Model** – the model to ask; empty uses the first one the endpoint lists.
-  **Check** asks the endpoint for its models.
-- **API key** – only for endpoints that want one; kept encrypted with the
-  system keychain where there is one.
+- **Provider** – who runs the model:
+  - **Local or other server**, the default: any OpenAI-compatible API.
+  - **OpenAI**.
+  - **Claude (Anthropic)**.
+  - **Google AI (Gemini)**.
+
+  Each provider keeps its own model and API key, so you can switch between
+  them without typing either again.
+- **Endpoint** – for a local or other server only: `http://localhost:8000/v1`
+  by default, for a local server such as oMLX, LM Studio, Ollama, llama.cpp
+  or vLLM (`localhost:8000` is enough to type); any other OpenAI-compatible
+  address works too.
+- **Model** – the model to ask. **Check** lists the models the provider
+  offers you (for OpenAI only its chat models, for Google its Gemini and
+  Gemma models). If you leave it empty, Ponder chooses:
+  - a local server: the first model it lists;
+  - Claude: `claude-opus-5-5`;
+  - Google: a Gemini Flash model;
+  - OpenAI: none, so pick one.
+- **API key** – needed for OpenAI (platform.openai.com), Claude (the Claude
+  Console, platform.claude.com) and Google AI (Google AI Studio,
+  aistudio.google.com). Local servers usually need none. Keys are kept
+  encrypted with the system keychain where there is one, and are never shown
+  again.
+
+How each provider is reached:
+
+- **OpenAI** and **Google AI** are reached through their OpenAI-compatible
+  chat APIs; Google AI uses the Gemini API's OpenAI compatibility endpoint.
+  OpenAI's newer models only work at their own default temperature, so
+  Ponder sends OpenAI none.
+- **Claude** is reached through Anthropic's official SDK, `@anthropic-ai/sdk`,
+  which has to be installed once with `npm install @anthropic-ai/sdk` in
+  Ponder's folder. Until then, choosing Claude says so.
+  - Answers stream in as they are written.
+  - Claude's summarized reasoning shows like the thinking of local models.
+  - On the models that offer it (Claude Fable 5.2 and 5.1, Opus 5.5 and 5,
+    Sonnet 5.5), a request Claude declines on safety grounds is answered by
+    another Claude model in the same call (Anthropic's server-side fallback).
 
 What is sent, only when you press the button: the game's PGN (with any
 annotations and computer-analysis evaluations already on it), its moves
-numbered, and the players' names and the result. With a hosted endpoint
-that leaves your computer.
+numbered, and the players' names and the result. With OpenAI, Claude,
+Google AI or any other hosted endpoint, that leaves your computer.
 
 ### AI chat
 
@@ -433,7 +469,7 @@ there is one, and a couple of its own earlier comments, and answers in one short
 When the game ends it is asked for a summary of two or three sentences.
 
 The latest comment shows in a **Commentary** card beside the board, written
-as it comes (**All…** opens the whole commentary in the AI panel, **Off**
+as it comes, and stays there while the next is being thought of (**All…** opens the whole commentary in the AI panel, **Off**
 turns it off); the panel's Commentary view keeps every comment of the game.
 Above each comment is a row of the moves played since the comment before
 it, the last of them (the move the comment is about) picked out in the
@@ -447,6 +483,39 @@ covering the moves the failed comment would have and any played since, and
 turns commentary back on; a summary that failed is asked for again the same
 way. Comments are not saved with
 the game.
+
+**The commentator.** The comments are said by a little pixel-art chess
+piece floating over the window, in place of the Commentary card. It is on
+unless you turn it off. Choose who says them under **Settings → AI →
+Commentator**, where each one has a card:
+
+- **Esper**: a white pawn in a headset and a blue scarf, the announcer and the default.
+- **Onyx**: a black pawn with a gold scarf.
+- **Bastion**: a stone rook.
+- **Mitzi**: a bishop in a lavender mitre.
+- **Rex**: a king with a gold crown.
+- **Regina**: a queen with a tiara and long hair.
+
+Picking one while the commentator is off turns it on. Each comment comes out
+of the character in a large comic-book speech bubble with a yellow caption
+giving the move it is about. The bubble pops out and the character hops.
+Each comment stays until it has been read: while it is read aloud, or else
+for a few seconds by its length (about a third of a second a word). A
+comment that comes sooner waits its turn. While the model thinks of the next
+comment, the last one stays in the bubble and a little thought bubble of
+dots appears beside the character's head; only before the first comment
+does the bubble itself say "Hmm…". The mouth moves while the words come in
+or are read aloud, and the character blinks and bobs while waiting. The
+summary at the end is its **Final word**, said with a big smile. The bubble
+puts itself away some seconds after a comment is complete (not while it is
+being read aloud or the pointer is over it). Click the character to bring it
+back or put it away; drag the character anywhere, and it stays there. The
+bubble opens towards the side of the window with more room. Its buttons read
+aloud, open all of the commentary (**All**), and retry a comment that
+failed. Turn the commentator off with **Show a commentator character that
+says the live commentary** under Settings → AI, or **A commentator character
+says the commentary in a speech bubble** in the Commentary view, and the
+card comes back. With reduced motion, the character stays still.
 
 **Annotate the game with the commentary** (in the Commentary view) puts
 each comment on the move it followed as an annotation, and the summary
@@ -463,8 +532,10 @@ themselves (while the database is the file listed in the Games tab).
 each comment and the summary as soon as it is complete, with the
 computer's own speech: choose the **voice** and the **speed**, and **Test**
 to hear it. Moves are said as words ("Nf3" as "knight f3", "O-O" as
-"castles kingside"). A new comment takes over from one still being read,
-so the voice keeps up with the game; ▶ on a comment in the list reads that
+"castles kingside"). A comment is never cut off: the next one waits
+for it to finish, and no further comment is asked for while one is
+waiting, so the next covers all the moves played since and the voice keeps
+up with the game. A new game does not cut off the last game's summary; ▶ on a comment in the list reads that
 one again. The speech is made on the computer: no audio or text is sent
 anywhere for it.
 
@@ -587,7 +658,9 @@ file is open) lists the database's games whatever file was open before. The
 board keeps the game it shows; click a game in the list to load it.
 
 The database is listed in the **Games** tab as soon as Ponder starts (when
-the file exists), without taking the board, and from its first game on. The
+the file exists), without taking the board, and from its first game on.
+Ponder opens on the Games tab with the database showing, unless a game is
+being played or you have picked another tab meanwhile. The
 list follows the file: a game added to it, by Ponder or by another program,
 appears within a couple of seconds. With a file open in the Games tab (the
 database, or any PGN file you opened):
@@ -1089,3 +1162,9 @@ window.
 ## Not included yet
 
 Chess960, and signed installers (see **Packaging** for an app bundle).
+
+### Easter egg
+
+Type `nyan` anywhere outside a text box: a pixel cat flies across the window
+on a rainbow, among twinkling stars, to a little chiptune (heard when sounds
+are on). The cat and the tune are Ponder's own, after the old internet meme.

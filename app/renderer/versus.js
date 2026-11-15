@@ -7,26 +7,31 @@
 // with their score against each other. A click or Esc sends it away at once;
 // Settings → General turns it off.
 
-const vs = { game: null, timers: [], on: (() => { try { return localStorage.getItem('versus') !== 'off'; } catch { return true; } })() };
+const vs = { game: null, bg: null, queued: null, timers: [], on: (() => { try { return localStorage.getItem('versus') !== 'off'; } catch { return true; } })() };
 const VS_HOLD = 5500; // ms the cards face each other
 const VS_OUT = 520;   // ms they take to leave
 
 function setVersus(on) {
   vs.on = Boolean(on);
   try { localStorage.setItem('versus', vs.on ? 'on' : 'off'); } catch { /* not kept */ }
-  if (!vs.on) hideVersus(true);
+  if (!vs.on) { vs.queued = null; hideVersus(true); }
 }
 
+// The game the screen is for: the board's, or one that started off it
+// (another game of the player you are watching).
+const vsState = () => vs.bg ?? (state && state.game === vs.game ? state : null);
+
 // One player's card.
-function versusCard(side) {
-  const p = state.players?.[side] ?? {};
-  const user = state.external?.users?.[side] ?? '';
-  const info = user && typeof plInfo === 'function' ? plInfo(pl.data, user) : null;
+function versusCard(st, side) {
+  const p = st.players?.[side] ?? {};
+  const user = st.external?.users?.[side] ?? '';
+  // What Lichess said of the players is looked up for the board's game.
+  const info = user && !vs.bg && typeof plInfo === 'function' ? plInfo(pl.data, user) : null;
   const prof = info ? plJSON(info.profile) : null;
-  const speed = state.external?.speed || 'blitz';
+  const speed = st.external?.speed || 'blitz';
   const perf = prof?.perfs?.[speed];
   const rating = p.rating || (perf?.games ? `${perf.rating}${perf.prov ? '?' : ''}` : '');
-  const title = prof?.title || (p.type === 'engine' ? 'BOT' : '');
+  const title = prof?.title || p.title || (p.type === 'engine' ? 'BOT' : '');
   const code = prof?.profile?.flag || flagFor(user) || '';
   const flag = flagEmoji(code);
   const king = pieceImage('k', side === 'white');
@@ -37,7 +42,7 @@ function versusCard(side) {
   if (perf?.games) facts.push(`${Number(perf.games).toLocaleString()} ${speed} games`);
   if (c && c.win + c.draw + c.loss) facts.push(`${Number(c.win).toLocaleString()} won · ${Number(c.draw).toLocaleString()} drawn · ${Number(c.loss).toLocaleString()} lost`);
   if (perf?.prog) facts.push(`${perf.prog > 0 ? '▲' : '▼'}${Math.abs(perf.prog)} lately`);
-  const mine = state.external?.kind === 'bot' && p.type === 'engine';
+  const mine = st.external?.kind === 'bot' && p.type === 'engine';
   return el('div', { className: `vs-card ${side}` }, [
     el('div', { className: 'vs-colour' }, [king, el('span', { textContent: side === 'white' ? 'White' : 'Black' }), ...(mine ? [el('span', { className: 'vs-mine', textContent: 'your engine' })] : [])]),
     el('div', { className: 'vs-name' }, [
@@ -46,21 +51,22 @@ function versusCard(side) {
       ...(flag ? [el('span', { className: 'vs-flag', textContent: flag, title: flagName(code) })] : []),
     ]),
     el('div', { className: 'vs-rating', textContent: rating || '—' }),
-    el('div', { className: 'vs-facts' }, facts.length ? facts.map((f) => el('span', { textContent: f })) : [el('span', { className: 'vs-wait', textContent: user && !pl.data && !pl.error ? 'Looking them up…' : '' })]),
+    el('div', { className: 'vs-facts' }, facts.length ? facts.map((f) => el('span', { textContent: f })) : [el('span', { className: 'vs-wait', textContent: user && !vs.bg && !pl.data && !pl.error ? 'Looking them up…' : '' })]),
   ]);
 }
 
 function renderVersus() {
   const box = $('#versus');
-  if (box.hidden || !state?.players || state.game !== vs.game) return;
-  const ext = state.external ?? {};
-  $('#vs-white').replaceChildren(versusCard('white'));
-  $('#vs-black').replaceChildren(versusCard('black'));
+  const st = vsState();
+  if (box.hidden || !st?.players) return;
+  const ext = st.external ?? {};
+  $('#vs-white').replaceChildren(versusCard(st, 'white'));
+  $('#vs-black').replaceChildren(versusCard(st, 'black'));
   // What is being played, and how they have done against each other.
   const label = (ext.label ?? '').replace(/^Lichess · /, '').replace(/^Watching \S+ · /, '');
-  $('#vs-event').textContent = label;
+  $('#vs-event').textContent = vs.bg ? ['Another game', label].filter(Boolean).join(' · ') : label;
   let h2h = '';
-  const x = typeof plJSON === 'function' ? plJSON(pl.data?.crosstable) : null;
+  const x = vs.bg ? null : typeof plJSON === 'function' ? plJSON(pl.data?.crosstable) : null;
   const users = ext.users;
   if (x?.nbGames && users?.white && users?.black) {
     const score = (u) => { const k = Object.keys(x.users ?? {}).find((n) => n.toLowerCase() === u.toLowerCase()); return k ? x.users[k] : null; };
@@ -78,19 +84,28 @@ function hideVersus(now = false) {
   const box = $('#versus');
   vs.timers.forEach(clearTimeout);
   vs.timers = [];
-  if (box.hidden) return;
-  if (now) { box.hidden = true; box.className = ''; return; }
+  if (box.hidden) { vs.bg = null; return; }
+  if (now) { box.hidden = true; box.className = ''; vs.bg = null; return; }
   // They go off the way they came.
   box.classList.remove('in');
   box.classList.add('out');
-  vs.timers.push(setTimeout(() => { box.hidden = true; box.className = ''; }, VS_OUT));
+  vs.timers.push(setTimeout(() => { box.hidden = true; box.className = ''; vs.bg = null; }, VS_OUT));
 }
 
-function showVersus() {
+// bg: a game that started off the board, shown in place of the board's.
+// While a result screen is up, the new game's cards wait for it to go.
+function showVersus(bg = null) {
   const box = $('#versus');
+  if (!$('#ko').hidden) {
+    const game = state?.game;
+    vs.queued = () => { if (bg || state?.game === game) showVersus(bg); };
+    return;
+  }
+  vs.queued = null;
   vs.timers.forEach(clearTimeout);
   vs.timers = [];
-  vs.game = state.game;
+  vs.game = bg ? bg.game : state.game;
+  vs.bg = bg;
   box.className = '';
   box.hidden = false;
   renderVersus();
@@ -121,10 +136,36 @@ window.versusWanted = versusWanted;
 
 // Called when a new game comes onto the board.
 function maybeVersus(prev) {
-  if (!versusWanted(state, prev)) { hideVersus(true); return; }
+  if (!versusWanted(state, prev)) {
+    if (!vs.bg) { vs.queued = null; hideVersus(true); }
+    return;
+  }
   showVersus();
 }
 window.maybeVersus = maybeVersus;
+
+// A watched player's game as the list of their games has it, in the shape
+// of the board's state: for the screens of a game that is not on the board.
+function watchGameState(g) {
+  const player = (side) => ({
+    type: 'lichess', name: g[side] || (side === 'white' ? 'White' : 'Black'),
+    rating: g[side + 'Rating'] ? String(g[side + 'Rating']) : '', title: g[side + 'Title'] ?? '',
+  });
+  return {
+    game: 'watch:' + g.id, result: g.live ? '*' : g.result, reason: g.reason ?? '', moves: { length: g.moves ?? 0 },
+    players: { white: player('white'), black: player('black') },
+    external: { kind: 'spectate', id: g.id, live: g.live, speed: g.speed, label: g.label, users: { white: g.white, black: g.black } },
+  };
+}
+
+// Another game of the player you are watching started (they play several
+// at once): its cards, over the game on the board.
+function showWatchVersus(g) {
+  if (!vs.on || puzzleView) return;
+  if (!$('#versus').hidden && !vs.bg) return; // not over the board's own
+  showVersus(watchGameState(g));
+}
+window.showWatchVersus = showWatchVersus;
 
 $('#versus').addEventListener('click', () => hideVersus());
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#versus').hidden) hideVersus(); });
@@ -222,11 +263,19 @@ function hideKo(now = false) {
   const box = $('#ko');
   ko.timers.forEach(clearTimeout);
   ko.timers = [];
+  const gone = () => {
+    box.hidden = true;
+    box.className = '';
+    ko.bg = null;
+    const next = vs.queued;
+    vs.queued = null;
+    next?.();
+  };
   if (box.hidden) { ko.bg = null; return; }
-  if (now) { box.hidden = true; box.className = ''; ko.bg = null; return; }
+  if (now) { gone(); return; }
   box.classList.remove('in');
   box.classList.add('out');
-  ko.timers.push(setTimeout(() => { box.hidden = true; box.className = ''; ko.bg = null; }, KO_OUT));
+  ko.timers.push(setTimeout(gone, KO_OUT));
 }
 window.hideKo = hideKo;
 
@@ -237,7 +286,17 @@ function showKo(st, bg = null) {
   // Once a game: a finished game is reported again (its rating changes).
   if (ko.shown === st.game) return;
   ko.shown = st.game;
-  hideVersus(true);
+  // A game starting meanwhile shows its cards once the result has gone.
+  if (!$('#versus').hidden) {
+    const bg_ = vs.bg;
+    const game = vs.game;
+    vs.queued = bg_ ? () => showVersus(bg_) : () => { if (state?.game === game) showVersus(); };
+  }
+  vs.timers.forEach(clearTimeout);
+  vs.timers = [];
+  $('#versus').hidden = true;
+  $('#versus').className = '';
+  vs.bg = null;
   const box = $('#ko');
   ko.timers.forEach(clearTimeout);
   ko.timers = [];
@@ -280,6 +339,27 @@ function showBackgroundKo(g, me) {
   showKo(st, st);
 }
 window.showBackgroundKo = showBackgroundKo;
+
+// A game of the player you are watching that ends off the board.
+function showWatchKo(g) {
+  if (!ko.on || !$('#ko').hidden || puzzleView) return;
+  if (!['1-0', '0-1', '1/2-1/2'].includes(g.result)) return;
+  const st = watchGameState(g);
+  const end = endSound(st);
+  if (end) sounds.play(end);
+  showKo(st, st);
+}
+window.showWatchKo = showWatchKo;
+
+// The board's game ended and another took the board: its result screen
+// stays up, as a game off the board now.
+function keepKoFor(prev) {
+  if ($('#ko').hidden || ko.bg || !prev || ko.game !== prev.game || prev.result === '*') return false;
+  ko.bg = prev;
+  ko.shown = null;
+  return true;
+}
+window.keepKoFor = keepKoFor;
 
 // Analyze with AI: the screen and the result card go, the AI panel opens.
 $('#ko-ai').addEventListener('click', (e) => {

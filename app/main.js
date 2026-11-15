@@ -630,10 +630,13 @@ function lichessEngine(settings) {
 ipcMain.handle('lichess:settings', () => publicLichess(loadLichess()));
 
 // ---------------------------------------------------------------------------
-// AI commentary: the endpoint (an OpenAI-compatible API, a local server by
-// default), the model, and a key when the endpoint wants one. The key is
-// encrypted with the system keychain when there is one, and never sent back
-// to the window. The game is sent only when AI annotate is pressed.
+// AI: the provider (OpenAI, Claude, Google AI, or an OpenAI-compatible
+// server, a local one by default), and for each its model and key, so that
+// switching between them keeps both. The local server's address, model and
+// key are kept at the top level (as before there were providers), the
+// others under "providers". Keys are encrypted with the system keychain
+// when there is one, and never sent back to the window. Nothing is sent
+// until AI annotate, the chat or the live commentary asks.
 // ---------------------------------------------------------------------------
 const aiFile = () => path.join(app.getPath('userData'), 'ai.json');
 function loadAi() {
@@ -645,6 +648,19 @@ function saveAi(settings) {
   fs.mkdirSync(path.dirname(aiFile()), { recursive: true });
   fs.writeFileSync(aiFile(), JSON.stringify(settings, null, 2), { mode: 0o600 });
 }
+// The chosen provider's part of the settings: { model, key, plainKey }.
+function aiSlot(s, provider = s.provider) {
+  if (!ai.PROVIDERS[provider] || provider === 'local') return s;
+  s.providers ??= {};
+  s.providers[provider] ??= {};
+  return s.providers[provider];
+}
+const aiProvider = (s) => (ai.PROVIDERS[s.provider] ? s.provider : 'local');
+// What ai.js is given: the provider, the address, the model and the key.
+async function aiRequest(s) {
+  const slot = aiSlot(s, aiProvider(s));
+  return { provider: aiProvider(s), baseUrl: s.baseUrl, model: slot.model ?? '', key: await aiKey(slot) };
+}
 async function aiKey(settings) {
   if (settings.plainKey) return settings.plainKey;
   if (!settings.key) return '';
@@ -654,19 +670,32 @@ async function aiKey(settings) {
     return safeStorage.decryptString(buf);
   } catch { return ''; }
 }
-const publicAi = (s) => ({ baseUrl: s.baseUrl, model: s.model, hasKey: Boolean(s.key || s.plainKey), defaultUrl: ai.DEFAULTS.baseUrl });
+const publicAi = (s) => {
+  const provider = aiProvider(s);
+  const slot = aiSlot(s, provider);
+  return {
+    provider, baseUrl: s.baseUrl, model: slot.model ?? '', hasKey: Boolean(slot.key || slot.plainKey), defaultUrl: ai.DEFAULTS.baseUrl,
+    providers: Object.entries(ai.PROVIDERS).map(([id, p]) => ({
+      id, name: p.name, needsKey: p.needsKey, modelHint: p.modelHint ?? '', defaultModel: p.defaultModel ?? '',
+      hasKey: Boolean(aiSlot(s, id).key || aiSlot(s, id).plainKey),
+    })),
+  };
+};
 
 ipcMain.handle('ai:settings', () => publicAi(loadAi()));
 ipcMain.handle('ai:save', async (_e, patch) => {
   const s = loadAi();
+  if (typeof patch?.provider === 'string' && ai.PROVIDERS[patch.provider]) s.provider = patch.provider;
   if (typeof patch?.baseUrl === 'string') s.baseUrl = ai.normalizeBase(patch.baseUrl);
-  if (typeof patch?.model === 'string') s.model = patch.model.trim();
+  // The model and key are the chosen provider's.
+  const slot = aiSlot(s, aiProvider(s));
+  if (typeof patch?.model === 'string') slot.model = patch.model.trim();
   if (typeof patch?.key === 'string') {
-    delete s.key;
-    delete s.plainKey;
+    delete slot.key;
+    delete slot.plainKey;
     const key = patch.key.trim();
-    if (key && await canEncrypt()) s.key = await encryptSecret(key);
-    else if (key) s.plainKey = key;
+    if (key && await canEncrypt()) slot.key = await encryptSecret(key);
+    else if (key) slot.plainKey = key;
   }
   saveAi(s);
   return publicAi(s);
@@ -677,14 +706,14 @@ ipcMain.handle('ai:save', async (_e, patch) => {
 let aiRun = null;
 ipcMain.handle('ai:models', async () => {
   const s = loadAi();
-  return ai.listModels({ baseUrl: s.baseUrl, key: await aiKey(s) }, { signal: AbortSignal.timeout(15000) });
+  return ai.listModels(await aiRequest(s), { signal: AbortSignal.timeout(15000) });
 });
 ipcMain.handle('ai:annotate', async (_e, game) => {
   const s = loadAi();
   aiRun?.abort();
   const run = aiRun = new AbortController();
   try {
-    return await ai.annotate({ baseUrl: s.baseUrl, model: s.model, key: await aiKey(s) }, game ?? {}, { signal: run.signal });
+    return await ai.annotate(await aiRequest(s), game ?? {}, { signal: run.signal });
   } finally {
     if (aiRun === run) aiRun = null;
   }
@@ -707,7 +736,7 @@ ipcMain.handle('ai:chat', async (_e, id, messages, channel = 'chat') => {
     .filter((m) => ['system', 'user', 'assistant'].includes(m?.role) && typeof m.content === 'string')
     .map((m) => ({ role: m.role, content: m.content }));
   try {
-    return await ai.chat({ baseUrl: s.baseUrl, model: s.model, key: await aiKey(s) }, list, {
+    return await ai.chat(await aiRequest(s), list, {
       signal: run.signal,
       onDelta: (delta) => { if (win && !win.isDestroyed()) win.webContents.send('backend-event', 'aiChat', { id, delta }); },
       onThinking: (thinking) => { if (win && !win.isDestroyed()) win.webContents.send('backend-event', 'aiChat', { id, thinking }); },

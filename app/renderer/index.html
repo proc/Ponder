@@ -723,6 +723,9 @@
             <option value="1">move</option><option value="2">2 moves</option><option value="3">3 moves</option><option value="5">5 moves</option><option value="8">8 moves</option>
           </select></label>
         </div>
+        <div class="cm-controls cm-pip-row">
+          <label class="check" title="A little pixel-art chess piece (chosen in Settings → AI) floats over the window and says each comment in a comic speech bubble, in place of the commentary card beside the board. Drag it anywhere; click it to show or put away the bubble"><input type="checkbox" id="cm-pip"> A commentator character says the commentary in a speech bubble</label>
+        </div>
         <div class="cm-controls cm-annotate-row">
           <label class="check" title="Each comment is put on the move it follows as an annotation, and the summary before the first move: they show in the moves list, can be edited under Annotate, and are saved with the game. Your own comments are left alone."><input type="checkbox" id="cm-annotate"> Annotate the game with the commentary</label>
         </div>
@@ -881,13 +884,14 @@
       </div>
 
       <div class="settings-pane ai-settings" data-pane="ai" hidden>
-        <p class="hint">The AI model used for <b>AI annotate</b> (under Annotate in the Moves tab) and the <b>AI</b> panel's chat. It is reached through an OpenAI-compatible API: a local server such as oMLX, LM Studio, Ollama, llama.cpp or vLLM, or a hosted one.</p>
-        <label class="row" title="An OpenAI-compatible API. localhost:8000 is enough for a local server.">Endpoint <input type="text" id="ai-url" spellcheck="false" autocomplete="off" placeholder="http://localhost:8000/v1"></label>
+        <p class="hint">The AI model used for <b>AI annotate</b> (under Annotate in the Moves tab), the <b>AI</b> panel's chat and the live commentary: from <b>OpenAI</b>, <b>Claude</b> (Anthropic) or <b>Google AI</b> (Gemini) with your API key, or from any OpenAI-compatible server, such as a local one (oMLX, LM Studio, Ollama, llama.cpp, vLLM).</p>
+        <label class="row" title="Who runs the model. Each keeps its own model and API key.">Provider <select id="ai-provider"></select></label>
+        <label class="row" id="ai-url-row" title="An OpenAI-compatible API. localhost:8000 is enough for a local server.">Endpoint <input type="text" id="ai-url" spellcheck="false" autocomplete="off" placeholder="http://localhost:8000/v1"></label>
         <label class="row" title="The model to ask. Empty: the first model the endpoint lists.">Model
           <span class="ai-model"><input type="text" id="ai-model" spellcheck="false" autocomplete="off" list="ai-models" placeholder="The endpoint's first model">
             <datalist id="ai-models"></datalist>
             <button type="button" class="small" id="ai-check" title="Ask the endpoint which models it has">Check</button></span></label>
-        <label class="row" title="Only for endpoints that ask for one; local servers usually do not. Kept encrypted on this computer, never shown again.">API key <input type="password" id="ai-key" autocomplete="off" placeholder="Not needed for most local servers"></label>
+        <label class="row" id="ai-key-row" title="Kept encrypted on this computer, never shown again. Local servers usually need none.">API key <input type="password" id="ai-key" autocomplete="off" placeholder="Not needed for most local servers"></label>
         <label class="row" title="The typeface of the conversation in the AI panel">Chat font
           <span class="ai-font"><select id="aic-font">
             <option value="system">System</option>
@@ -901,6 +905,10 @@
           <span class="range"><input type="range" id="aic-font-size" min="80" max="150" step="5"> <output id="aic-font-size-value"></output></span></label>
         <p class="aic-font-sample" id="aic-font-sample">The knight on f3 is well placed: 12. Nf3 e5 13. dxe5 keeps the pressure.</p>
         <p class="hint" id="ai-note">Nothing is sent until you press AI annotate or send a message in the AI panel: then the game on the board goes to this endpoint, as PGN, with the position shown. It waits for the answer as long as the model takes; Stop cancels it.</p>
+        <div class="setting-label">Commentator</div>
+        <label class="check" title="A little pixel-art chess piece floats over the window and says each live comment in a comic speech bubble, in place of the commentary card beside the board"><input type="checkbox" id="cmt-on"> Show a commentator character that says the live commentary</label>
+        <div class="cmt-cast" id="cmt-cast" role="radiogroup" aria-label="Commentator"></div>
+        <p class="hint">Live commentary is turned on in the AI panel's Commentary view. Drag the character anywhere over the window; click it to show or put away its last comment.</p>
       </div>
 
       <div class="settings-pane" data-pane="database" hidden>
@@ -1160,5 +1168,7 @@
   <script src="annotate.js"></script>
   <script src="ai-chat.js"></script>
   <script src="commentary.js"></script>
+  <script src="commentator.js"></script>
+  <script src="easter.js"></script>
 </body>
 </html>

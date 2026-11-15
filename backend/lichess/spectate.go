@@ -232,6 +232,10 @@ type SpectateGame struct {
 	Moves       int    `json:"moves"`
 	Live        bool   `json:"live"`
 	Result      string `json:"result"`
+	Reason      string `json:"reason,omitempty"` // how it ended: "White wins by resignation"
+	Speed       string `json:"speed,omitempty"`
+	WhiteTitle  string `json:"whiteTitle,omitempty"`
+	BlackTitle  string `json:"blackTitle,omitempty"`
 	Shown       bool   `json:"shown"` // the one on the board
 }
 
@@ -321,7 +325,8 @@ func (s *Spectator) Status() SpectateStatus {
 		w := s.games[id]
 		g := SpectateGame{ID: w.id, URL: s.gameURL(w.id), White: w.white.Name(), Black: w.black.Name(),
 			WhiteRating: w.white.Rating, BlackRating: w.black.Rating, Side: w.side, Label: w.kind(),
-			Fen: w.pos.FEN(), Moves: len(w.moves), Live: !w.finished, Result: w.result, Shown: id == s.shown}
+			Fen: w.pos.FEN(), Moves: len(w.moves), Live: !w.finished, Result: w.result, Reason: w.reason, Speed: w.speed,
+			WhiteTitle: w.white.Title(), BlackTitle: w.black.Title(), Shown: id == s.shown}
 		if n := len(w.moves); n > 0 {
 			g.LastMove = w.moves[n-1]
 		}

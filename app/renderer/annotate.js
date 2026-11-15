@@ -343,38 +343,62 @@ $('#an-ai').onclick = async () => {
   }
 };
 
-// Settings → AI.
-async function fillAiSettings() {
-  let s;
-  try { s = await api.ai.settings(); } catch { return; }
+// Settings → AI: the provider, and its model and key.
+const AI_NOTE = 'Nothing is sent until you press AI annotate, send a message in the AI panel or turn on live commentary: then the game on the board goes to the provider chosen here, as PGN, with the position shown. It waits for the answer as long as the model takes; Stop cancels it.';
+const AI_WHERE = {
+  local: 'A server on this computer or your network keeps the games on it.',
+  openai: 'The games go to OpenAI. Get a key at platform.openai.com.',
+  anthropic: 'The games go to Anthropic. Get a key in the Claude Console (platform.claude.com).',
+  google: 'The games go to Google. Get a key in Google AI Studio (aistudio.google.com).',
+};
+function showAiSettings(s) {
+  const sel = $('#ai-provider');
+  if (sel.options.length !== (s.providers ?? []).length) {
+    sel.replaceChildren(...(s.providers ?? []).map((p) => el('option', { value: p.id, textContent: p.name })));
+  }
+  sel.value = s.provider ?? 'local';
+  const p = (s.providers ?? []).find((x) => x.id === s.provider) ?? {};
+  const local = s.provider === 'local' || !s.provider;
+  $('#ai-url-row').hidden = !local;
   $('#ai-url').value = s.baseUrl ?? '';
   $('#ai-url').placeholder = s.defaultUrl ?? '';
   $('#ai-model').value = s.model ?? '';
+  $('#ai-model').placeholder = local ? "The endpoint's first model" : (p.defaultModel ? `${p.defaultModel} (if left empty)` : p.modelHint || 'Press Check for the list');
+  $('#ai-check').title = local ? 'Ask the endpoint which models it has' : `Ask ${p.name ?? 'the provider'} which models your key can use`;
   $('#ai-key').value = '';
-  $('#ai-key').placeholder = s.hasKey ? 'A key is saved (type a new one to replace it)' : 'Not needed for most local servers';
+  $('#ai-key').placeholder = s.hasKey ? 'A key is saved (type a new one to replace it)' : local ? 'Not needed for most local servers' : `Your ${p.name ?? ''} API key`;
+  $('#ai-models').replaceChildren();
+  aiSay(`${AI_WHERE[s.provider] ?? AI_WHERE.local} ${AI_NOTE}`);
+}
+async function fillAiSettings() {
+  let s;
+  try { s = await api.ai.settings(); } catch { return; }
+  showAiSettings(s);
 }
 window.fillAiSettings = fillAiSettings;
 const aiSay = (text, bad = false) => { $('#ai-note').textContent = text; $('#ai-note').classList.toggle('error', bad); };
 async function saveAiSetting(patch) {
   try {
     const s = await api.ai.save(patch);
+    if ('provider' in patch) showAiSettings(s);
     if ('baseUrl' in patch) $('#ai-url').value = s.baseUrl;
     if ('key' in patch) { $('#ai-key').value = ''; $('#ai-key').placeholder = s.hasKey ? 'A key is saved (type a new one to replace it)' : 'Not needed for most local servers'; }
     return true;
   } catch (err) { aiSay(errorText(err), true); return false; }
 }
+$('#ai-provider').addEventListener('change', (e) => saveAiSetting({ provider: e.target.value }));
 $('#ai-url').addEventListener('change', (e) => saveAiSetting({ baseUrl: e.target.value }));
 $('#ai-model').addEventListener('change', (e) => saveAiSetting({ model: e.target.value }));
 $('#ai-key').addEventListener('change', (e) => { if (e.target.value) saveAiSetting({ key: e.target.value }); });
 $('#ai-check').onclick = async () => {
   const btn = $('#ai-check');
   btn.disabled = true;
-  aiSay('Asking the endpoint…');
-  if (await saveAiSetting({ baseUrl: $('#ai-url').value })) {
+  aiSay(`Asking ${$('#ai-provider').selectedOptions[0]?.textContent ?? 'the endpoint'}…`);
+  if (await saveAiSetting($('#ai-url-row').hidden ? {} : { baseUrl: $('#ai-url').value })) {
     try {
       const models = await api.ai.models();
       $('#ai-models').replaceChildren(...models.map((m) => el('option', { value: m })));
-      aiSay(models.length ? `Connected: ${models.length} model${models.length === 1 ? '' : 's'} (${models.slice(0, 4).join(', ')}${models.length > 4 ? ', …' : ''}).` : 'Connected, but the endpoint lists no models.', !models.length);
+      aiSay(models.length ? `Connected: ${models.length} model${models.length === 1 ? '' : 's'} (${models.slice(0, 4).join(', ')}${models.length > 4 ? ', …' : ''}). Pick one in the Model box.` : 'Connected, but no models are listed.', !models.length);
     } catch (err) { aiSay(errorText(err), true); }
   }
   btn.disabled = false;

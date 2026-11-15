@@ -917,8 +917,8 @@ function renderPlayers() {
     $('.name', box).textContent = player ? player.name : side === 'white' ? 'White' : 'Black';
     // The country flag of a Lichess player, before the name.
     const flagBox = $('.pflag', box);
-    const code = flagFor(state.external?.users?.[side]);
-    const emoji = flagEmoji(code);
+    const code = typeof flagFor === 'function' ? flagFor(state.external?.users?.[side]) : '';
+    const emoji = code ? flagEmoji(code) : '';
     flagBox.hidden = !emoji;
     flagBox.textContent = emoji;
     flagBox.title = emoji ? flagName(code) : '';
@@ -2050,7 +2050,7 @@ function renderGameInfo() {
     const d = diff?.[side];
     return el('div', { className: `gi-player ${side}` + (pt === '1' ? ' won' : '') + (live && state.turn === side ? ' to-move' : '') }, [
       el('span', { className: `gi-dot ${side}`, title: side === 'white' ? 'White' : 'Black' }),
-      ...[flagSpan(ext?.users?.[side])].filter(Boolean),
+      ...[typeof flagSpan === 'function' ? flagSpan(ext?.users?.[side]) : null].filter(Boolean),
       el('span', { className: 'gi-name', textContent: name, title: name }),
       ...(kind ? [el('span', { className: 'gi-kind', textContent: kind })] : []),
       el('span', { className: 'gi-rating' }, rating ? [String(rating), ...(d != null ? [el('span', { className: 'gi-diff ' + (d > 0 ? 'up' : d < 0 ? 'down' : ''), textContent: ` ${d > 0 ? '+' : d < 0 ? '−' : '±'}${Math.abs(d)}` })] : [])] : []),
@@ -2451,7 +2451,7 @@ function applyState(next) {
   if (gameOverFor != null && (newGame || next.result === '*')) hideGameOver();
   // The board's game going on (or another taking the board) ends its result
   // screen; not that of a game that ended off the board.
-  if ((newGame || next.result === '*') && typeof ko !== 'undefined' && !ko.bg) { window.hideKo?.(true); ko.shown = null; }
+  if ((newGame || next.result === '*') && typeof ko !== 'undefined' && !ko.bg && !(newGame && window.keepKoFor?.(prev))) { window.hideKo?.(true); ko.shown = null; }
   window.syncPlayersInfo?.();
   // The row of small boards marks the game that is on the board.
   if (newGame && typeof renderWatchStrip === 'function') renderWatchStrip();
@@ -4239,6 +4239,9 @@ function renderArrow() {
 
 // ---------------------------------------------------------------------------
 (async function init() {
+  // The other scripts (flags.js, lichess.js, chat.js, …) load after this one,
+  // and drawing the game uses them: wait for them before anything is drawn.
+  if (document.readyState === 'loading') await new Promise((r) => document.addEventListener('DOMContentLoaded', r, { once: true }));
   await loadThemes();
   setTheme(savedTheme(), { save: false });
   engines = await api.engines.list();
@@ -4249,10 +4252,14 @@ function renderArrow() {
   applyState(await api.backend('state'));
   database = await api.database.settings();
   renderDatabaseButton();
-  // The other scripts (lichess.js, tournament.js, …) load after this one;
-  // the awaits above can finish before they have.
-  if (document.readyState === 'loading') await new Promise((r) => document.addEventListener('DOMContentLoaded', r, { once: true }));
   initLichess();
   initTournament();
-  listDatabase();
+  // The game database opens with the app: the Games tab lists it, unless a
+  // game is being played or another tab was chosen meanwhile.
+  await listDatabase();
+  if (collection && database?.path && collection.path === database.path && workspace.dataset.tab === 'moves'
+    && !state?.active && !state?.external?.live) {
+    showTab('games');
+    renderDatabaseButton();
+  }
 })();
