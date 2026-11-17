@@ -154,7 +154,10 @@ async function listModels(settings, opts = {}) {
   if (PROVIDERS[p].needsKey && !settings.key) throw new Error(`${who(settings)} needs an API key: add yours in Settings → AI`);
   if (PROVIDERS[p].kind === 'anthropic') return anthropicModels(settings, opts);
   const data = await call(`${baseOf(settings)}/models`, { key: settings.key, name: who(settings), ...opts });
-  let ids = (data.data ?? data.models ?? []).map((m) => m.id ?? m.name).filter(Boolean).map((id) => String(id).replace(/^models\//, ''));
+  // Not the models a server says are for something else (speech, hearing,
+  // embeddings: oMLX, LocalAI and others say so).
+  const notChat = (m) => /\b(tts|stt|speech|audio|asr|transcri\w*|embed\w*|rerank\w*|image|vision_only)\b/i.test([m.type, m.model_type, m.task].filter(Boolean).join(' '));
+  let ids = (data.data ?? data.models ?? []).filter((m) => typeof m !== 'object' || !notChat(m)).map((m) => (typeof m === 'object' ? m.id ?? m.name : m)).filter(Boolean).map((id) => String(id).replace(/^models\//, ''));
   // Of OpenAI's many models (speech, images, embeddings…), the chat ones.
   if (p === 'openai') ids = ids.filter((id) => /^(gpt-|o\d|chatgpt-)/.test(id) && !/(audio|realtime|transcribe|tts|image|search|embedding)/.test(id));
   if (p === 'google') ids = ids.filter((id) => /gemini|gemma/.test(id) && !/(embedding|image|tts|audio)/.test(id));
@@ -451,4 +454,96 @@ async function contextWindow(settings, model, opts = {}) {
   return num(run?.context_length);
 }
 
-module.exports = { chat, DEFAULTS, PROVIDERS, normalizeBase, buildMessages, parseReply, listModels, annotate, anthropicMessages, contextWindow, usageOf };
+// Text to speech from an OpenAI-compatible endpoint (POST /audio/speech),
+// for reading the live commentary aloud. Returns the audio as bytes and
+// its type. OpenAI, and servers that copy its API (Kokoro-FastAPI,
+// openedai-speech, LocalAI, …), answer with the sound itself.
+const TTS_DEFAULTS = { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini-tts', voice: 'alloy' };
+function speechBase(url) {
+  let u = String(url ?? '').trim() || TTS_DEFAULTS.baseUrl;
+  if (!/^https?:\/\//i.test(u)) u = 'http://' + u;
+  u = u.replace(/\/+$/, '');
+  let parsed;
+  try { parsed = new URL(u); } catch { throw new Error('The speech endpoint is not a web address'); }
+  if (parsed.pathname === '' || parsed.pathname === '/') u += '/v1';
+  return u.replace(/\/audio\/speech$/, '');
+}
+async function speech({ baseUrl, model, voice, key, instructions }, text, { speed = 1, signal, fetchImpl = fetch } = {}) {
+  const base = speechBase(baseUrl);
+  const url = `${base}/audio/speech`;
+  const openai = /api\.openai\.com/i.test(base);
+  // None chosen: OpenAI's defaults at OpenAI; elsewhere the endpoint's first
+  // speech model, and its own default voice.
+  if (!model && !openai) {
+    model = (await speechModels({ baseUrl: base, key }, { signal }).catch(() => ({ models: [] }))).models[0];
+    if (!model) throw new Error('No speech model is chosen, and the speech endpoint lists none: choose one in Settings → AI');
+  }
+  const body = { model: model || TTS_DEFAULTS.model, input: String(text).slice(0, 4096), response_format: 'mp3' };
+  if (voice || openai) body.voice = voice || TTS_DEFAULTS.voice;
+  if (Number.isFinite(speed) && speed !== 1) body.speed = Math.min(4, Math.max(0.25, speed));
+  if (instructions) body.instructions = String(instructions);
+  const headers = { 'Content-Type': 'application/json', Accept: 'audio/*' };
+  if (key) headers.Authorization = `Bearer ${key}`;
+  const ask = async () => {
+    try {
+      return await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
+    } catch (err) {
+      if (signal?.aborted) throw new Error(signal.reason?.name === 'TimeoutError' ? 'The speech endpoint took too long to answer' : 'Stopped');
+      throw new Error(`Could not reach the speech endpoint at ${new URL(url).origin} (${err.cause?.code ?? err.message}). Is the server running?`);
+    }
+  };
+  let res = await ask();
+  // A server that cannot make MP3 is asked for WAV, which every one makes.
+  if (res.status === 400 || res.status === 422 || res.status === 500) {
+    const detail = await res.clone().text().catch(() => '');
+    if (/mp3|format|codec|ffmpeg|encod/i.test(detail)) { body.response_format = 'wav'; res = await ask(); }
+  }
+  if (!res.ok) {
+    const detail = errorDetail(await res.text().catch(() => ''));
+    throw new Error(`The speech endpoint answered ${res.status}${res.status === 401 || res.status === 403 ? ' (check its API key in Settings → AI)' : ''}${detail ? `: ${detail}` : ''}`);
+  }
+  const type = (res.headers.get('content-type') || 'audio/mpeg').split(';')[0].trim();
+  if (!/^audio\/|^application\/octet-stream$/.test(type)) {
+    throw new Error(`The speech endpoint answered with ${type}, not sound; is it an OpenAI-compatible speech API (…/v1/audio/speech)?`);
+  }
+  const data = new Uint8Array(await res.arrayBuffer());
+  if (!data.length) throw new Error('The speech endpoint answered with no sound');
+  return { type: type === 'application/octet-stream' ? 'audio/mpeg' : type, data };
+}
+
+// The speech endpoint's models (GET /models), the speech ones first when
+// it says which; and its voices where it lists them (Kokoro-FastAPI and
+// others: GET /audio/voices). OpenAI does not list its voices: they are
+// known.
+const OPENAI_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'];
+async function speechModels({ baseUrl, key, model }, { signal, sendImpl } = {}) {
+  const base = speechBase(baseUrl);
+  const opts = { key, signal, name: 'The speech endpoint', ...(sendImpl ? { sendImpl } : {}) };
+  const data = await call(`${base}/models`, opts);
+  const entries = (Array.isArray(data) ? data : data.data ?? data.models ?? []).map((m) => (typeof m === 'string' ? { id: m } : m)).filter((m) => m.id ?? m.name);
+  const idOf = (m) => String(m.id ?? m.name);
+  // What the server says a model is for, when it says (oMLX, LocalAI…).
+  const kindOf = (m) => [m.type, m.model_type, m.task, m.kind, m.engine_type, ...(Array.isArray(m.capabilities) ? m.capabilities : [])].filter(Boolean).join(' ').toLowerCase();
+  const told = entries.filter((m) => kindOf(m));
+  let speechy = told.length ? entries.filter((m) => /tts|speech|audio_out|text-to-speech|text_to_speech/.test(kindOf(m)) && !/stt|transcri/.test(kindOf(m))) : [];
+  if (!speechy.length) speechy = entries.filter((m) => /tts|speech|kokoro|voice|piper|xtts|orpheus|bark|f5|melo|parler|chatterbox|dia\b|csm|sesame|marvis|spark|outetts|vibevoice|zonos|fish/i.test(idOf(m)) && !/transcri|whisper|stt\b|parakeet/i.test(idOf(m)));
+  const models = [...new Set((speechy.length ? speechy : entries).map(idOf))].sort();
+  return { models, voices: await speechVoices({ baseUrl: base, key, model: model || models[0] }, { signal, sendImpl }) };
+}
+// The voices of a speech model, where the server lists them (some, like
+// oMLX, by model: ?model=…). OpenAI does not list its voices: they are known.
+async function speechVoices({ baseUrl, key, model }, { signal, sendImpl } = {}) {
+  const base = speechBase(baseUrl);
+  if (/api\.openai\.com/i.test(base)) return OPENAI_VOICES;
+  const opts = { key, signal, name: 'The speech endpoint', ...(sendImpl ? { sendImpl } : {}) };
+  for (const url of [model ? `${base}/audio/voices?model=${encodeURIComponent(model)}` : null, `${base}/audio/voices`].filter(Boolean)) {
+    try {
+      const v = await call(url, opts);
+      const list = (Array.isArray(v) ? v : v.voices ?? v.data ?? []).map((x) => (typeof x === 'string' ? x : x.id ?? x.name ?? x.voice_id)).filter(Boolean).map(String);
+      if (list.length) return [...new Set(list)].sort();
+    } catch { /* not listed this way */ }
+  }
+  return [];
+}
+
+module.exports = { speechVoices, speechModels, speech, speechBase, TTS_DEFAULTS, chat, DEFAULTS, PROVIDERS, normalizeBase, buildMessages, parseReply, listModels, annotate, anthropicMessages, contextWindow, usageOf };

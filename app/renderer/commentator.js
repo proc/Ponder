@@ -411,9 +411,9 @@ function renderCommentator() {
   pipRetry.hidden = !last?.error;
   pipRetry.disabled = cm.busy;
   pipSay.textContent = cm.speak ? '🔊' : '🔈';
-  pipSay.disabled = !cmCanSpeak;
+  pipSay.disabled = !cmCanRead();
   pipSay.classList.toggle('on', cm.speak);
-  pipSay.title = !cmCanSpeak ? 'This computer has no speech to read with' : cm.speak ? 'Reading the commentary aloud: click to stop' : 'Read the commentary aloud';
+  pipSay.title = !cmCanRead() ? 'This computer has no speech to read with' : cm.speak ? 'Reading the commentary aloud: click to stop' : 'Read the commentary aloud';
   if (last && !last.live && pip.open) { if (!pip.away) pipAwayLater(last.text); } else if (writing) { clearTimeout(pip.away); pip.away = null; }
 }
 window.renderCommentator = renderCommentator;

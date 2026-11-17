@@ -1342,6 +1342,7 @@ body.zen #ai-panel, body.zen #ai-handle { display: none; }
 .an-ai-state { margin: 0; font-size: 0.8rem; overflow-wrap: anywhere; }
 .ai-settings .row input[type="text"], .ai-settings .row input[type="password"] { flex: 1; min-width: 0; }
 .ai-model { display: inline-flex; gap: 0.4rem; flex: 1; min-width: 0; }
+.ai-model select { flex: 1; min-width: 0; }
 .ai-num { width: 5.5rem; }
 #btn-annotate[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
 #moves .comment.inaccuracy { border-color: #3c9bd6; }
@@ -3748,3 +3749,18 @@ body.zen.board-3d #evalbar:not([hidden]) ~ .board-wrap { margin-left: 0; }
 /* The way out of zen mode, at the top in the middle: the top player's
    clock is at the right. */
 body.zen.board-3d #zen-exit { right: auto; left: 50%; transform: translateX(-50%); }
+
+/* The announcer (announcer.js): what it says, for a moment, at the foot of
+   the board; and its settings, dimmed while it is off. */
+#ann-caption {
+  position: absolute; left: 50%; bottom: 6%; z-index: 6; transform: translate(-50%, 8px); max-width: 86%;
+  padding: 0.4rem 0.9rem; border-radius: 999px; font-size: 0.95rem; font-weight: 600; text-align: center;
+  color: var(--text); background: var(--glass, var(--panel)); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge, var(--sep)), var(--glass-shadow, 0 4px 14px rgb(0 0 0 / .18));
+  opacity: 0; pointer-events: none; transition: opacity .25s var(--ease), transform .25s var(--ease);
+}
+#ann-caption.on { opacity: 1; transform: translate(-50%, 0); }
+body.zen.board-3d #ann-caption { position: fixed; bottom: calc(var(--bar) + 1.6rem); }
+#ann-card.off > .set-row:not(:first-child) { opacity: 0.5; }
+#ann-card .set-ctl { display: inline-flex; gap: 0.35rem; align-items: center; }
+#ann-voice { max-width: 13rem; }

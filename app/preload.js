@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('board', {
     choosePath: (kind, title) => ipcRenderer.invoke('engines:choosePath', kind, title),
   },
   cpuLoad: () => ipcRenderer.invoke('system:cpu'),
+  // Keep the screen on: no screensaver, no display sleep.
+  keepAwake: (on) => ipcRenderer.invoke('power:keepAwake', Boolean(on)),
   ai: {
     settings: () => ipcRenderer.invoke('ai:settings'),
     save: (patch) => ipcRenderer.invoke('ai:save', patch),
@@ -25,6 +27,14 @@ contextBridge.exposeInMainWorld('board', {
     contextWindow: (model) => ipcRenderer.invoke('ai:contextWindow', model),
     chat: (id, messages, channel) => ipcRenderer.invoke('ai:chat', id, messages, channel),
     chatCancel: (channel) => ipcRenderer.invoke('ai:chatCancel', channel),
+  },
+  // Text to speech for the live commentary (an OpenAI-compatible endpoint).
+  tts: {
+    settings: () => ipcRenderer.invoke('tts:settings'),
+    save: (patch) => ipcRenderer.invoke('tts:save', patch),
+    speak: (text, opts) => ipcRenderer.invoke('tts:speak', text, opts),
+    models: () => ipcRenderer.invoke('tts:models'),
+    voices: (model) => ipcRenderer.invoke('tts:voices', model),
   },
   loadThemes: () => ipcRenderer.invoke('themes:load'),
   music: {

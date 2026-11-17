@@ -79,8 +79,14 @@ function setAnnotate(on) {
 
 // --- Reading aloud ----------------------------------------------------------
 // The computer's own speech (its installed voices): nothing is sent anywhere.
+// Or a speech server: an OpenAI-compatible text-to-speech endpoint set in
+// Settings → AI, chosen as the voice "Speech server"; each comment's words
+// go to it and the sound it answers with is played.
 const cmCanSpeak = typeof window.speechSynthesis !== 'undefined' && typeof window.SpeechSynthesisUtterance !== 'undefined';
 const cmVoices = () => (cmCanSpeak ? window.speechSynthesis.getVoices() : []);
+const CM_SERVER = 'server:'; // the voice that is the speech server
+const cmUsesServer = () => cm.voice === CM_SERVER;
+const cmCanRead = () => cmCanSpeak || cmUsesServer() || Boolean(window.board?.tts);
 
 // Chess notation as it is said: "Nf3" is "knight f3", "O-O" castles.
 function cmSpoken(text) {
@@ -102,42 +108,98 @@ function cmSpoken(text) {
 // further comment is asked for while one is waiting, so the commentary does
 // not fall behind the game. A comment played from its ▶ button, or the
 // voice test, is said at once.
+// The announcer (announcer.js) speaks with the same voice: its short lines
+// and the comments take turns, its own first (they are about what has just
+// happened), and a line that has waited too long is dropped.
 function speakCommentary(text, { force = false } = {}) {
-  if (!cmCanSpeak || (!cm.speak && !force) || !String(text ?? '').trim()) return;
-  const synth = window.speechSynthesis;
-  if (force) { cm.pendingSpeech = ''; synth.cancel(); }
+  if (!cmCanRead() || (!cm.speak && !force) || !String(text ?? '').trim()) return;
+  if (force) { cm.pendingSpeech = ''; stopSpeaking(); }
   else if (cm.speaking) { cm.pendingSpeech = text; renderCommentary(); return; }
+  cmSay(text, { voice: cm.voice, rate: cm.rate, comment: true });
+}
+// Says it now, with this voice (a computer voice by name, '' the
+// computer's own, or the speech server) at this speed.
+function cmSay(text, { voice = '', rate = 1, pitch = 1, comment = false } = {}) {
+  if (voice === CM_SERVER) { speakFromServer(text, { rate, comment }); return; }
+  if (!cmCanSpeak) return;
+  const synth = window.speechSynthesis;
   const u = new SpeechSynthesisUtterance(cmSpoken(text));
-  const voice = cmVoices().find((v) => v.name === cm.voice);
-  if (voice) { u.voice = voice; u.lang = voice.lang; }
-  u.rate = cm.rate;
+  const v = cmVoices().find((x) => x.name === voice);
+  if (v) { u.voice = v; u.lang = v.lang; }
+  u.rate = rate;
+  u.pitch = pitch;
   cm.speaking = true;
-  cm.spokenText = text;
+  cm.spokenText = comment ? text : '';
   cm.utterance = u; // kept, or it can be collected before it ends and say nothing of it
   u.onstart = () => renderCommentary();
-  u.onend = u.onerror = () => {
-    if (cm.utterance !== u) return; // cancelled for another
-    cm.utterance = null;
-    cm.speaking = false;
-    cm.spokenText = '';
+  u.onend = u.onerror = () => cmSpeechDone(u);
+  synth.speak(u);
+}
+// Something has been said (or could not be): an announcement waiting is
+// next, then the comment waiting.
+const cmAnnouncements = []; // { text, opts, at }
+const CM_ANNOUNCE_STALE = 6000;
+function cmSpeechDone(job) {
+  if (cm.utterance !== job) return; // cancelled for another
+  cm.utterance = null;
+  cm.speaking = false;
+  cm.spokenText = '';
+  while (cmAnnouncements.length && performance.now() - cmAnnouncements[0].at > CM_ANNOUNCE_STALE) cmAnnouncements.shift();
+  const ann = cmAnnouncements.shift();
+  if (ann) cmSay(ann.text, ann.opts);
+  else {
     const next = cm.pendingSpeech;
     cm.pendingSpeech = '';
     if (next) speakCommentary(next);
-    renderCommentary();
-    // The comment that was waiting is being said: the next may be asked for.
-    if (state) syncCommentary();
-  };
-  synth.speak(u);
+  }
+  renderCommentary();
+  // The comment that was waiting is being said: the next may be asked for.
+  if (state) syncCommentary();
+}
+// An announcement: said now, or as soon as what is being said ends. Only
+// the latest few wait: in a quick game the older ones are past.
+function cmAnnounce(text, opts) {
+  if (!String(text ?? '').trim()) return;
+  if (!cm.speaking) { cmSay(text, opts); return; }
+  cmAnnouncements.push({ text, opts, at: performance.now() });
+  while (cmAnnouncements.length > 2) cmAnnouncements.shift();
+}
+window.cmAnnounce = cmAnnounce;
+// The speech server: the sound is asked for, then played. It counts as
+// being said from the moment it is asked for, so the next waits.
+async function speakFromServer(text, { rate = 1, comment = false } = {}) {
+  const job = { server: true };
+  cm.utterance = job;
+  cm.speaking = true;
+  cm.spokenText = comment ? text : '';
+  renderCommentary();
+  try {
+    const { type, data } = await api.tts.speak(cmSpoken(text), { speed: rate });
+    if (cm.utterance !== job) return;
+    const url = URL.createObjectURL(new Blob([data], { type }));
+    const audio = new Audio(url);
+    job.audio = audio;
+    audio.onended = audio.onerror = () => { URL.revokeObjectURL(url); cmSpeechDone(job); };
+    await audio.play();
+    if (cm.note.startsWith('Speech server:')) { cm.note = ''; renderCommentary(); }
+  } catch (err) {
+    if (cm.utterance !== job) return;
+    cm.note = `Speech server: ${errorText(err)}`;
+    cmSpeechDone(job);
+  }
 }
 function stopSpeaking() {
+  const job = cm.utterance;
   cm.utterance = null;
   cm.pendingSpeech = '';
+  cmAnnouncements.length = 0;
+  if (job?.audio) { job.audio.pause(); job.audio.src = ''; }
   if (cmCanSpeak) window.speechSynthesis.cancel();
   cm.speaking = false;
   cm.spokenText = '';
 }
 function setSpeak(on) {
-  cm.speak = Boolean(on) && cmCanSpeak;
+  cm.speak = Boolean(on) && cmCanRead();
   saveCommentary();
   if (!cm.speak) stopSpeaking();
   else {
@@ -148,14 +210,103 @@ function setSpeak(on) {
   renderCommentary();
 }
 // The voices arrive a little after the page: the list is filled when they do.
+// The speech server is offered first after the computer's own choice.
 function fillCommentaryVoices() {
   const sel = $('#cm-voice');
   const voices = cmVoices();
   // The voices of the app's language first, then the rest.
   const lang = (navigator.language || 'en').slice(0, 2).toLowerCase();
   const sorted = [...voices].sort((a, b) => (b.lang.toLowerCase().startsWith(lang) - a.lang.toLowerCase().startsWith(lang)) || a.name.localeCompare(b.name));
-  sel.replaceChildren(el('option', { value: '', textContent: 'The computer’s voice' }), ...sorted.map((v) => el('option', { value: v.name, textContent: `${v.name} (${v.lang})` })));
-  sel.value = sorted.some((v) => v.name === cm.voice) ? cm.voice : '';
+  const opts = [];
+  if (cmCanSpeak) opts.push(el('option', { value: '', textContent: 'The computer’s voice' }));
+  opts.push(el('option', { value: CM_SERVER, textContent: 'Speech server (Settings → AI)', title: 'An OpenAI-compatible text-to-speech endpoint, set in Settings → AI: each comment is sent to it' }));
+  opts.push(...sorted.map((v) => el('option', { value: v.name, textContent: `${v.name} (${v.lang})` })));
+  sel.replaceChildren(...opts);
+  sel.value = cm.voice === CM_SERVER || sorted.some((v) => v.name === cm.voice) ? cm.voice : (cmCanSpeak ? '' : CM_SERVER);
+}
+
+// Settings → AI: the speech server.
+const ttsSay = (text, bad = false) => { $('#tts-note').innerHTML = text; $('#tts-note').classList.toggle('error', bad); };
+const TTS_NOTE = 'To use it, choose <b>Speech server</b> as the voice in the AI panel’s Commentary view, with <b>Read aloud</b> on. Each comment’s words are then sent to this endpoint and the sound it answers with is played.';
+// The lists of the speech endpoint's models and voices, as last asked for.
+const tts = { models: [], voices: [], openai: false };
+const TTS_OPENAI_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'];
+function showTtsSettings(t) {
+  $('#tts-url').value = t.baseUrl ?? '';
+  tts.openai = /api\.openai\.com/i.test(t.baseUrl ?? '');
+  fillChoices($('#tts-model'), tts.models, t.model ?? '', tts.openai ? 'gpt-4o-mini-tts (the default)' : 'The endpoint’s first speech model');
+  // A server that does not list its voices: OpenAI's names, which servers
+  // copying its API take.
+  fillChoices($('#tts-voice'), tts.voices.length ? tts.voices : TTS_OPENAI_VOICES, t.voice ?? '', tts.openai ? 'alloy (the default)' : 'The model’s own voice');
+  $('#tts-style').value = t.instructions ?? '';
+  $('#tts-key').value = '';
+  $('#tts-key').placeholder = t.hasKey ? 'A key is saved (type a new one to replace it)' : t.usesAiKey ? 'Using the OpenAI key above' : 'Not needed for most local servers';
+}
+async function fillTtsSettings() {
+  try { showTtsSettings(await api.tts.settings()); ttsSay(TTS_NOTE); } catch { return; }
+  refreshTtsModels({ quiet: true });
+}
+window.fillTtsSettings = fillTtsSettings;
+async function saveTts(patch) {
+  try { showTtsSettings(await api.tts.save(patch)); return true; } catch (err) { ttsSay(ttsEscape(errorText(err)), true); return false; }
+}
+const ttsEscape = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// The endpoint's models (its speech ones, when it says which) and the
+// chosen model's voices, into the lists: quietly when the settings open,
+// saying what was found when Refresh is pressed.
+async function refreshTtsModels({ quiet = false } = {}) {
+  const btn = $('#tts-check');
+  btn.disabled = true;
+  if (!quiet) ttsSay('Asking the speech endpoint for its models…');
+  try {
+    const { models, voices } = await api.tts.models();
+    tts.models = models;
+    tts.voices = voices;
+    showTtsSettings(await api.tts.settings());
+    // The model chosen may have voices of its own (oMLX lists them by model).
+    if ($('#tts-model').value) await refreshTtsVoices();
+    const list = (xs) => `${xs.slice(0, 4).map(ttsEscape).join(', ')}${xs.length > 4 ? ', …' : ''}`;
+    if (!quiet || !models.length) {
+      ttsSay(models.length
+        ? `Connected: ${models.length} speech model${models.length === 1 ? '' : 's'} (${list(models)})${tts.voices.length ? ` and ${tts.voices.length} voice${tts.voices.length === 1 ? '' : 's'}` : ''}. Choose from the lists. ${TTS_NOTE}`
+        : 'Connected, but the endpoint lists no models.', !models.length);
+    }
+  } catch (err) { if (!quiet) ttsSay(ttsEscape(errorText(err)), true); }
+  btn.disabled = false;
+}
+async function refreshTtsVoices() {
+  try {
+    tts.voices = await api.tts.voices($('#tts-model').value);
+    showTtsSettings(await api.tts.settings());
+  } catch { /* the list stays as it was */ }
+}
+if (window.board?.tts) {
+  $('#tts-url').addEventListener('change', async (e) => { tts.models = []; tts.voices = []; if (await saveTts({ baseUrl: e.target.value })) refreshTtsModels({ quiet: true }); });
+  // Another model: its voices.
+  $('#tts-model').addEventListener('change', async (e) => { if (await saveTts({ model: e.target.value })) refreshTtsVoices(); });
+  $('#tts-voice').addEventListener('change', (e) => saveTts({ voice: e.target.value }));
+  $('#tts-style').addEventListener('change', (e) => saveTts({ instructions: e.target.value }));
+  $('#tts-key').addEventListener('change', async (e) => { if (e.target.value && await saveTts({ key: e.target.value })) refreshTtsModels({ quiet: true }); });
+  $('#tts-check').onclick = async () => { if (await saveTts({ baseUrl: $('#tts-url').value })) refreshTtsModels(); };
+  $('#tts-test').onclick = async () => {
+    const btn = $('#tts-test');
+    btn.disabled = true;
+    ttsSay('Asking the speech endpoint…');
+    const ok = await saveTts({ baseUrl: $('#tts-url').value, model: $('#tts-model').value, voice: $('#tts-voice').value, instructions: $('#tts-style').value });
+    if (ok) {
+      try {
+        const { type, data } = await api.tts.speak('White plays knight f3, and Black answers with a solid move. The centre is still contested.', { speed: cm.rate });
+        const url = URL.createObjectURL(new Blob([data], { type }));
+        const audio = new Audio(url);
+        audio.onended = () => URL.revokeObjectURL(url);
+        await audio.play();
+        ttsSay(`Connected: playing ${Math.round(data.length / 1024)} KB of ${ttsEscape(type)}. ${TTS_NOTE}`);
+      } catch (err) { ttsSay(ttsEscape(errorText(err)), true); }
+    }
+    btn.disabled = false;
+  };
+} else {
+  for (const id of ['#tts-url', '#tts-model', '#tts-voice', '#tts-style', '#tts-key', '#tts-test', '#tts-check']) $(id).disabled = true;
 }
 
 const CM_SYSTEM = `You are a chess commentator calling a game live for viewers, the way a grandmaster does on a broadcast: knowledgeable, lively, clear.
@@ -396,7 +547,7 @@ function updateCmRow(c) {
   if (r.row.className !== cls) r.row.className = cls;
   if (r.label.textContent !== c.label) r.label.textContent = c.label;
   aicSoftText(r.body, c.text); // the newest words fade in; the rest stay put
-  r.say.hidden = !(cmCanSpeak && c.text && !c.live && !c.error);
+  r.say.hidden = !(cmCanRead() && c.text && !c.live && !c.error);
   r.again.hidden = !c.error;
   r.again.disabled = cm.busy;
 }
@@ -456,12 +607,12 @@ function renderCommentary() {
   spk.setAttribute('aria-pressed', String(cm.speak));
   spk.classList.toggle('on', cm.speak);
   spk.classList.toggle('speaking', Boolean(cm.speaking));
-  spk.disabled = !cmCanSpeak;
-  spk.title = !cmCanSpeak ? 'This computer has no speech to read with' : cm.speak ? 'Reading the commentary aloud: click to stop' : 'Read the commentary aloud';
+  spk.disabled = !cmCanRead();
+  spk.title = !cmCanRead() ? 'This computer has no speech to read with' : cm.speak ? 'Reading the commentary aloud: click to stop' : 'Read the commentary aloud';
   $('#cm-annotate').checked = cm.annotate;
   $('#cm-speak').checked = cm.speak;
-  $('#cm-speak').disabled = !cmCanSpeak;
-  for (const id of ['#cm-voice', '#cm-rate', '#cm-test']) $(id).disabled = !cmCanSpeak;
+  $('#cm-speak').disabled = !cmCanRead();
+  for (const id of ['#cm-voice', '#cm-rate', '#cm-test']) $(id).disabled = !cmCanRead();
   $('#cm-rate').value = String(cm.rate);
   // The AI panel's Commentary view: all of it, and the controls.
   $('#cm-on').checked = cm.on;
@@ -510,14 +661,14 @@ $('#cm-off').onclick = () => setCommentary(false);
 $('#cm-annotate').onchange = (e) => setAnnotate(e.target.checked);
 $('#cm-speak').onchange = (e) => setSpeak(e.target.checked);
 $('#cm-speak-btn').onclick = () => setSpeak(!cm.speak);
-$('#cm-voice').onchange = (e) => { cm.voice = e.target.value; saveCommentary(); };
+$('#cm-voice').onchange = (e) => { stopSpeaking(); cm.voice = e.target.value; saveCommentary(); renderCommentary(); };
 $('#cm-rate').onchange = (e) => { cm.rate = +e.target.value || 1; saveCommentary(); };
 $('#cm-test').onclick = () => speakCommentary('White plays Nf3, and Black answers with a solid move. The centre is still contested.', { force: true });
+fillCommentaryVoices();
 if (cmCanSpeak) {
-  fillCommentaryVoices();
   window.speechSynthesis.addEventListener?.('voiceschanged', fillCommentaryVoices);
   // Nothing is left talking when the window goes.
-  window.addEventListener('beforeunload', () => window.speechSynthesis.cancel());
+  window.addEventListener('beforeunload', () => stopSpeaking());
 }
 
 showAiView(localStorage.getItem('aiView') === 'commentary' ? 'commentary' : 'chat');

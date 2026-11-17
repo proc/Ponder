@@ -991,6 +991,30 @@
         </div>
         <p class="set-foot">Moves, captures, castling, check, promotion, the start and end of a game, low time and illegal moves. The sounds follow the theme.</p>
 
+        <h3 class="set-group">Announcer</h3>
+        <div class="set-card" id="ann-card">
+          <label class="set-row" for="ann-on" title="A quick voice for the game being played, with no AI: the moves, the score when it swings, mates, the opening, low time, the start and the end"><span class="set-label">Announce the game <span class="set-sub">moves, score swings and more, said aloud as they happen</span></span><input type="checkbox" class="lx-switch" id="ann-on" role="switch"></label>
+          <div class="set-row"><label class="set-label" for="ann-personality">Personality <span class="set-sub" id="ann-personality-sub"></span></label>
+            <select id="ann-personality"></select></div>
+          <div class="set-row"><label class="set-label" for="ann-moves">Moves</label>
+            <select id="ann-moves"><option value="all">Every move</option><option value="key">Captures, checks, castling, promotions</option><option value="none">None</option></select></div>
+          <label class="set-row" for="ann-who"><span class="set-label">Say who moved <span class="set-sub">“Magnus: knight f3”</span></span><input type="checkbox" class="lx-switch" id="ann-who" role="switch"></label>
+          <div class="set-row"><label class="set-label" for="ann-swing" title="When the score (the playing engines’ own evaluations, or the analysis when it is on) moves by this much and who stands better changes: “White has a clear advantage”, “A blunder! Black is winning”">Score swings</label>
+            <select id="ann-swing"><option value="0">Never</option><option value="0.7">Of 0.7 pawns or more</option><option value="1">Of 1 pawn or more</option><option value="1.5">Of 1.5 pawns or more</option><option value="2">Of 2 pawns or more</option><option value="3">Of 3 pawns or more</option></select></div>
+          <label class="set-row" for="ann-mates"><span class="set-label">A mate found <span class="set-sub">“White has mate in 3!”</span></span><input type="checkbox" class="lx-switch" id="ann-mates" role="switch"></label>
+          <label class="set-row" for="ann-opening"><span class="set-label">The opening</span><input type="checkbox" class="lx-switch" id="ann-opening" role="switch"></label>
+          <label class="set-row" for="ann-lowtime"><span class="set-label">Low on time <span class="set-sub">a player at the board under 10 seconds</span></span><input type="checkbox" class="lx-switch" id="ann-lowtime" role="switch"></label>
+          <label class="set-row" for="ann-start"><span class="set-label">The players at the start</span><input type="checkbox" class="lx-switch" id="ann-start" role="switch"></label>
+          <label class="set-row" for="ann-end"><span class="set-label">How the game ended <span class="set-sub">“Stockfish wins by checkmate”</span></span><input type="checkbox" class="lx-switch" id="ann-end" role="switch"></label>
+          <label class="set-row" for="ann-names"><span class="set-label">Use the players’ names <span class="set-sub">in place of White and Black</span></span><input type="checkbox" class="lx-switch" id="ann-names" role="switch"></label>
+          <label class="set-row" for="ann-captions"><span class="set-label">Show it over the board <span class="set-sub">what is said, for a moment</span></span><input type="checkbox" class="lx-switch" id="ann-captions" role="switch"></label>
+          <div class="set-row"><label class="set-label" for="ann-voice">Voice</label>
+            <span class="set-ctl"><select id="ann-voice"></select>
+              <select id="ann-rate" aria-label="Speed"><option value="0.85">Slow</option><option value="1">Normal</option><option value="1.1">Brisk</option><option value="1.25">Fast</option><option value="1.45">Faster</option></select>
+              <button type="button" class="small" id="ann-test">Test</button></span></div>
+        </div>
+        <p class="set-foot">For games played on the board: yours, an engine’s, a Lichess game. Not tournament games. It takes turns with the AI’s live commentary when both speak; a line that has waited too long is dropped, so it keeps up with the game.</p>
+
         <h3 class="set-group">Music</h3>
         <div class="set-card">
           <label class="set-row" for="music-on"><span class="set-label">Play classical music <span class="set-sub" id="music-now"></span></span><input type="checkbox" class="lx-switch" id="music-on" role="switch"></label>
@@ -1023,6 +1047,13 @@
         <div class="set-card">
           <label class="set-row" for="bot-switch" title="Your engine can play several Lichess games at once. With this on, a game that starts while another of its games is on the board takes the board, with the versus screen; with it off, the new game only joins the row of small boards and you switch by clicking it"><span class="set-label">Switch the board to your engine's new game <span class="set-sub">when it starts another while one is on the board</span></span><input type="checkbox" class="lx-switch" id="bot-switch" role="switch"></label>
         </div>
+
+        <h3 class="set-group">Screen</h3>
+        <div class="set-card">
+          <div class="set-row"><label class="set-label" for="keep-awake" title="Stops the screensaver and the display going to sleep">Keep the screen awake <span class="set-sub">no screensaver, no display sleep</span></label>
+            <select id="keep-awake"><option value="never">Never</option><option value="game">While a game is played</option><option value="always">Always, while Ponder is open</option></select></div>
+        </div>
+        <p class="set-foot">“While a game is played” counts a game on the board with a clock or an engine moving, a live Lichess game, and a tournament running.</p>
       </div>
 
       <div class="settings-pane" data-pane="appearance" hidden>
@@ -1051,7 +1082,7 @@
           </div>
           <label class="set-row" for="board-3d" title="The board and the pieces drawn in 3D, seen from your side at an angle, with light and shadows. Click or drag the pieces as on the flat board"><span class="set-label">3D board <span class="set-sub">the board and pieces in 3D</span></span><input type="checkbox" class="lx-switch" id="board-3d" role="switch"></label>
           <label class="set-row" for="board-3d-auto" title="With the 3D board, the camera glides in on each move as it is played (closer for a capture or a check), holds a moment and glides back to your view. Turning the board yourself takes over until the next move. Also the camera button on the board"><span class="set-label">Auto camera <span class="set-sub">the 3D camera follows each move</span></span><input type="checkbox" class="lx-switch" id="board-3d-auto" role="switch"></label>
-          <label class="set-row" for="board-3d-fx" title="With the 3D board, a burst where a piece is taken, a different one each time: fire and smoke, magic plasma, shadow clones, sparks or frost"><span class="set-label">Capture effects <span class="set-sub">a burst of fire, plasma, shadows… on each capture</span></span><input type="checkbox" class="lx-switch" id="board-3d-fx" role="switch"></label>
+          <label class="set-row" for="board-3d-fx" title="With the 3D board, a burst where a piece is taken, a different one each time: fire and smoke, magic plasma, shadow clones, sparks, frost or ice, each with its own sound"><span class="set-label">Capture effects <span class="set-sub">a burst of fire, plasma, shadows… on each capture</span></span><input type="checkbox" class="lx-switch" id="board-3d-fx" role="switch"></label>
           <label class="set-row" for="glass-board" title="The board and the pieces in the same frosted glass as the panels: see-through squares over a wash of colour, and pieces of glass with a bright edge and a sheen"><span class="set-label">Glassify board <span class="set-sub">glass squares and glass pieces</span></span><input type="checkbox" class="lx-switch" id="glass-board" role="switch"></label>
           <label class="set-row" for="attack-marks" title="A red mark on the corner of each piece that more enemy pieces attack than its own side defends, with the difference"><span class="set-label">Mark pieces with more attackers than defenders</span><input type="checkbox" class="lx-switch" id="attack-marks" role="switch"></label>
           <label class="set-row" for="result-card"><span class="set-label">Show the result on the board when a game ends</span><input type="checkbox" class="lx-switch" id="result-card" role="switch"></label>
@@ -1125,15 +1156,27 @@
         <div class="set-card">
         <label class="row" title="Who runs the model. Each keeps its own model and API key.">Provider <select id="ai-provider"></select></label>
         <label class="row" id="ai-url-row" title="An OpenAI-compatible API. localhost:8000 is enough for a local server.">Endpoint <input type="text" id="ai-url" spellcheck="false" autocomplete="off" placeholder="http://localhost:8000/v1"></label>
-        <label class="row" title="The model to ask. Empty: the first model the endpoint lists.">Model
-          <span class="ai-model"><input type="text" id="ai-model" spellcheck="false" autocomplete="off" list="ai-models" placeholder="The endpoint's first model">
-            <datalist id="ai-models"></datalist>
-            <button type="button" class="small" id="ai-check" title="Ask the endpoint which models it has">Check</button></span></label>
+        <label class="row" title="The model to ask, from those the endpoint or provider lists (Refresh asks again).">Model
+          <span class="ai-model"><select id="ai-model" aria-label="Model"></select>
+            <button type="button" class="small" id="ai-check" title="Ask the endpoint again which models it has">Refresh</button></span></label>
         <label class="row" title="How many tokens the model can take in at once, for the context meter in the AI panel. Leave empty to use what the provider reports (Claude, Google AI, LM Studio, llama.cpp and Ollama report it; OpenAI does not).">Context window
           <span class="ai-ctx-set"><input type="number" id="ai-ctx-size" min="1000" step="1000" inputmode="numeric" placeholder="As the provider reports"> tokens</span></label>
         <label class="row" id="ai-key-row" title="Kept encrypted on this computer, never shown again. Local servers usually need none.">API key <input type="password" id="ai-key" autocomplete="off" placeholder="Not needed for most local servers"></label>
         </div>
         <p class="hint" id="ai-note">Nothing is sent until you press AI annotate or send a message in the AI panel: then the game on the board goes to this endpoint, as PGN, with the position shown. It waits for the answer as long as the model takes; Stop cancels it.</p>
+        <h3 class="set-group">Commentary voice</h3>
+        <div class="set-card">
+        <label class="row" title="An OpenAI-compatible text-to-speech API (POST …/v1/audio/speech): OpenAI's, or a server of your own such as Kokoro-FastAPI, openedai-speech or LocalAI. localhost:8880 is enough for a local server.">Endpoint <input type="text" id="tts-url" spellcheck="false" autocomplete="off" placeholder="https://api.openai.com/v1"></label>
+        <label class="row" title="The speech model, from those the endpoint lists (its speech models, when it says which). Refresh asks again.">Model
+          <span class="ai-model"><select id="tts-model" aria-label="Speech model"></select>
+            <button type="button" class="small" id="tts-check" title="Ask the endpoint again which models it has, and their voices">Refresh</button></span></label>
+        <label class="row" title="The voice, from those the endpoint lists for the model (OpenAI's are known: alloy, ash, coral, nova, …).">Voice
+          <span class="ai-model"><select id="tts-voice" aria-label="Voice"></select>
+            <button type="button" class="small" id="tts-test" title="Hear the voice: a sentence is sent to the endpoint">Test</button></span></label>
+        <label class="row" title="How to speak, for models that take it (gpt-4o-mini-tts): e.g. “an excited sports commentator, quick and lively”. Leave empty for other models: some refuse it.">Style <input type="text" id="tts-style" spellcheck="false" autocomplete="off" placeholder="Optional, for gpt-4o-mini-tts"></label>
+        <label class="row" title="Kept encrypted on this computer, never shown again. OpenAI's endpoint uses the OpenAI key above when this is empty; local servers usually need none.">API key <input type="password" id="tts-key" autocomplete="off" placeholder="Not needed for most local servers"></label>
+        </div>
+        <p class="hint" id="tts-note">To use it, choose <b>Speech server</b> as the voice in the AI panel's Commentary view, with <b>Read aloud</b> on. Each comment's words are then sent to this endpoint and the sound it answers with is played.</p>
         <h3 class="set-group">Commentator</h3>
         <div class="set-card">
           <label class="set-row" for="cmt-on" title="A little pixel-art chess piece floats over the window and says each live comment in a comic speech bubble, in place of the commentary card beside the board"><span class="set-label">Show a commentator character <span class="set-sub">that says the live commentary</span></span><input type="checkbox" class="lx-switch" id="cmt-on" role="switch"></label>
@@ -1409,6 +1452,7 @@
   <script src="ai-chat.js"></script>
   <script src="commentary.js"></script>
   <script src="commentator.js"></script>
+  <script src="announcer.js"></script>
   <script src="easter.js"></script>
   <script src="menu.js"></script>
   <script type="module" src="board3d.js"></script>

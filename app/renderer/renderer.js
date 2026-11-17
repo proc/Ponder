@@ -1103,6 +1103,7 @@ function checkLowTime(side, ms) {
   else if (lowTime[side] === false && ms > 0) {
     lowTime[side] = true;
     sounds.play('lowtime');
+    window.announcer?.onLowTime(side);
   }
 }
 
@@ -2468,7 +2469,29 @@ function endSound(next) {
   return humanWon ? 'win' : 'loss';
 }
 
+// Keeping the screen awake (Settings → General → Screen): never, while a
+// game is played (on the board, a live Lichess game, a tournament), or always.
+let keepAwake = 'game';
+try { keepAwake = localStorage.getItem('keepAwake') || 'game'; } catch { /* the default */ }
+let awakeNow = false;
+function syncKeepAwake() {
+  const playing = Boolean(state && (state.active || state.external?.live)) || $('#tab-tournament')?.classList.contains('live');
+  const want = keepAwake === 'always' || (keepAwake === 'game' && playing);
+  if (want === awakeNow) return;
+  awakeNow = want;
+  window.board.keepAwake?.(want).catch(() => { awakeNow = !want; });
+}
+setInterval(syncKeepAwake, 5000); // a tournament's tab, which has no state of its own here
+$('#keep-awake').value = keepAwake;
+$('#keep-awake').onchange = (e) => {
+  keepAwake = e.target.value;
+  try { localStorage.setItem('keepAwake', keepAwake); } catch { /* not kept */ }
+  syncKeepAwake();
+};
+syncKeepAwake();
+
 function playStateSounds(prev, next, newGame) {
+  window.announcer?.onState(prev, next, newGame); // announcer.js says it too
   // Tournament games go by too fast to hear every move.
   if (next.external?.kind === 'tournament') return;
   if (newGame) {
@@ -2705,6 +2728,7 @@ function applyState(next) {
   // A Lichess game is shown from your engine's side.
   if (newGame && next.external) flipped = next.external.side === 'black';
   if (prev) playStateSounds(prev, next, newGame);
+  syncKeepAwake();
   if (gameOverFor != null && (newGame || next.result === '*')) hideGameOver();
   // The board's game going on (or another taking the board) ends its result
   // screen; not that of a game that ended off the board.
@@ -4190,6 +4214,7 @@ for (const tab of document.querySelectorAll('.settings-tabs .tab')) tab.onclick 
 
 async function openSettings(pane) {
   $('#sound-on').checked = sounds.enabled;
+  window.refreshAnnouncerSettings?.();
   $('#moves-figurines').checked = movesPrefs.figurines;
   $('#anim-speed').value = animSpeed;
   $('#result-card').checked = resultCard;

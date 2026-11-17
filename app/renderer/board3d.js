@@ -568,7 +568,8 @@ let capturePlan = null; // { fx, delay }: the effect of the capture being drawn
 
 // ---------------------------------------------------------------------------
 // Capture effects: a burst where a piece is taken, a different one picked at
-// random each time (fire and smoke, plasma, shadow clones, sparks, frost).
+// random each time (fire and smoke, plasma, shadow clones, sparks, frost,
+// ice), each with its own sound.
 // ---------------------------------------------------------------------------
 let captureFx = (() => { try { return localStorage.getItem('board3dFx') !== 'off'; } catch { return true; } })();
 let fxGroup = null;
@@ -621,6 +622,15 @@ function particleMaterial(additive) {
     blending,
   }));
 }
+let iceTemplate = null;
+function iceMaterial() {
+  iceTemplate ??= new THREE.MeshStandardMaterial({
+    color: 0x9edcff, emissive: 0x2a7fd0, emissiveIntensity: 0.45, roughness: 0.08, metalness: 0.1,
+    transparent: true, opacity: 0.75, depthWrite: false,
+  });
+  return iceTemplate.clone(); // the same program as the one kept
+}
+const iceGeo = {};
 let ghostTemplate = null;
 function ghostMaterial() {
   ghostTemplate ??= new THREE.MeshStandardMaterial({
@@ -638,11 +648,12 @@ function warmUp() {
   const box = new THREE.BoxGeometry(0.01, 0.01, 0.01);
   const ghost = ghostMaterial();
   ghostMaterial(); // and the template itself, kept
+  const ice = iceMaterial();
   const tmp = new THREE.Group();
   tmp.add(new THREE.Points(g, particleMaterial(false)), new THREE.Points(g, particleMaterial(true)), new THREE.Mesh(box, ghost),
-    new THREE.Mesh(box, ghostTemplate));
+    new THREE.Mesh(box, ghostTemplate), new THREE.Mesh(box, ice), new THREE.Mesh(box, iceTemplate));
   scene.add(tmp);
-  renderer.compileAsync(scene, camera).catch(() => {}).finally(() => { scene.remove(tmp); g.dispose(); box.dispose(); ghost.dispose(); });
+  renderer.compileAsync(scene, camera).catch(() => {}).finally(() => { scene.remove(tmp); g.dispose(); box.dispose(); ghost.dispose(); ice.dispose(); });
 }
 function lightBoard() {
   const { color } = cssColor('--light-sq', '#f0d9b5');
@@ -815,6 +826,60 @@ const CAPTURE_EFFECTS = {
     emit(1, true, () => ({ life: 0.3, p: new THREE.Vector3(at.x, 0.4, at.z), v: new THREE.Vector3(), s0: 0.9, s1: 1.8, c0: col(0x70b8ff), a: 0.5 }));
     ring(at, 0x2a80ff, 450, 2.2);
   },
+  ice(at, letter) {
+    // The piece taken freezes in a block of ice, which cracks and shatters.
+    const top = PIECE_TOPS[(letter || 'p').toLowerCase()] ?? 0.62;
+    const mat = iceMaterial();
+    const block = new THREE.Mesh(iceGeo.block ??= new THREE.BoxGeometry(0.78, 1, 0.78), mat);
+    block.position.set(at.x, 0, at.z);
+    fxGroup.add(block);
+    const h = top + 0.12;
+    tweens.add({ start: performance.now(), ms: 320, step: (t) => {
+      const e = 1 - Math.pow(1 - Math.min(1, t * 2.2), 3);
+      block.scale.set(0.6 + 0.4 * e, h * e, 0.6 + 0.4 * e);
+      block.position.y = (h * e) / 2;
+      block.rotation.y = 0.04 * Math.sin(t * 40) * t; // straining as it is about to go
+      if (t >= 1) { fxGroup.remove(block); mat.dispose(); }
+    } });
+    // Shards thrown out when it cracks.
+    setTimeout(() => {
+      if (!active) return;
+      const shardMat = iceMaterial();
+      shardMat.opacity = 0.85;
+      const shards = [];
+      for (let i = 0; i < 34; i++) {
+        const m = new THREE.Mesh(iceGeo.shard ??= new THREE.TetrahedronGeometry(0.12), shardMat);
+        m.position.set(at.x + rand(-0.3, 0.3), rand(0.05, h), at.z + rand(-0.3, 0.3));
+        m.scale.setScalar(rand(0.5, 1.5));
+        m.rotation.set(rand(0, 6), rand(0, 6), rand(0, 6));
+        const v = new THREE.Vector3(m.position.x - at.x, 0, m.position.z - at.z).normalize().multiplyScalar(rand(1.2, 3));
+        v.y = rand(1.2, 3.2);
+        shards.push({ m, v, spin: new THREE.Vector3(rand(-9, 9), rand(-9, 9), rand(-9, 9)) });
+        fxGroup.add(m);
+      }
+      let last = performance.now();
+      tweens.add({ start: last, ms: 1300, step: (t) => {
+        const now = performance.now();
+        const dt = Math.min(0.05, (now - last) / 1000);
+        last = now;
+        for (const s of shards) {
+          s.v.y -= 9 * dt;
+          s.m.position.addScaledVector(s.v, dt);
+          if (s.m.position.y < 0.04 && s.v.y < 0) { s.m.position.y = 0.04; s.v.y *= -0.3; s.v.x *= 0.5; s.v.z *= 0.5; s.spin.multiplyScalar(0.5); }
+          s.m.rotation.x += s.spin.x * dt;
+          s.m.rotation.y += s.spin.y * dt;
+        }
+        shardMat.opacity = 0.85 * (1 - Math.max(0, t - 0.55) / 0.45);
+        if (t >= 1) { for (const s of shards) fxGroup.remove(s.m); shardMat.dispose(); }
+      } });
+      emit(40, true, () => ({ // glittering ice dust
+        life: rand(0.5, 1), p: onDisc(at, 0.3, rand(0.1, h)), v: outward(rand(0.5, 1.5), rand(0.3, 1.4)),
+        grav: -2, drag: 1.5, s0: rand(0.05, 0.09), s1: 0.02, c0: col(0xe8faff), c1: col(0x5fc4f0), a: 1,
+      }));
+      ring(at, 0x58c8f5, 600, 2.2);
+      requestRender();
+    }, 300);
+  },
   frost(at) {
     emit(70, true, () => ({ // shards thrown up, falling back
       delay: rand(0, 0.1), life: rand(1, 1.6), p: onDisc(at, 0.2, 0.3), v: outward(rand(0.6, 1.6), rand(1.5, 3)),
@@ -888,6 +953,35 @@ const TRAILS = {
       grav: -6, drag: 1, bounce: 0.4, s0: rand(0.07, 0.11), s1: 0.02, c0: col(0x7fd0ff), c1: col(0x1450ff), a: 1,
     }));
   },
+  ice(mesh, ms) {
+    // Icicles spring up from the board behind the piece, then sink away.
+    const n = Math.max(5, Math.round(ms / 40));
+    for (let i = 0; i < n; i++) {
+      setTimeout(() => {
+        if (!active || !mesh.parent) return;
+        for (let j = 0; j < 2; j++) {
+          const mat = iceMaterial();
+          const spike = new THREE.Mesh(iceGeo.spike ??= new THREE.ConeGeometry(0.09, 1, 6).translate(0, 0.5, 0), mat);
+          const a = Math.random() * Math.PI * 2, d = rand(0.05, 0.28);
+          spike.position.set(mesh.position.x + Math.cos(a) * d, 0, mesh.position.z + Math.sin(a) * d);
+          spike.rotation.set(rand(-0.25, 0.25), 0, rand(-0.25, 0.25));
+          const tall = rand(0.25, 0.6);
+          fxGroup.add(spike);
+          tweens.add({ start: performance.now(), ms: 1100, step: (t) => {
+            const grow = Math.min(1, t / 0.12);
+            const sink = Math.max(0, (t - 0.55) / 0.45);
+            spike.scale.set(1 - 0.5 * sink, tall * (1 - Math.pow(1 - grow, 3)) * (1 - sink), 1 - 0.5 * sink);
+            if (t >= 1) { fxGroup.remove(spike); mat.dispose(); }
+          } });
+        }
+        requestRender();
+      }, along(ms * 0.95, i / n));
+    }
+    emit(30, true, () => ({
+      delay: along(ms / 1000), life: rand(0.5, 0.9), p: new THREE.Vector3(), born: from(mesh, 0.15, 0.05, 0.4),
+      v: outward(rand(0.05, 0.3), rand(0.1, 0.5)), drag: 1, s0: rand(0.05, 0.08), s1: 0.02, c0: col(0xe8faff), c1: col(0x5fc4f0), a: 1,
+    }));
+  },
   frost(mesh, ms) {
     const span = ms / 1000, top = pieceTop(mesh);
     emit(80, true, () => ({ // ice crystals shed on the way
@@ -911,8 +1005,13 @@ const from = (mesh, r, y0, y1) => (q) => {
   const a = Math.random() * Math.PI * 2, d = r * Math.sqrt(Math.random());
   q.p.set(mesh.position.x + Math.cos(a) * d, mesh.position.y + rand(y0, y1), mesh.position.z + Math.sin(a) * d);
 };
+// Each effect's own sound (sounds.js), with the game's sounds.
+function fxSound(fx, part, dur) {
+  try { if (typeof sounds !== 'undefined') sounds.captureFx(fx, part, dur); } catch { /* silent */ }
+}
 function captureTrail(mesh, ms, fx) {
   if (!mesh || !TRAILS[fx]) return;
+  fxSound(fx, 'trail', ms / 1000);
   try { TRAILS[fx](mesh, ms); } catch (err) { console.error('3D capture trail:', err); }
   requestRender();
 }
@@ -931,6 +1030,7 @@ function captureEffect(sq, letter, name) {
   const [c, r] = display(sq);
   const at = new THREE.Vector3(cellX(c), 0, cellZ(r));
   const fx = CAPTURE_EFFECTS[name] ? name : pickEffect();
+  fxSound(fx, 'burst');
   try { CAPTURE_EFFECTS[fx](at, letter); } catch (err) { console.error('3D capture effect:', err); }
   requestRender();
 }

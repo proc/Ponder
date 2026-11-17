@@ -7,6 +7,7 @@
 const sounds = (() => {
   let ctx = null;
   let master = null;
+  let fxRoute = null; // while a capture effect's sound is set up: the main output, master being its own level
   let enabled = true;
   let volume = 0.7;
   let voice = 'wood';
@@ -44,7 +45,7 @@ const sounds = (() => {
       master = connectOutput(ctx);
     }
     if (ctx instanceof AudioContext && ctx.state === 'suspended') ctx.resume();
-    master.gain.value = volume * level[voice];
+    if (!fxRoute) master.gain.value = volume * level[voice];
     return ctx;
   }
 
@@ -204,6 +205,99 @@ const sounds = (() => {
   });
   const fbass = (f, at, dur, gain = 0.15) => fm(f, at, dur, { index: 3.4, gain, bright: 0.12 });
   const bell = (f, at, dur, gain = 0.07) => fm(f, at, dur, { ratio: 3.5, index: 1.5, gain, bright: 0.04, hold: 0.22 });
+
+  // The 3D board's capture effects (board3d.js): what travels with the piece
+  // taking (trail, for dur seconds) and the burst where it lands. They
+  // sound the same in every voice.
+  // A held note: a soft attack, held, and let go.
+  function pad(freq, start, dur, { type = 'sine', gain = 0.1, slideTo = null, attack = 0.05 } = {}) {
+    const c = audio();
+    const t = c.currentTime + start;
+    const osc = c.createOscillator();
+    const env = c.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t);
+    if (slideTo) osc.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(gain, t + Math.min(attack, dur * 0.5));
+    env.gain.setValueAtTime(gain, t + dur * 0.6);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    osc.connect(env).connect(master);
+    osc.start(t);
+    osc.stop(t + dur + 0.02);
+  }
+  // Noise swelling and fading through a filter (a roar, a hiss, wind).
+  const swell = (start, dur, type, from, to, gain, q = 0.7) => noiseThrough(start, dur, type, from, to, q, (g, t) => {
+    g.setValueAtTime(0.0001, t);
+    g.exponentialRampToValueAtTime(gain, t + Math.min(0.08, dur * 0.3));
+    g.exponentialRampToValueAtTime(0.0001, t + dur);
+  });
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  // Little ticks scattered over a span: crackling fire, ice, electricity.
+  const crackle = (start, dur, n, freq, gain) => {
+    for (let i = 0; i < n; i++) knock(start + Math.random() * dur, { freq: freq * rnd(0.7, 1.4), q: 3, gain: gain * rnd(0.4, 1), dur: rnd(0.008, 0.025), body: 0 });
+  };
+  // Tiny high notes: glass, ice, sparkles.
+  const tinkle = (start, dur, n, lo, hi, gain) => {
+    for (let i = 0; i < n; i++) tone(rnd(lo, hi), start + Math.random() * dur, rnd(0.05, 0.18), { gain: gain * rnd(0.4, 1) });
+  };
+  const FX_SOUNDS = {
+    fire: {
+      trail: (d) => { swell(0, d + 0.15, 'lowpass', 400, 1600, 0.6); crackle(0, d, 14, 2600, 0.35); },
+      burst: () => {
+        impact(0, { gain: 0.55, dur: 0.35, from: 2400, to: 160, low: 80 });  // the whoomp of it catching
+        swell(0.02, 1.3, 'lowpass', 1800, 220, 0.4);                        // the roar
+        crackle(0.05, 1.1, 26, 2400, 0.3);
+      },
+    },
+    plasma: {
+      trail: (d) => { pad(520, 0, d + 0.1, { gain: 0.05, slideTo: 1040 }); pad(523 * 1.5, 0, d + 0.1, { gain: 0.03, slideTo: 1560 }); tinkle(0, d, 8, 1800, 3600, 0.05); },
+      burst: () => {
+        [523.25, 659.25, 783.99, 1046.5, 1318.5, 1568].forEach((f, i) => bell(f, i * 0.045, 0.9, 0.035));
+        pad(1200, 0, 0.7, { type: 'triangle', gain: 0.05, slideTo: 300 });     // a falling "wahh"
+        tone(90, 0, 0.4, { gain: 0.3, slideTo: 45 });
+        swell(0, 0.9, 'bandpass', 3000, 7000, 0.08, 3);                         // shimmer
+      },
+    },
+    shadows: {
+      // A whoosh for each afterimage left behind.
+      trail: (d) => { const n = Math.max(3, Math.round(d / 0.08)); for (let i = 0; i < n; i++) whoosh(i * d / n, 0.16, 300, 1100, 0.4); },
+      burst: () => {
+        fm(55, 0, 1.1, { ratio: 1.5, index: 5, gain: 0.09, bright: 0.2 });       // a dark swell
+        [440, 415.3, 349.2, 311.1].forEach((f, i) => fm(f, 0.05 + i * 0.12, 0.5, { ratio: 1.01, index: 1.4, gain: 0.04, slideTo: f * 0.94 }));
+        whoosh(0, 0.5, 2000, 250, 0.3);
+        impact(0, { gain: 0.35, dur: 0.25, from: 1500, to: 120, low: 60 });
+      },
+    },
+    sparks: {
+      trail: (d) => { pad(110, 0, d + 0.08, { type: 'sawtooth', gain: 0.035 }); pad(113, 0, d + 0.08, { type: 'square', gain: 0.02 }); crackle(0, d, 18, 5000, 0.22); },
+      burst: () => {
+        pad(2600, 0, 0.22, { type: 'sawtooth', gain: 0.07, slideTo: 70, attack: 0.005 });  // the zap
+        impact(0, { gain: 0.45, dur: 0.2, from: 9000, to: 600, low: 0 });
+        crackle(0.02, 0.6, 30, 6000, 0.3);
+        tone(70, 0, 0.3, { gain: 0.3, slideTo: 40 });
+      },
+    },
+    frost: {
+      trail: (d) => { swell(0, d + 0.3, 'highpass', 5000, 7000, 0.12); tinkle(0, d, 6, 3000, 5200, 0.04); },
+      burst: () => {
+        swell(0, 1.4, 'bandpass', 1200, 400, 0.18, 1.2);                       // a cold wind
+        [1975.5, 2349.3, 2637, 3136, 3951].forEach((f, i) => bell(f, 0.02 + i * 0.07, 1, 0.035));
+        tinkle(0.05, 0.8, 12, 3500, 7000, 0.035);
+      },
+    },
+    ice: {
+      // Ice forming along the way: creaks and a rising whistle.
+      trail: (d) => { crackle(0, d, 14, 1400, 0.3); pad(1800, 0, d + 0.1, { gain: 0.025, slideTo: 3600 }); },
+      burst: () => {
+        crackle(0, 0.28, 10, 1100, 0.35);                                        // it freezes over, creaking
+        impact(0.3, { gain: 0.6, dur: 0.16, from: 9000, to: 1200, low: 0 });     // and cracks
+        knock(0.3, { freq: 3200, q: 0.8, gain: 0.4, dur: 0.12, body: 0 });
+        tinkle(0.31, 0.7, 28, 2500, 8000, 0.05);                                // shards everywhere
+        crackle(0.32, 0.6, 16, 4500, 0.2);
+      },
+    },
+  };
 
   // Each sound in every voice. Times are in seconds from now.
   const voices = {
@@ -370,13 +464,34 @@ const sounds = (() => {
           const at = i * gap;
           const real = offline.currentTime;
           Object.defineProperty(offline, 'currentTime', { value: real + at, configurable: true });
-          voices[voiceName][name]();
+          // "fx-fire-trail", "fx-ice-burst": a capture effect's sound.
+          const fx = name.match(/^fx-(\w+)-(trail|burst)$/);
+          if (fx) FX_SOUNDS[fx[1]][fx[2]](0.4);
+          else voices[voiceName][name]();
           delete offline.currentTime;
         }
       } finally {
         [ctx, master, voice] = saved;
       }
       return offline.startRendering();
+    },
+    // A capture effect's sound on the 3D board: its trail (for dur seconds)
+    // or its burst.
+    captureFx(name, part, dur = 0) {
+      log.push(`fx-${name}-${part}`);
+      if (log.length > 50) log.shift();
+      if (!enabled || volume === 0) return;
+      try {
+        const c = audio();
+        // The same loudness in every voice: its own level into the output.
+        const node = c.createGain();
+        node.gain.value = 0.75 * level.wood / level[voice];
+        node.connect(master);
+        fxRoute = master;
+        master = node;
+        try { FX_SOUNDS[name]?.[part]?.(dur); } finally { master = fxRoute; fxRoute = null; }
+        setTimeout(() => node.disconnect(), (dur + 3) * 1000);
+      } catch { /* no audio device: stay silent */ }
     },
     play(name) {
       log.push(name);

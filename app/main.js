@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard, safeStorage, shell, Menu, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, safeStorage, shell, Menu, protocol, net, powerSaveBlocker } = require('electron');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -375,6 +375,13 @@ ipcMain.handle('epd:open', async () => {
   return { name: path.basename(file), path: file, text: fs.readFileSync(file, 'utf8') };
 });
 
+// Keeping the screen on (no screensaver, no display sleep) while asked to.
+let awakeId = null;
+ipcMain.handle('power:keepAwake', (_e, on) => {
+  if (on && awakeId == null) awakeId = powerSaveBlocker.start('prevent-display-sleep');
+  else if (!on && awakeId != null) { powerSaveBlocker.stop(awakeId); awakeId = null; }
+  return awakeId != null;
+});
 ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)));
 ipcMain.handle('clipboard:read', () => clipboard.readText());
 
@@ -852,6 +859,65 @@ ipcMain.handle('ai:chat', async (_e, id, messages, channel = 'chat') => {
   }
 });
 ipcMain.handle('ai:chatCancel', (_e, channel = 'chat') => { aiChatRuns.get(String(channel))?.abort(); });
+
+// Speech for the live commentary from an OpenAI-compatible text-to-speech
+// endpoint, kept under "tts" in the AI settings: its address, model, voice,
+// speaking style and key (encrypted like the AI keys, never sent back to
+// the window). With no key of its own, OpenAI's endpoint uses the OpenAI
+// key of Settings → AI. Nothing is sent until a comment is read aloud with
+// "Speech server" as the voice, or Test is pressed.
+// The address defaults to OpenAI's; the model and voice are only what was
+// chosen ('' for the endpoint's own choice).
+const ttsOf = (s) => ({ baseUrl: ai.TTS_DEFAULTS.baseUrl, model: '', voice: '', ...(s.tts ?? {}) });
+const publicTts = (s) => {
+  const t = ttsOf(s);
+  return {
+    baseUrl: t.baseUrl, model: t.model, voice: t.voice, instructions: t.instructions ?? '',
+    hasKey: Boolean(t.key || t.plainKey), defaults: ai.TTS_DEFAULTS,
+    usesAiKey: !(t.key || t.plainKey) && /api\.openai\.com/i.test(t.baseUrl) && Boolean(aiSlot(s, 'openai').key || aiSlot(s, 'openai').plainKey),
+  };
+};
+ipcMain.handle('tts:settings', () => publicTts(loadAi()));
+ipcMain.handle('tts:save', async (_e, patch) => {
+  const s = loadAi();
+  s.tts ??= {};
+  patch = patch ?? {};
+  if (typeof patch.baseUrl === 'string') s.tts.baseUrl = ai.speechBase(patch.baseUrl);
+  for (const k of ['model', 'voice', 'instructions']) {
+    if (typeof patch[k] === 'string') { const v = patch[k].trim(); if (v) s.tts[k] = v; else delete s.tts[k]; }
+  }
+  if (typeof patch.key === 'string') {
+    delete s.tts.key;
+    delete s.tts.plainKey;
+    const key = patch.key.trim();
+    if (key && await canEncrypt()) s.tts.key = await encryptSecret(key);
+    else if (key) s.tts.plainKey = key;
+  }
+  saveAi(s);
+  return publicTts(s);
+});
+// The speech endpoint's key, or OpenAI's from Settings → AI for OpenAI.
+async function ttsKey(s, t) {
+  const key = await aiKey(t);
+  return key || (/api\.openai\.com/i.test(t.baseUrl) ? aiKey(aiSlot(s, 'openai')) : '');
+}
+ipcMain.handle('tts:speak', async (_e, text, opts) => {
+  const s = loadAi();
+  const t = ttsOf(s);
+  return ai.speech({ ...t, key: await ttsKey(s, t) }, String(text ?? ''), { speed: Number(opts?.speed) || 1, signal: AbortSignal.timeout(60000) });
+});
+// Its models and voices, for Check in Settings → AI.
+ipcMain.handle('tts:models', async () => {
+  const s = loadAi();
+  const t = ttsOf(s);
+  return ai.speechModels({ ...t, key: await ttsKey(s, t) }, { signal: AbortSignal.timeout(15000) });
+});
+// The voices of one model (the voices follow the model chosen).
+ipcMain.handle('tts:voices', async (_e, model) => {
+  const s = loadAi();
+  const t = ttsOf(s);
+  return ai.speechVoices({ ...t, key: await ttsKey(s, t), model: String(model ?? '') || t.model }, { signal: AbortSignal.timeout(15000) });
+});
 
 ipcMain.handle('lichess:save', async (_e, patch) => {
   const settings = loadLichess();

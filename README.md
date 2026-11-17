@@ -426,9 +426,12 @@ The model is chosen under **Settings → AI**:
   by default, for a local server such as oMLX, LM Studio, Ollama, llama.cpp
   or vLLM (`localhost:8000` is enough to type); any other OpenAI-compatible
   address works too.
-- **Model** – the model to ask. **Check** lists the models the provider
-  offers you (for OpenAI only its chat models, for Google its Gemini and
-  Gemma models). If you leave it empty, Ponder chooses:
+- **Model** – the model to ask, chosen from a list of the models the
+  provider offers you, fetched when the settings open; **Refresh** asks
+  again (for OpenAI only its chat models, for Google its Gemini and Gemma
+  models, and from a server that says what each model is for, such as
+  oMLX, not its speech or embedding models). With the first choice,
+  Ponder chooses:
   - a local server: the first model it lists;
   - Claude: `claude-opus-5-5`;
   - Google: a Gemini Flash model;
@@ -604,8 +607,89 @@ to hear it. Moves are said as words ("Nf3" as "knight f3", "O-O" as
 for it to finish, and no further comment is asked for while one is
 waiting, so the next covers all the moves played since and the voice keeps
 up with the game. A new game does not cut off the last game's summary; ▶ on a comment in the list reads that
-one again. The speech is made on the computer: no audio or text is sent
-anywhere for it.
+one again. With a voice of the computer, the speech is made on the
+computer: no audio or text is sent anywhere for it.
+
+The voice can instead be a **speech server**: any OpenAI-compatible
+text-to-speech endpoint (`POST …/v1/audio/speech`), OpenAI's own or one you
+run, such as Kokoro-FastAPI, openedai-speech or LocalAI. Set it under
+**Settings → AI → Commentary voice**: the endpoint (`localhost:8880` is
+enough for a local server), the model and the voice, each chosen from a
+list, an optional speaking style for models that take one
+(gpt-4o-mini-tts), and the API key, kept encrypted like the AI keys (with
+none, OpenAI's endpoint uses the OpenAI key above it). The model list is
+the endpoint's speech models (when it lists others too, the ones it says
+or whose names show are for speech), fetched when the settings open;
+**Refresh** asks again. The voice list is the chosen model's voices,
+where the server lists them (oMLX and Kokoro-FastAPI do; OpenAI's are
+known), else OpenAI's names, which servers copying its API take. With the
+first choice, the endpoint's first speech model and the model's own voice
+are used (OpenAI's defaults at OpenAI). A server that cannot make MP3 is
+asked for WAV. **Test** plays a sentence. Then choose **Speech server** as the voice in the Commentary
+view: each comment's words, with the moves said as words, are sent to the
+endpoint and the sound it answers with is played, at the speed chosen
+there. If the server cannot be reached, the reason shows under the
+commentary and the comment is skipped.
+
+### Announcer
+
+The **announcer** (**Settings → General → Announcer**, off at first) is a
+quick voice for the game being played, with no AI: it says what happens as
+it happens. Each part can be turned on or off:
+
+- **Moves**: every move, only captures, checks, castling and promotions,
+  or none. Said as words ("knight takes f7, check", "castles kingside",
+  "e takes d5"), optionally with who moved ("Magnus: knight f3").
+- **Score swings**: when the score moves by at least the amount chosen
+  (0.7 to 3 pawns, or never) and who stands better changes: "White has a
+  clear advantage", "The game is level". A swing of two pawns or more
+  against the side that just moved is called a blunder. The score is the
+  playing engines' own evaluation, or the analysis's when it is on (once
+  it has searched to depth 12).
+- **A mate found**: "Black has mate in 3!"
+- **The opening**, as it gets its name early in the game.
+- **Low on time**: a player at the board with under 10 seconds.
+- **The players at the start**, and **how the game ended** ("Stockfish
+  wins by checkmate", "Draw by threefold repetition").
+- **The players' names** in place of White and Black.
+- **Captions**: what is said shows over the foot of the board for a moment,
+  for when the sound is off.
+
+It speaks with the live commentary's voice, or a voice of its own (one of
+the computer's, or the speech server of Settings → AI) at its own speed;
+**Test** plays a sample. It follows games played on the board (yours, an
+engine's, a Lichess game), not tournament games. When the AI's live
+commentary is speaking too, they take turns, the announcer's short lines
+first; only the latest two wait, and one that has waited six seconds is
+dropped, so the voice keeps up with a quick game.
+
+**Personality** sets how it puts things, each with several lines to pick
+from so it doesn't repeat itself:
+
+| Personality | Sounds like |
+| --- | --- |
+| Classic | "Magnus has a clear advantage." |
+| Hype | "Oh no! A blunder! Hikaru is cruising to victory!" |
+| Zen | "A misstep. It happens to us all." |
+| Butler | "Oh dear. I do believe Hikaru is winning." |
+| Robot | "Evaluation: Magnus plus 2.1. Significant." |
+| Pirate | "Shiver me timbers! Treasure in sight for Hikaru!" |
+| Snarky | "Wow. Bold choice. It's Hikaru's game. Wake me at the end." |
+| Surprise me | a different one for each game |
+
+Besides the start, the opening, score swings, mates, low time and the end,
+some personalities now and then add a word to a capture, a check, castling
+or a promotion ("Queen takes f7, checkmate! Game, set and match!"). Each
+also shades the speed and, with a computer voice, the pitch.
+
+### Keeping the screen awake
+
+**Settings → General → Screen → Keep the screen awake** stops the
+screensaver and the display going to sleep: **never**, **while a game is
+played** (the default: a game on the board with a clock or an engine
+moving, a live Lichess game, or a tournament running), or **always** while
+Ponder is open. Keeping the display on also keeps the computer from
+sleeping.
 
 ### Tournaments
 
@@ -1269,11 +1353,18 @@ with the players' rows (names, clocks, board buttons) along its top and
 bottom edges and the score bar down its left edge. **Capture effects** (the switch under Auto
 camera, on at first) set off a burst where a piece is taken, picked at
 random and never the same twice running: fire and smoke, magic plasma,
-shadow clones of the piece taken, sparks, or frost. The piece taking
+shadow clones of the piece taken, sparks, frost, or ice (the piece taken
+freezes in a block of ice that cracks and shatters). The piece taking
 leaves a trail of the same on its way (flames and smoke, spiralling
-sparkles, a line of fading afterimages of itself, falling sparks, shed ice
-and mist), going a little slower than other moves so it can be seen, and
-the burst goes off as it lands.
+sparkles, a line of fading afterimages of itself, falling sparks, shed
+frost and mist, icicles springing up from the board), going a little
+slower than other moves so it can be seen, and the burst goes off as it
+lands. Each effect has its own sound, synthesised like the game's sounds,
+for its trail and for its burst: a crackling roar for fire, a chime of
+bells and a falling sweep for plasma, a whoosh for each shadow and a dark
+swell, an electric buzz and a zap for sparks, cold wind and high bells for
+frost, creaking then a crack and tinkling shards for ice. They follow the
+Sounds setting and volume.
 three.js is in `app/renderer/vendor/three`.
 
 **Glassify board** (**Settings → Appearance → Board**, off at first) puts

@@ -352,6 +352,19 @@ const AI_WHERE = {
   anthropic: 'The games go to Anthropic. Get a key in the Claude Console (platform.claude.com).',
   google: 'The games go to Google. Get a key in Google AI Studio (aistudio.google.com).',
 };
+// A drop-down of names: an empty choice first (what happens with none
+// chosen), then the names given; the one chosen stays in it even when it
+// is not among them (a model not loaded now, say).
+function fillChoices(sel, names, current, emptyLabel) {
+  const list = [...new Set(names)];
+  if (current && !list.includes(current)) list.unshift(current);
+  const opts = list.map((n) => el('option', { value: n, textContent: n }));
+  if (emptyLabel) opts.unshift(el('option', { value: '', textContent: emptyLabel }));
+  sel.replaceChildren(...opts);
+  sel.value = current && list.includes(current) ? current : (emptyLabel ? '' : list[0] ?? '');
+}
+const aiModelList = new Map(); // provider → the models it listed last
+let aiModelEmpty = '';
 function showAiSettings(s) {
   const sel = $('#ai-provider');
   if (sel.options.length !== (s.providers ?? []).length) {
@@ -363,19 +376,21 @@ function showAiSettings(s) {
   $('#ai-url-row').hidden = !local;
   $('#ai-url').value = s.baseUrl ?? '';
   $('#ai-url').placeholder = s.defaultUrl ?? '';
-  $('#ai-model').value = s.model ?? '';
-  $('#ai-model').placeholder = local ? "The endpoint's first model" : (p.defaultModel ? `${p.defaultModel} (if left empty)` : p.modelHint || 'Press Check for the list');
-  $('#ai-check').title = local ? 'Ask the endpoint which models it has' : `Ask ${p.name ?? 'the provider'} which models your key can use`;
+  aiModelEmpty = local ? 'The endpoint’s first model' : p.defaultModel ? `${p.defaultModel} (the default)` : 'Choose a model';
+  fillChoices($('#ai-model'), aiModelList.get(s.provider) ?? [], s.model ?? '', aiModelEmpty);
+  $('#ai-check').title = local ? 'Ask the endpoint again which models it has' : `Ask ${p.name ?? 'the provider'} again which models your key can use`;
   $('#ai-key').value = '';
   $('#ai-key').placeholder = s.hasKey ? 'A key is saved (type a new one to replace it)' : local ? 'Not needed for most local servers' : `Your ${p.name ?? ''} API key`;
-  $('#ai-models').replaceChildren();
   $('#ai-ctx-size').value = s.contextWindow ?? '';
   aiSay(`${AI_WHERE[s.provider] ?? AI_WHERE.local} ${AI_NOTE}`);
 }
 async function fillAiSettings() {
   let s;
+  window.fillTtsSettings?.(); // the commentary voice, in the same pane
   try { s = await api.ai.settings(); } catch { return; }
   showAiSettings(s);
+  // The list of models, asked for each time the settings open.
+  refreshAiModels({ quiet: true });
 }
 window.fillAiSettings = fillAiSettings;
 const aiSay = (text, bad = false) => { $('#ai-note').textContent = text; $('#ai-note').classList.toggle('error', bad); };
@@ -388,7 +403,7 @@ async function saveAiSetting(patch) {
     return true;
   } catch (err) { aiSay(errorText(err), true); return false; }
 }
-$('#ai-provider').addEventListener('change', (e) => saveAiSetting({ provider: e.target.value }));
+$('#ai-provider').addEventListener('change', async (e) => { if (await saveAiSetting({ provider: e.target.value })) refreshAiModels({ quiet: true }); });
 $('#ai-ctx-size').addEventListener('change', async (e) => {
   await saveAiSetting({ contextWindow: e.target.value });
   // The meter takes the new size at once.
@@ -399,19 +414,25 @@ $('#ai-ctx-size').addEventListener('change', async (e) => {
   }
   window.renderAiContext?.();
 });
-$('#ai-url').addEventListener('change', (e) => saveAiSetting({ baseUrl: e.target.value }));
+$('#ai-url').addEventListener('change', async (e) => { aiModelList.delete('local'); if (await saveAiSetting({ baseUrl: e.target.value })) refreshAiModels({ quiet: true }); });
 $('#ai-model').addEventListener('change', (e) => saveAiSetting({ model: e.target.value }));
-$('#ai-key').addEventListener('change', (e) => { if (e.target.value) saveAiSetting({ key: e.target.value }); });
-$('#ai-check').onclick = async () => {
+$('#ai-key').addEventListener('change', async (e) => { if (e.target.value && await saveAiSetting({ key: e.target.value })) refreshAiModels({ quiet: true }); });
+// The models the endpoint or provider has, into the Model list. Quietly
+// when the settings open (a provider with no key yet says nothing); with
+// what it found when Refresh is pressed.
+async function refreshAiModels({ quiet = false } = {}) {
   const btn = $('#ai-check');
+  const provider = $('#ai-provider').value;
   btn.disabled = true;
-  aiSay(`Asking ${$('#ai-provider').selectedOptions[0]?.textContent ?? 'the endpoint'}…`);
+  if (!quiet) aiSay(`Asking ${$('#ai-provider').selectedOptions[0]?.textContent ?? 'the endpoint'}…`);
   if (await saveAiSetting($('#ai-url-row').hidden ? {} : { baseUrl: $('#ai-url').value })) {
     try {
       const models = await api.ai.models();
-      $('#ai-models').replaceChildren(...models.map((m) => el('option', { value: m })));
-      aiSay(models.length ? `Connected: ${models.length} model${models.length === 1 ? '' : 's'} (${models.slice(0, 4).join(', ')}${models.length > 4 ? ', …' : ''}). Pick one in the Model box.` : 'Connected, but no models are listed.', !models.length);
-    } catch (err) { aiSay(errorText(err), true); }
+      aiModelList.set(provider, models);
+      if ($('#ai-provider').value === provider) fillChoices($('#ai-model'), models, $('#ai-model').value, aiModelEmpty);
+      if (!quiet || !models.length) aiSay(models.length ? `Connected: ${models.length} model${models.length === 1 ? '' : 's'}. Choose one in the Model list.` : 'Connected, but no models are listed.', !models.length);
+    } catch (err) { if (!quiet) aiSay(errorText(err), true); }
   }
   btn.disabled = false;
-};
+}
+$('#ai-check').onclick = () => refreshAiModels();
