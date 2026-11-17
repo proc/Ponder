@@ -361,7 +361,9 @@ function renderCommentator() {
   $('#cm-pip').checked = pip.on;
   $('#cmt-on').checked = pip.on;
   const card = $('#commentary');
-  const show = pip.on && Boolean(state?.players) && (cm.on || cm.feed.length > 0) && !puzzleView;
+  // Only while live commentary is on: turned off, the commentator goes, and
+  // comes back when it is turned on again.
+  const show = pip.on && cm.on && Boolean(state?.players) && !puzzleView;
   // Esper takes the card's place.
   if (pip.on && !card.hidden) card.hidden = true;
   if (pipBox.hidden !== !show) {

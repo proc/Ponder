@@ -910,6 +910,26 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		bot.SetChallengeTimeout(a.ChallengeTimeout)
 		player.SetChallengeTimeout(a.ChallengeTimeout)
 		return nil, nil
+	case "engineOptions":
+		// An engine's options were saved: the running copies of it take
+		// them now (between searches), in the game on the board and in the
+		// Lichess bot's games.
+		var a struct {
+			Path    string
+			Args    []string
+			Options map[string]string
+		}
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		if a.Args == nil {
+			a.Args = []string{}
+		}
+		n := mgr.UpdateEngineOptions(a.Path, a.Args, a.Options)
+		if bot != nil {
+			n += bot.UpdateEngineOptions(a.Path, a.Args, a.Options)
+		}
+		return map[string]int{"engines": n}, nil
 	case "lichessDisconnect":
 		var a struct{ Resign bool }
 		if err := decode(&a); err != nil {
@@ -1139,6 +1159,15 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			return nil, err
 		}
 		return nil, bot.StartSeek(p)
+	case "lichessSeekUpdate":
+		// New settings for the search that is running (Auto challenge):
+		// running tells whether there was one to change.
+		var p lichess.SeekParams
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		running, err := bot.UpdateSeek(p)
+		return map[string]any{"running": running}, err
 	case "lichessSeekStop":
 		bot.StopSeek()
 		return nil, nil
@@ -1213,6 +1242,23 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		}
 		bot.Unwatch()
 		return nil, spectator.Start(a.BaseURL, a.Username)
+	case "lichessTV":
+		// A Lichess TV channel, on the board.
+		var a struct{ BaseURL, Channel string }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		bot.Unwatch()
+		return nil, spectator.StartTV(a.BaseURL, a.Channel)
+	case "lichessTVNow":
+		// What each TV channel is showing.
+		var a struct{ BaseURL string }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return lichess.NewClient(a.BaseURL, "").TVNow(ctx)
 	case "lichessSpectateStop":
 		if spectator.Active() {
 			spectator.Stop()

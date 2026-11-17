@@ -236,7 +236,10 @@ $('#pz-retry').onclick = () => {
 function renderPuzzle() {
   const card = $('#pz-card');
   card.hidden = !pz;
-  $('#pz-stats').textContent = `Puzzle rating ${pzStats.rating} · solved ${pzStats.solved} · failed ${pzStats.failed} · streak ${pzStats.streak}`;
+  $('#pz-rating').textContent = pzStats.rating;
+  $('#pz-solved').textContent = pzStats.solved;
+  $('#pz-failed').textContent = pzStats.failed;
+  $('#pz-streak').textContent = pzStats.streak;
   document.body.classList.toggle('puzzling', Boolean(pz));
   if (!pz) return;
   const side = pz.color === 'white' ? 'White' : 'Black';
@@ -249,6 +252,10 @@ function renderPuzzle() {
   else status = `Your turn: find the best move for ${side}.`;
   $('#pz-status').textContent = status;
   $('#pz-status').className = 'pz-status ' + cls;
+  // The badge: a tick when solved, a cross on a wrong move, else the side to play.
+  const badge = $('#pz-badge');
+  badge.className = 'pz-badge ' + (pz.done && !pz.failed ? 'good' : pz.wrong ? 'bad' : pz.done ? 'done' : pz.color);
+  badge.textContent = pz.done && !pz.failed ? '✓' : pz.wrong ? '✕' : pz.done ? '•' : '';
   setStatus(`Puzzle · ${status}`);
   const info = [`Rating ${pz.rating}`];
   if (pz.daily) info.unshift('Daily puzzle');
@@ -258,7 +265,7 @@ function renderPuzzle() {
   link.onclick = (e) => { e.preventDefault(); api.openExternal(pz.url); };
   box.append(link);
   if (pz.done) box.append(el('div', { className: 'pz-themes', textContent: (pz.themes ?? []).join(' · ') }));
-  $('#pz-line').textContent = (pz.played ?? []).join(' ');
+  $('#pz-line').replaceChildren(...(pz.played ?? []).map((m) => el('span', { className: 'pz-move', textContent: m })));
   $('#pz-hint').hidden = $('#pz-solution').hidden = pz.done;
   $('#pz-retry').hidden = !pz.done;
 }

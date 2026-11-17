@@ -2,7 +2,7 @@
 <html lang="en" data-theme="minimalist">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob:">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob:; media-src 'self' https: file: blob: ponder-radio:">
   <title>Ponder</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -66,6 +66,7 @@
         <span class="board-tools">
           <button type="button" id="btn-flip" class="tool" title="Flip the board (F)" aria-label="Flip the board"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M5 13V3M5 3 2.5 5.5M5 3l2.5 2.5M11 3v10M11 13l-2.5-2.5M11 13l2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           <button type="button" id="btn-sound" class="tool" title="Sounds are on: click to mute (M)" aria-label="Sounds" aria-pressed="true"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path class="snd-on" d="M15.5 8.5a5 5 0 0 1 0 7M18.6 5.4a9 9 0 0 1 0 13.2"/><path class="snd-off" d="M22 9l-6 6M16 9l6 6"/></g></svg></button>
+          <button type="button" id="btn-music" class="tool" title="Classical music: click to play in the background (U)" aria-label="Classical music" aria-pressed="false"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></g></svg></button>
           <button type="button" id="btn-zen" class="tool" title="Zen mode: only the board and the players (Z)" aria-label="Zen mode" aria-pressed="false"><svg class="zen-in" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="zen-out" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M13.5 6.5h-4v-4M9.5 6.5 14 2M2.5 9.5h4v4M6.5 9.5 2 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </span>
       </div>
@@ -195,41 +196,75 @@
             </div>
           </div>
           <div class="pane" id="pane-puzzles" role="tabpanel" hidden>
-            <div class="pz-controls">
-              <div class="seg" id="pz-source" role="radiogroup" aria-label="Puzzles from">
-                <button type="button" data-src="lichess" title="Puzzles from lichess.org">Lichess</button>
-                <button type="button" data-src="file" title="The Lichess puzzle database file (lichess_db_puzzle.csv), offline">Puzzle file</button>
+            <!-- Frosted cards over a soft wash of colour: your score, where
+                 the puzzles come from, the puzzle being played. -->
+            <section class="pz-glass pz-hero" aria-label="Your puzzle score">
+              <div class="pz-rating">
+                <span class="pz-rating-k">Puzzle rating</span>
+                <span class="pz-rating-v" id="pz-rating">1500</span>
               </div>
-              <div class="pz-row" id="pz-lichess-opts">
-                <label>Theme <select id="pz-theme"></select></label>
-                <label>Difficulty <select id="pz-difficulty">
-                  <option value="easiest">Easiest</option><option value="easier">Easier</option><option value="normal" selected>Normal</option>
-                  <option value="harder">Harder</option><option value="hardest">Hardest</option></select></label>
+              <div class="pz-stats" id="pz-stats">
+                <div class="pz-stat good"><b id="pz-solved">0</b><span>Solved</span></div>
+                <div class="pz-stat bad"><b id="pz-failed">0</b><span>Failed</span></div>
+                <div class="pz-stat streak"><b id="pz-streak">0</b><span>Streak</span></div>
               </div>
-              <div class="pz-row" id="pz-file-opts" hidden>
-                <button type="button" class="small" id="pz-file-open">Open puzzle file…</button>
-                <span class="hint" id="pz-file-name">lichess_db_puzzle.csv from database.lichess.org (decompressed)</span>
-                <label>Rating <input type="number" id="pz-min" min="0" max="3500" step="50" placeholder="any"> – <input type="number" id="pz-max" min="0" max="3500" step="50" placeholder="any"></label>
-                <label>Theme <select id="pz-file-theme"></select></label>
-              </div>
-              <div class="pz-row">
-                <button type="button" class="primary small" id="pz-next">Next puzzle</button>
-                <button type="button" class="small" id="pz-daily">Daily puzzle</button>
-              </div>
+            </section>
+
+            <div class="pz-seg" id="pz-source" role="radiogroup" aria-label="Puzzles from">
+              <button type="button" data-src="lichess" title="Puzzles from lichess.org">Lichess</button>
+              <button type="button" data-src="file" title="The Lichess puzzle database file (lichess_db_puzzle.csv), offline">Puzzle file</button>
             </div>
-            <div class="pz-card" id="pz-card" hidden>
-              <div class="pz-status" id="pz-status"></div>
-              <div class="pz-info" id="pz-info"></div>
-              <div class="pz-row pz-actions">
-                <button type="button" class="small" id="pz-hint">Hint</button>
-                <button type="button" class="small" id="pz-solution">View the solution</button>
-                <button type="button" class="small" id="pz-retry" hidden>Try again</button>
-                <button type="button" class="small" id="pz-leave">Leave puzzle</button>
+
+            <section class="pz-glass pz-settings" id="pz-lichess-opts">
+              <div class="pz-set">
+                <label class="pz-set-label" for="pz-theme">Theme</label>
+                <select id="pz-theme"></select>
+              </div>
+              <div class="pz-set">
+                <label class="pz-set-label" for="pz-difficulty">Difficulty <span class="pz-set-sub">around your puzzle rating on Lichess</span></label>
+                <select id="pz-difficulty">
+                  <option value="easiest">Easiest</option><option value="easier">Easier</option><option value="normal" selected>Normal</option>
+                  <option value="harder">Harder</option><option value="hardest">Hardest</option>
+                </select>
+              </div>
+            </section>
+            <section class="pz-glass pz-settings" id="pz-file-opts" hidden>
+              <div class="pz-set">
+                <span class="pz-set-label">File <span class="pz-set-sub" id="pz-file-name">lichess_db_puzzle.csv from database.lichess.org (decompressed)</span></span>
+                <button type="button" class="small" id="pz-file-open">Open…</button>
+              </div>
+              <div class="pz-set">
+                <span class="pz-set-label">Rating</span>
+                <span class="pz-set-ctl"><input type="number" id="pz-min" min="0" max="3500" step="50" placeholder="any" aria-label="Lowest rating"> – <input type="number" id="pz-max" min="0" max="3500" step="50" placeholder="any" aria-label="Highest rating"></span>
+              </div>
+              <div class="pz-set">
+                <label class="pz-set-label" for="pz-file-theme">Theme</label>
+                <select id="pz-file-theme"></select>
+              </div>
+            </section>
+
+            <div class="pz-go">
+              <button type="button" class="primary" id="pz-next">Next puzzle</button>
+              <button type="button" id="pz-daily">Daily puzzle</button>
+            </div>
+
+            <section class="pz-glass pz-card" id="pz-card" hidden>
+              <div class="pz-head">
+                <span class="pz-badge" id="pz-badge" aria-hidden="true"></span>
+                <div class="pz-head-text">
+                  <div class="pz-status" id="pz-status"></div>
+                  <div class="pz-info" id="pz-info"></div>
+                </div>
               </div>
               <div class="pz-line" id="pz-line"></div>
-            </div>
-            <div class="pz-stats" id="pz-stats"></div>
-            <p class="error" id="pz-error" hidden></p>
+              <div class="pz-actions">
+                <button type="button" class="small" id="pz-hint">Hint</button>
+                <button type="button" class="small" id="pz-solution">Solution</button>
+                <button type="button" class="small" id="pz-retry" hidden>Try again</button>
+                <button type="button" class="small pz-leave" id="pz-leave">Leave</button>
+              </div>
+            </section>
+            <p class="error pz-error" id="pz-error" hidden></p>
           </div>
           <div class="pane" id="pane-tournament" role="tabpanel" hidden>
             <form class="tn-setup" id="tn-setup" autocomplete="off" novalidate>
@@ -370,113 +405,129 @@
             </div>
           </div>
           <div class="pane" id="pane-lichess" role="tabpanel" hidden>
-            <section class="lx-section lx-me" id="lx-me">
-              <h4>Play on Lichess <span class="lx-me-who" id="lx-me-who"></span></h4>
-              <div class="lx-signin" id="lx-signin">
-                <p class="hint">Play people on Lichess with your own account, moving on this board. Lichess lets apps look for rapid and slower games; challenge someone to play blitz.</p>
-                <div class="lx-signin-row">
-                  <button type="button" class="primary small" id="lx-signin-go">Sign in with Lichess</button>
-                  <button type="button" class="small" id="lx-signin-cancel" hidden>Cancel</button>
-                  <a href="#" id="lx-token-toggle">Use an API token instead</a>
+            <!-- One part at a time, chosen here: playing yourself, watching,
+                 and your engine's bot account with the bots online. -->
+            <div class="segmented lx-seg" id="lx-seg" role="radiogroup" aria-label="Lichess">
+              <label><input type="radio" name="lx-view" value="play" checked><span>Play<i class="lx-seg-dot" id="lx-seg-play"></i></span></label>
+              <label><input type="radio" name="lx-view" value="watch"><span>Watch<i class="lx-seg-dot" id="lx-seg-watch"></i></span></label>
+              <label><input type="radio" name="lx-view" value="engine"><span>Bot<i class="lx-seg-dot" id="lx-seg-engine"></i></span></label>
+            </div>
+
+            <div class="lx-view" data-view="play">
+              <section class="lx-section lx-me" id="lx-me">
+                <div class="lx-card">
+                  <div class="lx-card-row lx-me-head">
+                    <span class="lx-glyph" aria-hidden="true">♞</span>
+                    <span class="lx-card-title">Lichess account</span>
+                    <span class="lx-me-who" id="lx-me-who"></span>
+                  </div>
+                  <div class="lx-card-row lx-signin" id="lx-signin">
+                    <p class="lx-card-sub">Sign in to play people on Lichess, moving on this board.</p>
+                    <div class="lx-signin-row">
+                      <button type="button" class="primary small" id="lx-signin-go">Sign in with Lichess</button>
+                      <button type="button" class="small" id="lx-signin-cancel" hidden>Cancel</button>
+                      <a href="#" id="lx-token-toggle">Use an API token instead</a>
+                    </div>
+                    <form class="lx-token-form" id="lx-token-form" hidden autocomplete="off">
+                      <input type="password" id="lx-acct-token" placeholder="lip_… (needs “Play games with the board API”)" spellcheck="false">
+                      <button type="submit" class="small">Use token</button>
+                      <a href="#" id="lx-acct-token-link">Create one ↗</a>
+                    </form>
+                  </div>
                 </div>
-                <form class="lx-token-form" id="lx-token-form" hidden autocomplete="off">
-                  <input type="password" id="lx-acct-token" placeholder="lip_… (needs “Play games with the board API”)" spellcheck="false">
-                  <button type="submit" class="small">Use token</button>
-                  <a href="#" id="lx-acct-token-link">Create one ↗</a>
-                </form>
-              </div>
-              <div class="lx-me-body" id="lx-me-body" hidden>
-                <div class="lx-quick" id="lx-quick"></div>
-                <div class="lx-quick-opts">
-                  <label class="check"><input type="checkbox" id="lx-me-rated"> Rated</label>
-                  <span class="hint" id="lx-me-seek-note"></span>
-                </div>
-                <div class="lx-me-seek" id="lx-me-seek" hidden>
-                  <span class="lx-spinner"></span><span id="lx-me-seek-text"></span>
-                  <button type="button" class="small" id="lx-me-seek-stop">Cancel</button>
-                </div>
-                <form class="lx-challenge" id="lx-me-challenge" autocomplete="off">
-                  <span class="lx-user"><input type="text" id="lx-me-user" placeholder="Challenge a friend: username" spellcheck="false" required></span>
-                  <label>Time <select id="lx-me-time">
+                <p class="lx-message" id="lx-me-message" hidden></p>
+                <div class="lx-me-body" id="lx-me-body" hidden>
+                  <h4 class="lx-group">Quick pairing</h4>
+                  <div class="lx-card lx-pad">
+                    <div class="lx-quick" id="lx-quick"></div>
+                    <div class="lx-quick-opts">
+                      <label class="check"><input type="checkbox" id="lx-me-rated"> Rated</label>
+                      <span class="hint" id="lx-me-seek-note"></span>
+                    </div>
+                    <div class="lx-me-seek" id="lx-me-seek" hidden>
+                      <span class="lx-spinner"></span><span id="lx-me-seek-text"></span>
+                      <button type="button" class="small" id="lx-me-seek-stop">Cancel</button>
+                    </div>
+                  </div>
+                  <p class="lx-foot">Lichess lets apps pair rapid and slower games. For blitz, challenge someone.</p>
+                  <h4 class="lx-group">Challenge a friend</h4>
+                  <form class="lx-card lx-form" id="lx-me-challenge" autocomplete="off">
+                    <input type="text" id="lx-me-user" placeholder="Username" aria-label="Username to challenge" spellcheck="false" required>
+                    <div class="lx-form-row">
+                      <label>Time <select id="lx-me-time">
                     <option value="60">1 min</option><option value="180">3 min</option><option value="300" selected>5 min</option>
                     <option value="600">10 min</option><option value="900">15 min</option><option value="1800">30 min</option>
                     <option value="3600">60 min</option>
                   </select></label>
-                  <label>+ <select id="lx-me-inc">
+                      <label>+ <select id="lx-me-inc">
                     <option value="0">0 s</option><option value="2">2 s</option><option value="3" selected>3 s</option>
                     <option value="5">5 s</option><option value="10">10 s</option><option value="20">20 s</option>
                   </select></label>
-                  <label>Color <select id="lx-me-color">
+                      <label>Color <select id="lx-me-color">
                     <option value="random">Random</option><option value="white">White</option><option value="black">Black</option>
                   </select></label>
-                  <button type="submit" class="small" id="lx-me-send">Challenge</button>
-                </form>
-                <div id="lx-me-incoming" class="lx-list"></div>
-                <div id="lx-me-outgoing" class="lx-list"></div>
-                <div id="lx-me-games" class="lx-list"></div>
-              </div>
-              <p class="lx-message" id="lx-me-message" hidden></p>
-            </section>
-            <section class="lx-section lx-watch" id="lx-watch">
-              <h4>Watch a player</h4>
-              <form class="lx-challenge" id="lx-watch-form" autocomplete="off">
-                <span class="lx-user">
-                  <input type="text" id="lx-watch-user" placeholder="Lichess username, e.g. a bot" spellcheck="false" list="lx-bots" required>
-                  <button type="button" class="small" id="lx-watch-bots" title="List bots that are online now">Online bots</button>
-                </span>
-                <button type="submit" class="primary small" id="lx-watch-go">Watch</button>
-                <button type="button" class="small" id="lx-watch-stop" hidden>Stop</button>
-              </form>
-              <p class="hint" id="lx-watch-state">Follow any player's games live on the board, one game after another, and all of them when the player is in several at once. No engine plays; analysis can run while you watch. No token needed.</p>
-            </section>
-            <section class="lx-section lx-online" id="lx-online">
-              <h4>Online bots <span class="count" id="lx-online-count"></span>
-                <button type="button" class="small lx-online-load" id="lx-online-load">Show online bots</button></h4>
-              <p class="hint" id="lx-online-hint">The bots playing on Lichess right now, with their ratings and what they are doing: challenge one with your engine or yourself, or watch its game.</p>
-              <div class="lx-online-bar" id="lx-online-bar" hidden>
-                <input type="search" id="lx-online-q" placeholder="Search name, bio, country" spellcheck="false">
-                <select id="lx-online-speed" title="Ratings and sorting for this speed">
-                  <option value="bullet">Bullet</option><option value="blitz" selected>Blitz</option>
-                  <option value="rapid">Rapid</option><option value="classical">Classical</option>
-                </select>
-                <span class="lx-online-range" title="Rating range at this speed">
-                  <input type="number" id="lx-online-min" min="0" max="4000" step="50" placeholder="min"> –
-                  <input type="number" id="lx-online-max" min="0" max="4000" step="50" placeholder="max">
-                </span>
-                <select id="lx-online-sort" title="Order">
-                  <option value="rating">Rating, high to low</option><option value="rating-asc">Rating, low to high</option>
-                  <option value="games">Most games</option><option value="active">Most played</option>
-                  <option value="name">Name</option><option value="new">Newest</option>
-                </select>
-                <label class="check" title="Hide bots that are in a game now"><input type="checkbox" id="lx-online-free"> Free only</label>
-              </div>
-              <div class="lx-online-list" id="lx-online-list"></div>
-              <div class="lx-online-foot" id="lx-online-foot" hidden>
-                <span class="hint" id="lx-online-shown"></span>
-                <button type="button" class="small" id="lx-online-more">Show more</button>
-              </div>
-            </section>
-            <h4 class="lx-bot-head">Your engine on Lichess</h4>
-            <div class="lx-head">
-              <span class="lx-dot" id="lx-dot"></span>
-              <span class="lx-account" id="lx-account">Not connected</span>
-              <span class="lx-spacer"></span>
-              <button type="button" class="small" id="lx-connect">Connect</button>
-              <button type="button" class="small icon-btn" id="lx-settings" title="Lichess settings: token, engine, server" aria-label="Lichess settings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></g></svg></button>
+                      <button type="submit" class="primary small" id="lx-me-send">Challenge</button>
+                    </div>
+                  </form>
+                  <div id="lx-me-incoming" class="lx-list"></div>
+                  <div id="lx-me-outgoing" class="lx-list"></div>
+                  <div id="lx-me-games" class="lx-list"></div>
+                </div>
+              </section>
             </div>
-            <p class="lx-message" id="lx-message" hidden></p>
-            <div class="lx-body" id="lx-body">
-              <details class="lx-about" id="lx-about">
+
+            <div class="lx-view" data-view="watch" hidden>
+              <section class="lx-section lx-watch" id="lx-watch">
+                <div class="lx-card lx-card-row lx-now">
+                  <span class="lx-glyph" aria-hidden="true">◉</span>
+                  <p class="lx-now-text" id="lx-watch-state">Not watching anything.</p>
+                  <button type="button" class="small" id="lx-watch-stop" hidden>Stop</button>
+                </div>
+                <h4 class="lx-group">A player</h4>
+                <form class="lx-card lx-form lx-inline" id="lx-watch-form" autocomplete="off">
+                  <input type="text" id="lx-watch-user" placeholder="Username, e.g. a bot" aria-label="Username to watch" spellcheck="false" list="lx-bots" required>
+                  <button type="button" class="small" id="lx-watch-bots" title="List bots that are online now">Online bots</button>
+                  <button type="submit" class="primary small" id="lx-watch-go">Watch</button>
+                </form>
+                <p class="lx-foot">Their games, live, one after another, and all of them when they play several at once.</p>
+                <h4 class="lx-group">Lichess TV</h4>
+                <!-- A tile per channel, with who it has on now: click one to watch it. -->
+                <div class="lx-tv-grid" id="lx-tv-grid"></div>
+                <p class="lx-foot">Each channel shows the best game of its kind being played now, then the next. No engine plays and no token is needed.</p>
+              </section>
+            </div>
+
+            <div class="lx-view" data-view="engine" hidden>
+              <div class="lx-card">
+                <div class="lx-card-row lx-head">
+                  <span class="lx-dot" id="lx-dot"></span>
+                  <span class="lx-account" id="lx-account">Not connected</span>
+                  <span class="lx-spacer"></span>
+                  <button type="button" class="small" id="lx-connect">Connect</button>
+                  <button type="button" class="small icon-btn" id="lx-settings" title="Lichess settings: token, engine, server" aria-label="Lichess settings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></g></svg></button>
+                </div>
+                <div class="lx-card-row lx-engine-row">
+                  <label for="lx-engine">Engine</label>
+                  <select id="lx-engine" title="The engine that plays your bot's games"></select>
+                  <button type="button" class="small" id="lx-engine-options" title="This engine's UCI options: threads, hash size and more">Options…</button>
+                </div>
+              </div>
+              <p class="lx-foot lx-engine-note" id="lx-engine-note" hidden></p>
+              <p class="lx-message" id="lx-message" hidden></p>
+              <div class="lx-body" id="lx-body">
+                <details class="lx-about" id="lx-about">
                 <summary><span class="lx-about-title">Engine and bot account</span> <span class="lx-about-summary" id="lx-about-summary"></span></summary>
                 <div class="lx-about-body">
                   <div class="lx-about-card" id="lx-about-engine"></div>
                   <div class="lx-about-card" id="lx-about-bot"></div>
                 </div>
               </details>
-              <section class="lx-section">
-                <h4>Challenges to you <span class="count" id="lx-incoming-count"></span>
-                  <label class="check lx-auto" title="Accept challenges that match the rules below, and decline the rest. Off whenever you connect."><input type="checkbox" id="lx-auto"> Accept automatically</label></h4>
-                <details class="lx-rules" id="lx-rules">
+                <section class="lx-section">
+                  <div class="lx-view-head">
+                    <h4 class="lx-group">Challenges to you <span class="count" id="lx-incoming-count"></span></h4>
+                    <label class="check lx-auto" title="Accept challenges that match the rules below, and decline the rest. Off whenever you connect."><input type="checkbox" id="lx-auto"> Accept automatically</label>
+                  </div>
+                  <details class="lx-rules" id="lx-rules">
                   <summary><span class="lx-rules-title">Auto-accept rules</span> <span class="lx-rules-summary" id="lx-rules-summary"></span></summary>
                   <form class="lx-rules-form" id="lx-rules-form" autocomplete="off" novalidate>
                     <span class="lx-rules-label">Speed</span>
@@ -513,53 +564,151 @@
                   <p class="hint">An empty or 0 limit means any. Challenges that do not match are declined with the reason; variants and correspondence games are always declined. The rules only act while <b>Accept automatically</b> is on.</p>
                   <p class="error" id="lx-rules-error" hidden></p>
                 </details>
-                <div id="lx-incoming" class="lx-list"></div>
-                <p class="hint lx-empty" id="lx-incoming-empty">None right now. <span id="lx-auto-note"></span></p>
-              </section>
-              <section class="lx-section">
-                <h4>Challenge a player</h4>
-                <form class="lx-challenge" id="lx-challenge" autocomplete="off">
-                  <span class="lx-user">
-                    <input type="text" id="lx-username" placeholder="Lichess username" spellcheck="false" list="lx-bots" required>
-                    <datalist id="lx-bots"></datalist>
-                    <button type="button" class="small" id="lx-bots-refresh" title="List bots that are online now">Online bots</button>
-                  </span>
-                  <label>Time <select id="lx-time">
+                  <div id="lx-incoming" class="lx-list"></div>
+                  <p class="lx-foot lx-empty" id="lx-incoming-empty">None right now. <span id="lx-auto-note"></span></p>
+                </section>
+                <section class="lx-section">
+                  <h4 class="lx-group">Challenge a player</h4>
+                  <form class="lx-card lx-form" id="lx-challenge" autocomplete="off">
+                    <div class="lx-user">
+                      <input type="text" id="lx-username" placeholder="Username" aria-label="Username to challenge" spellcheck="false" list="lx-bots" required>
+                      <datalist id="lx-bots"></datalist>
+                      <button type="button" class="small" id="lx-bots-refresh" title="List bots that are online now">Online bots</button>
+                    </div>
+                    <div class="lx-form-row">
+                      <label>Time <select id="lx-time">
                     <option value="60">1 min</option><option value="120">2 min</option><option value="180" selected>3 min</option>
                     <option value="300">5 min</option><option value="600">10 min</option><option value="900">15 min</option>
                     <option value="1800">30 min</option><option value="3600">60 min</option>
                   </select></label>
-                  <label>+ <select id="lx-inc">
+                      <label>+ <select id="lx-inc">
                     <option value="0">0 s</option><option value="1">1 s</option><option value="2" selected>2 s</option>
                     <option value="3">3 s</option><option value="5">5 s</option><option value="10">10 s</option>
                     <option value="20">20 s</option><option value="30">30 s</option>
                   </select></label>
-                  <label>Color <select id="lx-color">
+                      <label>Color <select id="lx-color">
                     <option value="random">Random</option><option value="white">White</option><option value="black">Black</option>
                   </select></label>
-                  <label class="check"><input type="checkbox" id="lx-rated"> Rated</label>
-                  <button type="submit" class="primary small" id="lx-send">Challenge</button>
-                </form>
-                <div class="lx-seek" id="lx-seek">
-                  <span>Or a random bot online, <span id="lx-seek-speed">blitz</span> rating</span>
-                  <input type="number" id="lx-seek-min" min="0" max="4000" step="50" placeholder="any"> –
-                  <input type="number" id="lx-seek-max" min="0" max="4000" step="50" placeholder="any">
-                  <label class="lx-seek-games" title="How many games to play: random bots are challenged until that many games have started, as many at once as your engine's rules allow (Games at once). 0: keep going until you press Stop.">for <input type="number" id="lx-seek-games" min="0" max="999" step="1" value="5"> <span id="lx-seek-games-unit">game</span></label>
-                  <button type="button" class="small primary" id="lx-seek-go" title="Challenge a random bot in this rating range with the time control above; if it declines or does not answer, try another until one accepts">Challenge random bot</button>
-                  <button type="button" class="small" id="lx-seek-stop" hidden>Stop</button>
-                  <label class="check lx-seek-auto" title="While this is on, your engine challenges random bots by itself, without end, with the clock above and this rating range: as many games at once as its rules allow, the next challenge when there is room. It starts now and each time the engine connects; clear the box (or press Stop) to end it"><input type="checkbox" id="lx-seek-auto"> Auto challenge</label>
+                      <label class="check"><input type="checkbox" id="lx-rated"> Rated</label>
+                      <button type="submit" class="primary small" id="lx-send">Challenge</button>
+                    </div>
+                  </form>
+                  <h4 class="lx-group">Random bot</h4>
+                  <!-- Its own settings, a row each: the clock and side, which
+                       bots to ask, and how many games. -->
+                  <div class="lx-card lx-seek" id="lx-seek">
+                    <div class="lx-card-row lx-set">
+                      <span class="lx-set-label">Clock <span class="lx-set-sub" id="lx-seek-speed">blitz</span></span>
+                      <span class="lx-set-ctl">
+                        <select id="lx-seek-time" aria-label="Initial time">
+                          <option value="60">1 min</option><option value="120">2 min</option><option value="180" selected>3 min</option>
+                          <option value="300">5 min</option><option value="600">10 min</option><option value="900">15 min</option>
+                          <option value="1800">30 min</option><option value="3600">60 min</option>
+                        </select>
+                        <span class="lx-set-plus">+</span>
+                        <select id="lx-seek-inc" aria-label="Increment">
+                          <option value="0">0 s</option><option value="1">1 s</option><option value="2" selected>2 s</option>
+                          <option value="3">3 s</option><option value="5">5 s</option><option value="10">10 s</option>
+                          <option value="20">20 s</option><option value="30">30 s</option>
+                        </select>
+                      </span>
+                    </div>
+                    <div class="lx-card-row lx-set">
+                      <span class="lx-set-label">Your engine plays</span>
+                      <span class="lx-set-ctl">
+                        <select id="lx-seek-color" aria-label="Your engine's color">
+                          <option value="random">Either color</option><option value="white">White</option><option value="black">Black</option>
+                        </select>
+                      </span>
+                    </div>
+                    <div class="lx-card-row lx-set">
+                      <label class="lx-set-label" for="lx-seek-rated">Rated</label>
+                      <span class="lx-set-ctl"><input type="checkbox" class="lx-switch" id="lx-seek-rated" role="switch"></span>
+                    </div>
+                    <div class="lx-card-row lx-set">
+                      <span class="lx-set-label">Their rating</span>
+                      <span class="lx-set-ctl">
+                        <select id="lx-seek-mode" aria-label="How the rating range is set" title="A fixed range, or one that follows your bot's own rating at this speed">
+                          <option value="range">Between</option><option value="around">Around yours</option>
+                        </select>
+                        <span class="lx-seek-range" id="lx-seek-range">
+                          <input type="number" id="lx-seek-min" min="0" max="4000" step="50" placeholder="any" aria-label="Lowest rating"> –
+                          <input type="number" id="lx-seek-max" min="0" max="4000" step="50" placeholder="any" aria-label="Highest rating">
+                        </span>
+                        <span class="lx-seek-range" id="lx-seek-around-box" hidden>
+                          ± <input type="number" id="lx-seek-around" min="25" max="2000" step="25" value="200" aria-label="Points either side of your bot's rating">
+                        </span>
+                      </span>
+                    </div>
+                    <div class="lx-card-row lx-set">
+                      <label class="lx-set-label" for="lx-seek-noprov">Skip provisional ratings <span class="lx-set-sub">bots still new at this speed</span></label>
+                      <span class="lx-set-ctl"><input type="checkbox" class="lx-switch" id="lx-seek-noprov" role="switch"></span>
+                    </div>
+                    <div class="lx-card-row lx-set">
+                      <label class="lx-set-label" for="lx-seek-mingames">At least <span class="lx-set-sub">games at this speed</span></label>
+                      <span class="lx-set-ctl"><input type="number" id="lx-seek-mingames" min="0" max="100000" step="10" placeholder="any"></span>
+                    </div>
+                    <div class="lx-card-row lx-set lx-set-wide">
+                      <label class="lx-set-label" for="lx-seek-exclude">Never challenge</label>
+                      <input type="text" id="lx-seek-exclude" placeholder="Bot names, separated by commas" spellcheck="false">
+                    </div>
+                    <div class="lx-card-row lx-set">
+                      <label class="lx-set-label" for="lx-seek-games" title="How many games to play: random bots are challenged until that many games have started, as many at once as your engine's rules allow (Games at once). 0: keep going until you press Stop.">Games <span class="lx-set-sub" id="lx-seek-games-unit">game</span></label>
+                      <span class="lx-set-ctl lx-seek-games"><input type="number" id="lx-seek-games" min="0" max="999" step="1" value="5"></span>
+                    </div>
+                    <div class="lx-card-row lx-set">
+                      <label class="lx-set-label" for="lx-seek-auto" title="While this is on, your engine challenges random bots by itself, without end, with these settings: as many games at once as its rules allow, the next challenge when there is room. It starts now and each time the engine connects; turn it off (or press Stop) to end it">Auto challenge <span class="lx-set-sub">without end, each time the engine connects</span></label>
+                      <span class="lx-set-ctl"><input type="checkbox" class="lx-switch" id="lx-seek-auto" role="switch"></span>
+                    </div>
+                    <div class="lx-card-row lx-seek-actions">
+                      <button type="button" class="small" id="lx-seek-stop" hidden>Stop</button>
+                      <button type="button" class="small primary" id="lx-seek-go">Challenge random bot</button>
+                    </div>
+                  </div>
+                  <p class="lx-foot lx-seek-state" id="lx-seek-state" hidden></p>
+                  <div id="lx-outgoing" class="lx-list"></div>
+                </section>
+                <section class="lx-section">
+                  <h4 class="lx-group">Games</h4>
+                  <div id="lx-games" class="lx-list"></div>
+                  <p class="lx-foot lx-empty" id="lx-games-empty">No games yet. Your engine plays each game on its own; Watch puts one on the board.</p>
+                </section>
+              </div>
+              <div class="lx-off" id="lx-off">
+                <span class="lx-off-glyph" aria-hidden="true">♚</span>
+                <p><b>Play with your engine</b></p>
+                <p class="lx-foot">Connect a Lichess <b>Bot account</b>: add its API token in Settings → Lichess, then press Connect.</p>
+              </div>
+              <section class="lx-section lx-online" id="lx-online">
+                <div class="lx-view-head">
+                  <h4 class="lx-group">Bots online <span class="count" id="lx-online-count"></span></h4>
+                  <button type="button" class="small lx-online-load" id="lx-online-load">Show online bots</button>
                 </div>
-                <p class="hint lx-seek-state" id="lx-seek-state" hidden></p>
-                <div id="lx-outgoing" class="lx-list"></div>
+                <p class="lx-foot" id="lx-online-hint">The bots playing on Lichess now. Challenge one with your engine or yourself, or watch its game.</p>
+                <div class="lx-online-bar" id="lx-online-bar" hidden>
+                <input type="search" id="lx-online-q" placeholder="Search name, bio, country" spellcheck="false">
+                <select id="lx-online-speed" title="Ratings and sorting for this speed">
+                  <option value="bullet">Bullet</option><option value="blitz" selected>Blitz</option>
+                  <option value="rapid">Rapid</option><option value="classical">Classical</option>
+                </select>
+                <span class="lx-online-range" title="Rating range at this speed">
+                  <input type="number" id="lx-online-min" min="0" max="4000" step="50" placeholder="min"> –
+                  <input type="number" id="lx-online-max" min="0" max="4000" step="50" placeholder="max">
+                </span>
+                <select id="lx-online-sort" title="Order">
+                  <option value="rating">Rating, high to low</option><option value="rating-asc">Rating, low to high</option>
+                  <option value="games">Most games</option><option value="active">Most played</option>
+                  <option value="name">Name</option><option value="new">Newest</option>
+                </select>
+                <label class="check" title="Hide bots that are in a game now"><input type="checkbox" id="lx-online-free"> Free only</label>
+              </div>
+
+                <div class="lx-online-list" id="lx-online-list"></div>
+                <div class="lx-online-foot" id="lx-online-foot" hidden>
+                  <span class="hint" id="lx-online-shown"></span>
+                  <button type="button" class="small" id="lx-online-more">Show more</button>
+                </div>
               </section>
-              <section class="lx-section">
-                <h4>Games</h4>
-                <div id="lx-games" class="lx-list"></div>
-                <p class="hint lx-empty" id="lx-games-empty">No games yet. Your engine plays each game on its own; Watch shows a game on the board.</p>
-              </section>
-            </div>
-            <div class="lx-off" id="lx-off">
-              <p class="hint">To play games on Lichess with your engine, connect a Lichess <b>Bot account</b>: add its API token in Settings → Lichess, then Connect.</p>
             </div>
           </div>
           <div class="nav">
@@ -592,6 +741,7 @@
               <span class="stats" id="analysis-stats"></span>
               <button type="button" class="small" id="analysis-pause" title="Pause the analysis: the engine stops thinking and the lines stay as they are (P)">⏸</button>
             </div>
+            <div class="wdl-sum" id="analysis-wdl" hidden></div>
             <div id="analysis-lines"></div>
           </section>
           <section class="panel engine" id="engine-white" hidden></section>
@@ -664,6 +814,11 @@
     </div>
     <div class="chf-list" id="ch-float-list" aria-live="polite"></div>
     <p class="chf-next" id="ch-float-next" hidden></p>
+    <div class="chf-auto" id="ch-float-auto" hidden>
+      <label for="ch-float-auto-on" id="ch-float-auto-label" title="Your engine challenges random bots by itself, without end, each time it connects. Turn it off to stop"><b>Auto challenge</b> <span class="lx-meta" id="ch-float-auto-sub">without end</span></label>
+      <input type="checkbox" class="lx-switch" id="ch-float-auto-on" role="switch">
+      <button type="button" class="small" id="ch-float-auto-stop" title="Stop challenging random bots" hidden>Stop</button>
+    </div>
   </section>
 
   <!-- The result screen: over the whole window when a game ends. -->
@@ -702,6 +857,7 @@
           <button type="button" role="tab" data-view="commentary">Commentary<i class="cm-dot" title="Commentary is on for the game being played"></i></button>
         </div>
         <span class="lx-spacer"></span>
+        <span class="ai-ctx" id="ai-ctx" hidden tabindex="0" role="meter" aria-label="Model context used" aria-valuemin="0"><span class="ai-ctx-bar"><i></i></span><span class="ai-ctx-text"></span></span>
         <button type="button" class="aic-tool" id="ai-pin" aria-pressed="false" title="Pin the panel: keep it open when you click elsewhere" aria-label="Pin the AI panel"><svg viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6z"/><path d="M12 15v6"/></g></svg></button>
         <button type="button" class="aic-tool" id="aic-settings" title="AI settings: the endpoint and the model" aria-label="AI settings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></g></svg></button>
         <button type="button" class="aic-tool" id="ai-collapse" title="Collapse the panel to the edge (Esc)" aria-label="Collapse the AI panel"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 3v10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
@@ -717,27 +873,21 @@
       </form>
       <p class="hint aic-note" id="aic-note">Each message goes to the AI endpoint with the game on the board and the position shown.</p>
       <div class="cm-view" id="cm-view">
-        <div class="cm-controls">
-          <label class="check" title="While a game is played, the AI model comments on it every few moves, and sums it up when it ends"><input type="checkbox" id="cm-on"> Live commentary</label>
-          <label class="cm-every" title="How often a comment is asked for">every <select id="cm-every">
+        <div class="cm-settings">
+          <label class="cm-row" for="cm-on" title="While a game is played, the AI model comments on it every few moves, and sums it up when it ends"><span class="cm-row-text">Live commentary <span class="cm-row-sub">on the game being played, and a summary when it ends</span></span><input type="checkbox" class="lx-switch" id="cm-on" role="switch"></label>
+          <div class="cm-row"><label class="cm-row-text" for="cm-every" title="How often a comment is asked for">Comment every</label><select id="cm-every">
             <option value="1">move</option><option value="2">2 moves</option><option value="3">3 moves</option><option value="5">5 moves</option><option value="8">8 moves</option>
-          </select></label>
-        </div>
-        <div class="cm-controls cm-pip-row">
-          <label class="check" title="A little pixel-art chess piece (chosen in Settings → AI) floats over the window and says each comment in a comic speech bubble, in place of the commentary card beside the board. Drag it anywhere; click it to show or put away the bubble"><input type="checkbox" id="cm-pip"> A commentator character says the commentary in a speech bubble</label>
-        </div>
-        <div class="cm-controls cm-annotate-row">
-          <label class="check" title="Each comment is put on the move it follows as an annotation, and the summary before the first move: they show in the moves list, can be edited under Annotate, and are saved with the game. Your own comments are left alone."><input type="checkbox" id="cm-annotate"> Annotate the game with the commentary</label>
-        </div>
-        <div class="cm-controls cm-voice-row">
-          <label class="check" title="Each comment and the summary are read aloud when they are complete, in a voice of this computer"><input type="checkbox" id="cm-speak"> Read aloud</label>
-          <span class="cm-voice">
+          </select></div>
+          <label class="cm-row" for="cm-pip" title="A little pixel-art chess piece (chosen in Settings → AI) floats over the window and says each comment in a comic speech bubble, in place of the commentary card beside the board. Drag it anywhere; click it to show or put away the bubble"><span class="cm-row-text">Commentator character <span class="cm-row-sub">says it in a speech bubble over the window</span></span><input type="checkbox" class="lx-switch" id="cm-pip" role="switch"></label>
+          <label class="cm-row" for="cm-annotate" title="Each comment is put on the move it follows as an annotation, and the summary before the first move: they show in the moves list, can be edited under Annotate, and are saved with the game. Your own comments are left alone."><span class="cm-row-text">Annotate the game <span class="cm-row-sub">each comment on its move, saved with the game</span></span><input type="checkbox" class="lx-switch" id="cm-annotate" role="switch"></label>
+          <label class="cm-row" for="cm-speak" title="Each comment and the summary are read aloud when they are complete, in a voice of this computer"><span class="cm-row-text">Read aloud</span><input type="checkbox" class="lx-switch" id="cm-speak" role="switch"></label>
+          <div class="cm-row cm-voice">
             <select id="cm-voice" title="The voice that reads" aria-label="Voice"></select>
             <select id="cm-rate" title="How fast it reads" aria-label="Reading speed">
               <option value="0.85">Slow</option><option value="1">Normal</option><option value="1.2">Fast</option><option value="1.45">Faster</option>
             </select>
             <button type="button" class="small" id="cm-test" title="Hear the voice">Test</button>
-          </span>
+          </div>
         </div>
         <div class="cm-feed" id="cm-feed" role="log" aria-live="polite" tabindex="0"></div>
         <p class="hint cm-note" id="cm-note"></p>
@@ -807,7 +957,7 @@
         <label class="check"><input type="checkbox" id="options-changed"> Changed only</label>
       </div>
       <div id="options-body"></div>
-      <p class="hint">Saved options are sent to the engine each time it starts: for games, analysis (restarted at once), the Lichess bot and tournaments. Options left at the engine’s default are not sent.</p>
+      <p class="hint">Saved options take effect at once: an engine playing now (the game on the board, the Lichess bot’s games) gets them before its next search, and the analysis restarts with them. They are also sent each time the engine starts, tournaments included. Options left at the engine’s default are not sent, except to put back one you reset on an engine that is running.</p>
       <p class="error" id="options-error" hidden></p>
       <div class="actions">
         <button type="button" id="options-reset">Reset to defaults</button>
@@ -822,6 +972,7 @@
       <h2>Settings</h2>
       <div class="tabs settings-tabs" role="tablist">
         <button type="button" role="tab" class="tab active" data-pane="general">General</button>
+        <button type="button" role="tab" class="tab" data-pane="appearance">Appearance</button>
         <button type="button" role="tab" class="tab" data-pane="engines">Engines</button>
         <button type="button" role="tab" class="tab" data-pane="analysis">Analysis</button>
         <button type="button" role="tab" class="tab" data-pane="ai">AI</button>
@@ -830,91 +981,173 @@
       </div>
 
       <div class="settings-pane" data-pane="general">
-        <div>
-          <div class="setting-label">Theme</div>
+        <h3 class="set-group">Sound</h3>
+        <div class="set-card">
+          <label class="set-row" for="sound-on"><span class="set-label">Play sounds</span><input type="checkbox" class="lx-switch" id="sound-on" role="switch"></label>
+          <div class="set-row">
+            <label class="set-label" for="sound-volume">Volume</label>
+            <span class="set-ctl"><input type="range" id="sound-volume" min="0" max="100" step="5"> <button type="button" class="small" id="sound-test">Test</button></span>
+          </div>
+        </div>
+        <p class="set-foot">Moves, captures, castling, check, promotion, the start and end of a game, low time and illegal moves. The sounds follow the theme.</p>
+
+        <h3 class="set-group">Music</h3>
+        <div class="set-card">
+          <label class="set-row" for="music-on"><span class="set-label">Play classical music <span class="set-sub" id="music-now"></span></span><input type="checkbox" class="lx-switch" id="music-on" role="switch"></label>
+          <div class="set-row">
+            <label class="set-label" for="music-station">Station <span class="set-sub music-address" id="music-address" hidden></span></label>
+            <span class="set-ctl"><select id="music-station"></select> <button type="button" class="small" id="music-remove" title="Take this station off your list" hidden>Remove</button></span>
+          </div>
+          <div class="set-row music-add" id="music-add-row" hidden>
+            <span class="set-label">Add a station <span class="set-sub">the address of its stream (MP3, AAC or Ogg) or of a .pls or .m3u playlist, as radio sites and directories such as radio-browser.info give it</span></span>
+            <span class="music-add-fields">
+              <input type="text" id="music-add-name" placeholder="Name (optional)" spellcheck="false" aria-label="Station name">
+              <input type="url" id="music-add-url" placeholder="https://… stream address" spellcheck="false" aria-label="Stream address">
+              <span class="music-add-actions"><button type="button" class="small" id="music-add-cancel">Cancel</button> <button type="button" class="small primary" id="music-add-go">Add</button></span>
+              <span class="music-add-note" id="music-add-note" hidden></span>
+            </span>
+          </div>
+          <div class="set-row" id="music-folder-row" hidden>
+            <span class="set-label">Folder <span class="set-sub" id="music-folder"></span></span>
+            <span class="set-ctl"><button type="button" class="small" id="music-choose">Choose…</button> <button type="button" class="small" id="music-skip" title="Play the next piece">Next</button></span>
+          </div>
+          <label class="set-row" for="music-shuffle" id="music-shuffle-row" hidden><span class="set-label">Shuffle</span><input type="checkbox" class="lx-switch" id="music-shuffle" role="switch"></label>
+          <div class="set-row">
+            <label class="set-label" for="music-volume">Volume</label>
+            <span class="set-ctl"><input type="range" id="music-volume" min="0" max="100" step="5"></span>
+          </div>
+        </div>
+        <p class="set-foot">Live classical radio streamed from the internet (or any station you add), or the music files (MP3, AAC, FLAC, Ogg, WAV) in a folder of your own. It plays under the game sounds with its own volume; the note button beside the board, or <kbd>U</kbd>, starts and stops it.</p>
+
+        <h3 class="set-group">Lichess games</h3>
+        <div class="set-card">
+          <label class="set-row" for="bot-switch" title="Your engine can play several Lichess games at once. With this on, a game that starts while another of its games is on the board takes the board, with the versus screen; with it off, the new game only joins the row of small boards and you switch by clicking it"><span class="set-label">Switch the board to your engine's new game <span class="set-sub">when it starts another while one is on the board</span></span><input type="checkbox" class="lx-switch" id="bot-switch" role="switch"></label>
+        </div>
+      </div>
+
+      <div class="settings-pane" data-pane="appearance" hidden>
+        <h3 class="set-group">Theme</h3>
+        <div class="set-card set-pad">
           <div class="theme-list" id="theme-list"></div>
         </div>
-        <div>
-          <div class="setting-label">Sound</div>
-          <div class="sound-settings">
-            <label class="check"><input type="checkbox" id="sound-on"> Play sounds</label>
-            <label class="volume">Volume <input type="range" id="sound-volume" min="0" max="100" step="5"></label>
-            <button type="button" class="small" id="sound-test">Test</button>
+
+        <h3 class="set-group">Glass</h3>
+        <div class="set-card">
+          <div class="set-row">
+            <label class="set-label" for="glass-transparency">Transparency <span class="set-sub">how much shows through the panels and windows</span></label>
+            <span class="set-ctl"><span class="set-range-end">Solid</span><input type="range" id="glass-transparency" min="0" max="90" step="2"><span class="set-range-end">Clear</span> <output id="glass-transparency-value"></output></span>
           </div>
-          <p class="hint">Moves, captures, castling, check, promotion, the start and end of a game, low time and illegal moves. The sounds follow the theme.</p>
         </div>
-        <div>
-          <div class="setting-label">Board</div>
-          <label class="row">Piece animation <select id="anim-speed">
-            <option value="off">Off</option><option value="fast">Fast</option>
-            <option value="normal">Normal</option><option value="slow">Slow</option>
-          </select></label>
-          <label class="check"><input type="checkbox" id="result-card"> Show the result on the board when a game ends</label>
-          <label class="check" title="When a game you are watching starts, the two players' cards come in to face each other for a moment before the game"><input type="checkbox" id="versus-on"> Show the versus screen when a watched game starts</label>
-          <label class="check" title="When a game ends, its result fills the window for a moment in the manner of a 1990s fighting game: K.O., the winner and the score"><input type="checkbox" id="ko-on"> Show the result screen when a game ends</label>
-          <label class="check" title="Your engine can play several Lichess games at once. With this on, a game that starts while another of its games is on the board takes the board, with the versus screen; with it off, the new game only joins the row of small boards and you switch by clicking it"><input type="checkbox" id="bot-switch"> Switch the board to your engine's new game when it starts another</label>
-          <label class="check" title="A red mark on the corner of each piece that more enemy pieces attack than its own side defends, with the difference"><input type="checkbox" id="attack-marks"> Mark pieces with more attackers than defenders</label>
-          <p class="hint">Pieces slide to their new square and a captured piece lifts off and flies into the captured pieces of the player who took it, for every move: yours, the engine's, a Lichess opponent's, and stepping through a game one move at a time.</p>
-        </div>
-        <div>
-          <div class="setting-label">Moves list</div>
-          <div class="sound-settings">
-            <label class="check"><input type="checkbox" id="moves-figurines"> Piece icons before moves</label>
-            <label class="check"><input type="checkbox" id="moves-scores"> Score after each move</label>
+        <p class="set-foot">The cards of the side panel, the column beside the board, the floating windows and this window. Dark themes are a little clearer at the same setting.</p>
+
+        <h3 class="set-group">Board</h3>
+        <div class="set-card">
+          <div class="set-row">
+            <label class="set-label" for="anim-speed">Piece animation</label>
+            <select id="anim-speed">
+              <option value="off">Off</option><option value="fast">Fast</option>
+              <option value="normal">Normal</option><option value="slow">Slow</option>
+            </select>
           </div>
-          <p class="hint">Scores come from the computer analysis once it has run; before that, from what the engine that played the move reported (shown in italics). Scores are from White's side.</p>
+          <label class="set-row" for="board-3d" title="The board and the pieces drawn in 3D, seen from your side at an angle, with light and shadows. Click or drag the pieces as on the flat board"><span class="set-label">3D board <span class="set-sub">the board and pieces in 3D</span></span><input type="checkbox" class="lx-switch" id="board-3d" role="switch"></label>
+          <label class="set-row" for="board-3d-auto" title="With the 3D board, the camera glides in on each move as it is played (closer for a capture or a check), holds a moment and glides back to your view. Turning the board yourself takes over until the next move. Also the camera button on the board"><span class="set-label">Auto camera <span class="set-sub">the 3D camera follows each move</span></span><input type="checkbox" class="lx-switch" id="board-3d-auto" role="switch"></label>
+          <label class="set-row" for="board-3d-fx" title="With the 3D board, a burst where a piece is taken, a different one each time: fire and smoke, magic plasma, shadow clones, sparks or frost"><span class="set-label">Capture effects <span class="set-sub">a burst of fire, plasma, shadows… on each capture</span></span><input type="checkbox" class="lx-switch" id="board-3d-fx" role="switch"></label>
+          <label class="set-row" for="glass-board" title="The board and the pieces in the same frosted glass as the panels: see-through squares over a wash of colour, and pieces of glass with a bright edge and a sheen"><span class="set-label">Glassify board <span class="set-sub">glass squares and glass pieces</span></span><input type="checkbox" class="lx-switch" id="glass-board" role="switch"></label>
+          <label class="set-row" for="attack-marks" title="A red mark on the corner of each piece that more enemy pieces attack than its own side defends, with the difference"><span class="set-label">Mark pieces with more attackers than defenders</span><input type="checkbox" class="lx-switch" id="attack-marks" role="switch"></label>
+          <label class="set-row" for="result-card"><span class="set-label">Show the result on the board when a game ends</span><input type="checkbox" class="lx-switch" id="result-card" role="switch"></label>
+          <label class="set-row" for="versus-on" title="When a game you are watching starts, the two players' cards come in to face each other for a moment before the game"><span class="set-label">Versus screen <span class="set-sub">when a watched game starts</span></span><input type="checkbox" class="lx-switch" id="versus-on" role="switch"></label>
+          <label class="set-row" for="ko-on" title="When a game ends, its result fills the window for a moment in the manner of a 1990s fighting game: K.O., the winner and the score"><span class="set-label">Result screen <span class="set-sub">K.O., the winner and the score, when a game ends</span></span><input type="checkbox" class="lx-switch" id="ko-on" role="switch"></label>
         </div>
-      </div>
+        <p class="set-foot">Pieces slide to their new square and a captured piece flies into the captured pieces of the player who took it, for every move, and when stepping through a game one move at a time.</p>
 
-      <div class="settings-pane" data-pane="engines" hidden>
-        <p class="hint">UCI engines for playing and analysis. Add an engine by choosing its program file; Options sets its own settings, such as threads and hash size; Command line sets options it is started with.</p>
-        <div id="engine-list"></div>
-        <p class="error" id="engine-error" hidden></p>
-        <div><button type="button" id="engine-add">Add engine…</button></div>
-      </div>
+        <h3 class="set-group">Moves list</h3>
+        <div class="set-card">
+          <label class="set-row" for="moves-figurines"><span class="set-label">Piece icons before moves</span><input type="checkbox" class="lx-switch" id="moves-figurines" role="switch"></label>
+          <label class="set-row" for="moves-scores"><span class="set-label">Score after each move</span><input type="checkbox" class="lx-switch" id="moves-scores" role="switch"></label>
+        </div>
+        <p class="set-foot">Scores come from the computer analysis once it has run; before that, from what the engine that played the move reported (shown in italics). Scores are from White's side.</p>
 
-      <div class="settings-pane" data-pane="analysis" hidden>
-        <label class="row">Analysis engine <select id="analysis-engine"></select></label>
-        <label class="row">Lines shown
-          <span class="range"><input type="range" id="analysis-lines-setting" min="1" max="5" step="1"> <output id="analysis-lines-setting-value"></output></span>
-        </label>
-        <label class="check"><input type="checkbox" id="analysis-evalbar"> Show the evaluation bar and best-move arrow</label>
-        <label class="check"><input type="checkbox" id="analysis-altarrows"> Show the other lines' moves as arrows too, each in its own colour</label>
-        <p class="hint">Turn analysis on with the Analysis button in the toolbar. It follows the position on the board, including when you step back through the moves or browse games from a file, and uses its own copy of the engine. It pauses while an engine is playing a game.</p>
-      </div>
-
-      <div class="settings-pane ai-settings" data-pane="ai" hidden>
-        <p class="hint">The AI model used for <b>AI annotate</b> (under Annotate in the Moves tab), the <b>AI</b> panel's chat and the live commentary: from <b>OpenAI</b>, <b>Claude</b> (Anthropic) or <b>Google AI</b> (Gemini) with your API key, or from any OpenAI-compatible server, such as a local one (oMLX, LM Studio, Ollama, llama.cpp, vLLM).</p>
-        <label class="row" title="Who runs the model. Each keeps its own model and API key.">Provider <select id="ai-provider"></select></label>
-        <label class="row" id="ai-url-row" title="An OpenAI-compatible API. localhost:8000 is enough for a local server.">Endpoint <input type="text" id="ai-url" spellcheck="false" autocomplete="off" placeholder="http://localhost:8000/v1"></label>
-        <label class="row" title="The model to ask. Empty: the first model the endpoint lists.">Model
-          <span class="ai-model"><input type="text" id="ai-model" spellcheck="false" autocomplete="off" list="ai-models" placeholder="The endpoint's first model">
-            <datalist id="ai-models"></datalist>
-            <button type="button" class="small" id="ai-check" title="Ask the endpoint which models it has">Check</button></span></label>
-        <label class="row" id="ai-key-row" title="Kept encrypted on this computer, never shown again. Local servers usually need none.">API key <input type="password" id="ai-key" autocomplete="off" placeholder="Not needed for most local servers"></label>
-        <label class="row" title="The typeface of the conversation in the AI panel">Chat font
-          <span class="ai-font"><select id="aic-font">
+        <h3 class="set-group">AI chat</h3>
+        <div class="set-card">
+          <div class="set-row" title="The typeface of the conversation in the AI panel">
+            <label class="set-label" for="aic-font">Font</label>
+            <span class="set-ctl ai-font"><select id="aic-font">
             <option value="system">System</option>
             <option value="serif">Serif</option>
             <option value="rounded">Rounded</option>
             <option value="mono">Monospace</option>
             <option value="custom">Other…</option>
           </select>
-          <input type="text" id="aic-font-name" spellcheck="false" autocomplete="off" placeholder="A font on this computer, e.g. Avenir Next" hidden></span></label>
-        <label class="row" title="How large the conversation's text is">Chat text size
-          <span class="range"><input type="range" id="aic-font-size" min="80" max="150" step="5"> <output id="aic-font-size-value"></output></span></label>
-        <p class="aic-font-sample" id="aic-font-sample">The knight on f3 is well placed: 12. Nf3 e5 13. dxe5 keeps the pressure.</p>
+              <input type="text" id="aic-font-name" spellcheck="false" autocomplete="off" placeholder="A font on this computer, e.g. Avenir Next" hidden></span>
+          </div>
+          <div class="set-row" title="How large the conversation's text is">
+            <label class="set-label" for="aic-font-size">Text size</label>
+            <span class="set-ctl range"><input type="range" id="aic-font-size" min="80" max="150" step="5"> <output id="aic-font-size-value"></output></span>
+          </div>
+          <p class="aic-font-sample" id="aic-font-sample">The knight on f3 is well placed: 12. Nf3 e5 13. dxe5 keeps the pressure.</p>
+        </div>
+      </div>
+
+      <div class="settings-pane" data-pane="engines" hidden>
+        <p class="hint">UCI engines for playing and analysis. Add an engine by choosing its program file. Pick an engine in the list to rename it, set the command line it starts with, edit its options (threads, hash size, …) or remove it.</p>
+        <div class="engine-tools">
+          <span class="hint" id="engine-count"></span>
+          <button type="button" id="engine-add">Add engine…</button>
+        </div>
+        <p class="error" id="engine-error" hidden></p>
+        <div class="engine-manager">
+          <div class="engine-side">
+            <input type="search" id="engine-filter" placeholder="Find an engine" aria-label="Find an engine" spellcheck="false">
+            <div id="engine-list" role="listbox" aria-label="Engines"></div>
+          </div>
+          <div id="engine-detail" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <div class="settings-pane" data-pane="analysis" hidden>
+        <div class="set-card">
+          <div class="set-row">
+            <label class="set-label" for="analysis-engine">Analysis engine</label>
+            <select id="analysis-engine"></select>
+          </div>
+          <div class="set-row">
+            <label class="set-label" for="analysis-lines-setting">Lines shown</label>
+            <span class="set-ctl range"><input type="range" id="analysis-lines-setting" min="1" max="5" step="1"> <output id="analysis-lines-setting-value"></output></span>
+          </div>
+          <label class="set-row" for="analysis-evalbar"><span class="set-label">Evaluation bar and best-move arrow</span><input type="checkbox" class="lx-switch" id="analysis-evalbar" role="switch"></label>
+          <label class="set-row" for="analysis-altarrows"><span class="set-label">The other lines' moves as arrows too <span class="set-sub">each in its own colour</span></span><input type="checkbox" class="lx-switch" id="analysis-altarrows" role="switch"></label>
+        </div>
+        <p class="set-foot">Turn analysis on with the Analysis button in the toolbar. It follows the position on the board, including when you step back through the moves or browse games from a file, and uses its own copy of the engine. It pauses while an engine is playing a game.</p>
+      </div>
+
+      <div class="settings-pane ai-settings" data-pane="ai" hidden>
+        <p class="hint">The AI model used for <b>AI annotate</b> (under Annotate in the Moves tab), the <b>AI</b> panel's chat and the live commentary: from <b>OpenAI</b>, <b>Claude</b> (Anthropic) or <b>Google AI</b> (Gemini) with your API key, or from any OpenAI-compatible server, such as a local one (oMLX, LM Studio, Ollama, llama.cpp, vLLM).</p>
+        <div class="set-card">
+        <label class="row" title="Who runs the model. Each keeps its own model and API key.">Provider <select id="ai-provider"></select></label>
+        <label class="row" id="ai-url-row" title="An OpenAI-compatible API. localhost:8000 is enough for a local server.">Endpoint <input type="text" id="ai-url" spellcheck="false" autocomplete="off" placeholder="http://localhost:8000/v1"></label>
+        <label class="row" title="The model to ask. Empty: the first model the endpoint lists.">Model
+          <span class="ai-model"><input type="text" id="ai-model" spellcheck="false" autocomplete="off" list="ai-models" placeholder="The endpoint's first model">
+            <datalist id="ai-models"></datalist>
+            <button type="button" class="small" id="ai-check" title="Ask the endpoint which models it has">Check</button></span></label>
+        <label class="row" title="How many tokens the model can take in at once, for the context meter in the AI panel. Leave empty to use what the provider reports (Claude, Google AI, LM Studio, llama.cpp and Ollama report it; OpenAI does not).">Context window
+          <span class="ai-ctx-set"><input type="number" id="ai-ctx-size" min="1000" step="1000" inputmode="numeric" placeholder="As the provider reports"> tokens</span></label>
+        <label class="row" id="ai-key-row" title="Kept encrypted on this computer, never shown again. Local servers usually need none.">API key <input type="password" id="ai-key" autocomplete="off" placeholder="Not needed for most local servers"></label>
+        </div>
         <p class="hint" id="ai-note">Nothing is sent until you press AI annotate or send a message in the AI panel: then the game on the board goes to this endpoint, as PGN, with the position shown. It waits for the answer as long as the model takes; Stop cancels it.</p>
-        <div class="setting-label">Commentator</div>
-        <label class="check" title="A little pixel-art chess piece floats over the window and says each live comment in a comic speech bubble, in place of the commentary card beside the board"><input type="checkbox" id="cmt-on"> Show a commentator character that says the live commentary</label>
-        <div class="cmt-cast" id="cmt-cast" role="radiogroup" aria-label="Commentator"></div>
+        <h3 class="set-group">Commentator</h3>
+        <div class="set-card">
+          <label class="set-row" for="cmt-on" title="A little pixel-art chess piece floats over the window and says each live comment in a comic speech bubble, in place of the commentary card beside the board"><span class="set-label">Show a commentator character <span class="set-sub">that says the live commentary</span></span><input type="checkbox" class="lx-switch" id="cmt-on" role="switch"></label>
+          <div class="cmt-cast" id="cmt-cast" role="radiogroup" aria-label="Commentator"></div>
+        </div>
         <p class="hint">Live commentary is turned on in the AI panel's Commentary view. Drag the character anywhere over the window; click it to show or put away its last comment.</p>
       </div>
 
       <div class="settings-pane" data-pane="database" hidden>
-        <label class="check"><input type="checkbox" id="db-on"> Save finished games to a PGN database</label>
-        <div class="row db-file">File
-          <span class="db-path"><input type="text" id="db-path" readonly spellcheck="false"> <button type="button" class="small" id="db-choose">Choose…</button></span>
+        <div class="set-card">
+          <label class="set-row" for="db-on"><span class="set-label">Save finished games to a PGN database</span><input type="checkbox" class="lx-switch" id="db-on" role="switch"></label>
+          <div class="set-row db-file"><span class="set-label">File</span>
+            <span class="db-path"><input type="text" id="db-path" readonly spellcheck="false"> <button type="button" class="small" id="db-choose">Choose…</button></span>
+          </div>
         </div>
         <fieldset class="db-kinds">
           <legend>Games to save</legend>
@@ -929,6 +1162,7 @@
 
       <div class="settings-pane" data-pane="lichess" hidden>
         <p class="hint">Your engine plays on Lichess through a <b>Bot account</b>. Create an API token with the <i>bot:play</i>, <i>challenge:read</i> and <i>challenge:write</i> permissions while signed in to that account. <a href="#" id="ls-token-link">Create a token on Lichess</a></p>
+        <div class="set-card">
         <label class="row">API token
           <span class="ls-token"><input type="password" id="ls-token" spellcheck="false" autocomplete="off" placeholder="lip_…"> <button type="button" class="small" id="ls-token-clear">Forget</button></span>
         </label>
@@ -941,6 +1175,7 @@
           <span class="lx-dot" id="ls-dot"></span><span id="ls-state">Not connected</span>
           <span class="lx-spacer"></span>
           <button type="button" class="small" id="ls-connect">Connect</button>
+        </div>
         </div>
         <div class="ls-upgrade" id="ls-upgrade" hidden>
           <p><b id="ls-upgrade-name"></b> is a regular Lichess account. Only Bot accounts can play through the Bot API.</p>
@@ -973,7 +1208,10 @@
           </div>
           <p class="hint ls-greet-foot"><span id="ls-greet-preview"></span> <button type="button" class="small" id="ls-greet-reset">Use the usual messages</button> <button type="button" class="small" id="ls-greet-clear">Say nothing</button></p>
         </fieldset>
-        <label class="row ls-server">Server <input type="url" id="ls-server" spellcheck="false" placeholder="https://lichess.org"></label>
+        <h3 class="set-group">Server</h3>
+        <div class="set-card">
+          <label class="row ls-server">Lichess server <input type="url" id="ls-server" spellcheck="false" placeholder="https://lichess.org"></label>
+        </div>
         <p class="error" id="ls-error" hidden></p>
       </div>
 
@@ -1124,6 +1362,7 @@
         <tr><td><kbd>F</kbd></td><td>Flip the board</td></tr>
         <tr><td><kbd>Z</kbd></td><td>Zen mode: only the board and the players</td></tr>
         <tr><td><kbd>M</kbd></td><td>Sounds on or off</td></tr>
+        <tr><td><kbd>U</kbd></td><td>Classical music on or off</td></tr>
         <tr><td><kbd>L</kbd></td><td>Analysis on / off</td></tr>
         <tr><td><kbd>P</kbd></td><td>Pause / resume the analysis</td></tr>
         <tr><td><kbd>B</kbd></td><td>Takeback</td></tr>
@@ -1143,6 +1382,7 @@
     </form>
   </dialog>
   <script src="sounds.js"></script>
+  <script src="music.js"></script>
   <script src="timecontrol.js"></script>
   <!-- A Lichess player's information, shown while hovering their name. -->
   <div id="player-pop" class="player-pop" role="tooltip" hidden></div>
@@ -1170,5 +1410,7 @@
   <script src="commentary.js"></script>
   <script src="commentator.js"></script>
   <script src="easter.js"></script>
+  <script src="menu.js"></script>
+  <script type="module" src="board3d.js"></script>
 </body>
 </html>

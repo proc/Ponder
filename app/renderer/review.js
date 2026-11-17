@@ -251,7 +251,8 @@ function reviewSummary(result) {
     const s = result[side];
     const p = state.players?.[side];
     return el('tr', {}, [
-      el('td', { className: 'who' }, [el('span', { className: `side-dot ${side}` }), p?.name ?? side]),
+      el('td', { className: 'who' }, [el('span', { className: `side-dot ${side}` }),
+        ...[lichessUser(side) ? flagSpan(lichessUser(side)) : null].filter(Boolean), p?.name ?? side]),
       el('td', { className: 'n inaccuracy', title: 'Inaccuracies', textContent: s.inaccuracies }),
       el('td', { className: 'n mistake', title: 'Mistakes', textContent: s.mistakes }),
       el('td', { className: 'n blunder', title: 'Blunders', textContent: s.blunders }),

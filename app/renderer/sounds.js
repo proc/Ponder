@@ -339,6 +339,14 @@ const sounds = (() => {
   };
 
   load();
+  // Opening the sound output takes a moment (about a fifth of a second on a
+  // Mac), which held up the board at the first move that made a sound: done
+  // instead while the app is idle after it starts.
+  if (enabled) {
+    (window.requestIdleCallback ?? ((f) => setTimeout(f, 1500)))(() => {
+      try { if (!ctx) { ctx = new AudioContext(); master = connectOutput(ctx); } } catch { /* made at the first sound */ }
+    }, { timeout: 4000 });
+  }
   return {
     names: Object.keys(voices.wood),
     log,

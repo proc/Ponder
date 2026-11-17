@@ -80,11 +80,12 @@ async function aiChatContext() {
   const white = state.players.white?.name || 'White';
   const black = state.players.black?.name || 'Black';
   const result = state.result && state.result !== '*' ? state.result : state.active || state.external?.live ? 'in progress' : 'unfinished';
-  parts.push(`Game: ${white} (White) against ${black} (Black). Result: ${result}${state.reason ? ` (${state.reason})` : ''}.`);
+  const rating = (side) => (state.players[side]?.rating ? `, rated ${state.players[side].rating}` : '');
+  parts.push(`Game: ${white} (White${rating('white')}) against ${black} (Black${rating('black')}). Result: ${result}${state.reason ? ` (${state.reason})` : ''}.`);
   if (state.opening) parts.push(`Opening: ${state.opening}.`);
   let pgn = '';
   try { pgn = await gamePgn(); } catch { /* no game to write */ }
-  if (pgn) parts.push(`The game as PGN, with any annotations and engine evaluations:\n${pgn.trim()}`);
+  if (pgn) parts.push(`The game as PGN (its tags give the players' names and ratings, the event and the time control), with any annotations and engine evaluations:\n${pgn.trim()}`);
   // Where the board is.
   const fen = shownFen();
   const turn = fen.split(' ')[1] === 'w' ? 'White' : 'Black';
@@ -458,6 +459,7 @@ function closeAiChat(chat) {
 }
 
 function renderAiChat() {
+  renderAiContext();
   const log = $('#aic-log');
   if (!log) return;
   renderAiHandle();
@@ -500,6 +502,45 @@ function renderAiChat() {
   $('#aic-note').title = aic.model ? `Answered by ${aic.model} (Settings → AI)` : '';
 }
 
+// --- The model's context: how much of it the last request used -----------
+// The tokens the last request took (what was sent: the instructions, the
+// game and the conversation; and the answer, which the next request carries
+// too), against the model's context window where that is known. In the
+// Chat view for the chat shown, in the Commentary view for the commentary.
+const aiTok = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}k` : n >= 1e3 ? `${+(n / 1e3).toFixed(1)}k` : String(n));
+async function aiNoteUsage(holder, reply) {
+  if (!reply?.usage) return;
+  holder.usage = { ...reply.usage, model: reply.model ?? '', window: holder.usage?.model === reply.model ? holder.usage.window : null };
+  renderAiContext();
+  try {
+    const n = await api.ai.contextWindow?.(reply.model);
+    if (holder.usage?.model === (reply.model ?? '')) { holder.usage.window = Number(n) > 0 ? Number(n) : null; renderAiContext(); }
+  } catch { /* not known */ }
+}
+function renderAiContext() {
+  const box = $('#ai-ctx');
+  const view = $('#pane-ai').dataset.view;
+  const u = view === 'commentary' ? (typeof cm !== 'undefined' ? cm.usage : null) : aic.chat?.usage;
+  box.hidden = !u;
+  if (!u) return;
+  const used = u.input + u.output;
+  const frac = u.window ? Math.min(1, used / u.window) : null;
+  box.querySelector('.ai-ctx-text').textContent = u.window ? `${aiTok(used)} / ${aiTok(u.window)}` : `${aiTok(used)} tokens`;
+  box.querySelector('i').style.width = `${Math.max(2, Math.round((frac ?? 0) * 100))}%`;
+  box.classList.toggle('unknown', !u.window);
+  box.classList.toggle('warn', frac != null && frac >= 0.75);
+  box.classList.toggle('full', frac != null && frac >= 0.95);
+  box.setAttribute('aria-valuenow', String(used));
+  if (u.window) box.setAttribute('aria-valuemax', String(u.window)); else box.removeAttribute('aria-valuemax');
+  const what = view === 'commentary' ? 'the last comment' : 'this chat\'s last answer';
+  const n = (x) => x.toLocaleString();
+  box.title = `Context used by ${what}${u.model ? ` (${u.model})` : ''}: ${n(u.input)} tokens sent (the instructions, the game as PGN${view === 'commentary' ? '' : ' and the conversation'}) + ${n(u.output)} in the answer = ${n(used)}`
+    + (u.window ? ` of a ${n(u.window)}-token context window (${Math.round(frac * 100)}%).` : '. The model\'s context window is not known: set it in Settings → AI to see how full it is.')
+    + (view === 'commentary' ? '' : ' The next message sends all of it again, and more.');
+}
+window.renderAiContext = renderAiContext;
+window.aiNoteUsage = aiNoteUsage;
+
 async function sendAiChat(text) {
   text = String(text ?? '').trim();
   if (!text || aic.busy) return;
@@ -526,6 +567,7 @@ async function sendAiChat(text) {
     answer.model = reply.model;
     answer.stopped = Boolean(reply.stopped);
     aic.model = reply.model ?? aic.model;
+    aiNoteUsage(chat, reply);
   } catch (err) {
     const msg = errorText(err);
     answer.thinkMs ??= Date.now() - answer.started;

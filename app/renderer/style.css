@@ -39,6 +39,11 @@
   --line-3: #8e5bd6;
   --line-4: #d0508a;
   --line-5: #a0703a; /* not green, to stay apart from the best move */
+  /* The 3D board's pieces (board3d.js): white and black as the flat set,
+     a satin finish. */
+  --piece3d-white: #f4f4f6;
+  --piece3d-black: #2b2b2b;
+  --piece3d-finish: satin;
   color-scheme: light;
 }
 
@@ -75,6 +80,14 @@
   --line-3: #b07cff;
   --line-4: #ff6fb1;
   --line-5: #7fe0a0;
+  /* The 3D pieces: dark navy bodies edged in the set's neon, cyan for
+     White and magenta for Black, glossy; a neon line round the board. */
+  --piece3d-white: #272c65;
+  --piece3d-black: #272c65;
+  --piece3d-white-rim: #68cbe3;
+  --piece3d-black-rim: #cf519d;
+  --piece3d-finish: gloss;
+  --board3d-edge: #62cbe7;
   color-scheme: dark;
 }
 
@@ -113,6 +126,10 @@
   --line-3: #b07cff;
   --line-4: #ff6fb1;
   --line-5: #5fd4c4;
+  /* The 3D pieces: the set's flat pale and amber, matte. */
+  --piece3d-white: #eeeff3;
+  --piece3d-black: #f5a522;
+  --piece3d-finish: matte;
   color-scheme: dark;
 }
 
@@ -152,6 +169,10 @@
   --line-3: #b3a4f7;
   --line-4: #f5b26b;
   --line-5: #e8e06a;
+  /* The 3D pieces: the set's teal and coral, soft and matte. */
+  --piece3d-white: #7bccc4;
+  --piece3d-black: #f27085;
+  --piece3d-finish: matte;
   color-scheme: dark;
 }
 
@@ -1600,6 +1621,27 @@ button.link:hover:not(:disabled) { text-decoration: underline; }
 }
 .analysis-line .score.white { background: var(--eval-white); color: var(--eval-black); box-shadow: inset 0 0 0 1px var(--line); }
 .analysis-line .score.black { background: var(--eval-black); color: var(--eval-white); box-shadow: inset 0 0 0 1px var(--line); }
+/* Win/draw/loss chances: White's wins, draws, Black's wins. */
+/* Win/draw/loss chances: a bar of three parts (White's, the draw, Black's),
+   outlined so the white part shows on a light background, and over it the
+   three figures in large type. */
+.wdl-bar {
+  display: flex; height: 0.6rem; border-radius: 999px; overflow: hidden; background: var(--fill);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent);
+}
+.wdl-bar i { display: block; min-width: 0; flex-basis: 0; }
+.wdl-bar i + i { margin-left: 1px; }
+.wdl-bar .w { background: var(--eval-white); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent); border-radius: 999px 0 0 999px; }
+.wdl-bar .d { background: color-mix(in srgb, var(--muted) 75%, transparent); }
+.wdl-bar .l { background: var(--eval-black); }
+.wdl-bar.mini { flex: none; width: 3rem; height: 0.5rem; align-self: center; }
+.wdl-bar.mini.none { visibility: hidden; }
+.wdl-sum { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.25rem 0 0.45rem; }
+.wdl-sum[hidden] { display: none; }
+.wdl-nums { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wdl-nums b { font-size: 0.95rem; font-weight: 700; color: var(--text); }
+.wdl-nums .d { text-align: center; }
+.wdl-nums .l { text-align: right; }
 .analysis-line .pv { flex: 1; min-width: 0; user-select: text; font-size: 0.88rem; line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .analysis-line:first-child .pv { font-weight: 600; color: var(--text); }
 .analysis-line.open .pv { white-space: normal; overflow-wrap: anywhere; }
@@ -1610,7 +1652,7 @@ button.link:hover:not(:disabled) { text-decoration: underline; }
    by its corner, folded to its header, hidden. */
 .fw .fw-tools, .fw .float-grip { display: none; }
 .fw.floating {
-  position: fixed; z-index: 40; margin: 0; min-height: 0; max-height: none;
+  position: fixed; z-index: var(--float-z, 40); margin: 0; min-height: 0; max-height: none;
   box-shadow: 0 0 0 1px var(--sep), 0 12px 36px rgb(0 0 0 / .3);
 }
 .fw.floating .fw-head {
@@ -1713,7 +1755,7 @@ body.zen #engine-pill { display: none; }
    is the handle to drag it by; the arrow folds it down to the header. */
 .engine .float-toggle { display: none; }
 .engine.floating {
-  position: fixed; z-index: 40; margin: 0;
+  position: fixed; z-index: var(--float-z, 40); margin: 0;
   width: min(27rem, calc(100vw - 1rem)); max-height: min(34rem, calc(100vh - 1rem));
   box-shadow: 0 0 0 1px var(--sep), 0 12px 36px rgb(0 0 0 / .3);
 }
@@ -1738,7 +1780,7 @@ body.zen #engine-pill { display: none; }
 /* Challenges sent: a small window floating over the app, one block per
    challenge with how it stands. */
 .float-win {
-  position: fixed; z-index: 41; width: min(21rem, calc(100vw - 1rem)); max-height: calc(100vh - 1rem);
+  position: fixed; z-index: var(--float-z, 41); width: min(21rem, calc(100vw - 1rem)); max-height: calc(100vh - 1rem);
   display: flex; flex-direction: column; overflow: hidden;
   box-shadow: 0 0 0 1px var(--sep), 0 12px 36px rgb(0 0 0 / .3);
 }
@@ -1786,6 +1828,18 @@ body.zen .float-win { display: none; }
   font-size: 0.88rem; font-weight: 600; font-variant-numeric: tabular-nums;
 }
 .chf-list:empty + .chf-next { border-top: 0; }
+/* Auto challenge, to turn off without going to the Lichess tab; it stays
+   when the window is folded. */
+.chf-auto {
+  flex: none; display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.85rem;
+  border-top: 1px solid var(--sep); font-size: 0.86rem;
+}
+.chf-auto[hidden] { display: none; }
+.chf-auto label { flex: 1; min-width: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chf-auto label b { font-weight: 600; }
+#ch-float-auto [hidden] { display: none; }
+.float-win.folded > .chf-auto:not([hidden]) { display: flex; }
+.chf-list:empty + .chf-next[hidden] + .chf-auto { border-top: 0; }
 
 /* Dragged to a size by its corner: the lines take the room there is. */
 .engine.floating.sized { max-height: calc(100vh - 1rem); }
@@ -1886,10 +1940,57 @@ details input { width: 100%; margin-top: 0.45rem; font: 0.85rem var(--mono); }
 .actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.4rem; }
 .actions button { padding: 0.4rem 1.15rem; border-radius: 999px; min-width: 5.2rem; }
 
-.engine-row { display: flex; align-items: center; gap: 0.5rem; padding: 0.7rem 0; border-bottom: 1px solid var(--sep); }
-.engine-row .grow { flex: 1; min-width: 0; }
-.engine-row input { width: 100%; }
-.engine-row .path { color: var(--muted); font-size: 0.85rem; margin-top: 0.2rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+/* The engine manager: a dense, searchable list beside the chosen engine's details. */
+.engine-tools { display: flex; align-items: center; gap: 0.6rem; }
+.engine-tools #engine-add { margin-left: auto; }
+.engine-manager {
+  display: grid; grid-template-columns: minmax(11rem, 14rem) minmax(0, 1fr); gap: 0.7rem;
+  height: clamp(16rem, 58vh, 30rem);
+}
+.engine-side { display: flex; flex-direction: column; gap: 0.4rem; min-height: 0; }
+.engine-side input[type="search"] { width: 100%; }
+#engine-list {
+  flex: 1; min-height: 0; overflow-y: auto; background: var(--group); border-radius: var(--r-m);
+  padding: 0.25rem; display: flex; flex-direction: column; gap: 1px; overscroll-behavior: contain;
+}
+.engine-item {
+  display: flex; align-items: center; gap: 0.35rem; width: 100%; flex: none; text-align: left;
+  background: none; border: 0; box-shadow: none; color: inherit; font: inherit; font-size: 0.9rem;
+  padding: 0.3rem 0.5rem; border-radius: var(--r-s); min-height: 1.85rem;
+}
+.engine-item:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 7%, transparent); }
+.engine-item[aria-selected="true"], .engine-item[aria-selected="true"]:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.engine-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.engine-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.engine-mark { flex: none; width: 0.42rem; height: 0.42rem; border-radius: 50%; }
+.engine-mark.set { border: 1.5px solid var(--muted); }
+.engine-mark.use { background: var(--accent); }
+.engine-item[aria-selected="true"] .engine-mark.set { border-color: rgba(255, 255, 255, 0.85); }
+.engine-item[aria-selected="true"] .engine-mark.use { background: #fff; }
+.engine-none { margin: 0.5rem; }
+#engine-detail {
+  display: flex; flex-direction: column; gap: 0.8rem; min-height: 0; overflow-y: auto;
+  background: var(--group); border-radius: var(--r-m); padding: 0.8rem 0.9rem;
+}
+.engine-detail-head { display: flex; flex-direction: column; gap: 0.35rem; }
+.engine-detail-name { width: 100%; font-size: 1.05rem; font-weight: 600; }
+.engine-detail-name[readonly] { background: none; border-color: transparent; box-shadow: none; padding-left: 0; }
+.engine-tags { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.engine-tags .tag { font-size: 0.72rem; font-weight: 600; color: var(--muted); background: color-mix(in srgb, var(--text) 8%, transparent); border-radius: 999px; padding: 0.08rem 0.5rem; }
+.engine-fields { display: flex; flex-direction: column; gap: 0.7rem; }
+.engine-field { display: flex; flex-direction: column; gap: 0.25rem; }
+.engine-field > span:first-child { font-size: 0.78rem; font-weight: 600; color: var(--muted); }
+.engine-field input { width: 100%; min-width: 0; }
+.engine-path { font: 0.8rem var(--mono, ui-monospace, monospace); overflow-wrap: anywhere; user-select: text; cursor: text; }
+.engine-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+.engine-opt { font: 0.76rem var(--mono, ui-monospace, monospace); background: color-mix(in srgb, var(--text) 8%, transparent); border-radius: var(--r-s); padding: 0.1rem 0.4rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.engine-opts .hint { margin-right: 0.3rem; }
+.engine-foot { display: flex; justify-content: flex-end; margin-top: auto; }
+.engine-foot:empty { display: none; }
+@media (max-width: 620px) {
+  .engine-manager { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(9rem, 1fr) auto; height: auto; }
+  .engine-side { height: 14rem; }
+}
 /* Engine options: grouped rows of name, control, default and range, reset. */
 #dlg-options { width: min(56rem, calc(100vw - 2.5rem)); }
 .options-sub { margin-top: -0.5rem; }
@@ -1930,7 +2031,6 @@ details input { width: 100%; margin-top: 0.45rem; font: 0.85rem var(--mono); }
 .settings-pane .range { display: flex; align-items: center; gap: 0.5rem; }
 .settings-pane .range input { width: 9rem; }
 .settings-pane output { min-width: 1.2rem; font-variant-numeric: tabular-nums; }
-#engine-list { max-height: 50vh; overflow-y: auto; }
 .sound-settings { display: flex; align-items: center; gap: 1.2rem; margin-bottom: 0.35rem; }
 .sound-settings .volume { display: flex; align-items: center; gap: 0.5rem; }
 .sound-settings input[type="range"] { width: 9rem; accent-color: var(--accent); }
@@ -1961,29 +2061,36 @@ details input { width: 100%; margin-top: 0.45rem; font: 0.85rem var(--mono); }
   content: ''; display: inline-block; width: 0.45rem; height: 0.45rem; border-radius: 50%;
   background: var(--highlight); margin-left: 0.35rem; vertical-align: middle;
 }
-#pane-lichess { padding: 0.4rem 0.6rem 0; gap: 0.4rem; overflow-y: auto; container-type: inline-size; }
+#pane-lichess { padding: 0.55rem 0.75rem 1rem; gap: 0; overflow-y: auto; container-type: inline-size; }
 .lx-head, .ls-status { display: flex; align-items: center; gap: 0.5rem; flex: none; }
+.lx-engine-row { display: flex; align-items: center; gap: 0.5rem; flex: none; }
+.lx-engine-row label { color: var(--muted); font-size: 0.86rem; flex: none; }
+.lx-engine-row select { flex: 1; min-width: 0; }
+.lx-engine-row button { flex: none; }
 .lx-account { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lx-spacer { flex: 1; }
 .lx-dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; flex: none; background: var(--muted); }
 .lx-dot.on { background: var(--good); }
 .lx-dot.wait { background: var(--highlight); }
 .lx-dot.bad { background: var(--danger); }
-.lx-message { margin: 0; font-size: 0.9rem; color: var(--muted); }
+.lx-message { margin: 0.45rem 0.75rem 0; font-size: 0.82rem; color: var(--muted); }
 .lx-message.error { color: var(--danger); }
-.lx-body { display: flex; flex-direction: column; gap: 0.7rem; padding-bottom: 0.6rem; }
-.lx-off { margin: auto 0; padding: 1rem 0.4rem; text-align: center; }
+.lx-body { display: flex; flex-direction: column; }
+.lx-off { padding: 1.3rem 1rem 0.3rem; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.3rem; }
+.lx-off p { margin: 0; }
+.lx-off .lx-foot { margin: 0; max-width: 22rem; }
+.lx-off-glyph { font-size: 2.4rem; line-height: 1; color: var(--muted); opacity: .55; margin-bottom: 0.3rem; }
 .lx-section h4 {
-  margin: 0 0 0.4rem; font-size: 0.86rem; font-weight: 600; color: var(--muted);
+  margin: 1.1rem 0.75rem 0.4rem; font-size: 0.8rem; font-weight: 600; color: var(--muted);
 }
 .lx-section h4 .count { margin-left: 0.3rem; color: var(--text); }
 .lx-list { display: flex; flex-direction: column; }
 .lx-row {
   display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.6rem;
-  padding: 0.3rem 0.4rem; border-bottom: 1px solid var(--line);
+  padding: 0.5rem 0.2rem; border-bottom: 0.5px solid var(--sep);
 }
 .lx-row:last-child { border-bottom: 0; }
-.lx-row.watching { background: var(--panel-2); border-radius: 0.3rem; }
+.lx-row.watching { background: var(--tint); border-radius: var(--r-s); margin: 0 -0.45rem; padding-inline: 0.65rem; }
 .lx-row.finished { opacity: .72; }
 .lx-who { display: inline-flex; align-items: baseline; gap: 0.3rem; font-weight: 600; min-width: 0; }
 .lx-title { color: var(--highlight); font-size: 0.8rem; }
@@ -2003,11 +2110,9 @@ details input { width: 100%; margin-top: 0.45rem; font: 0.85rem var(--mono); }
 .lx-color { width: 0.8rem; height: 0.8rem; border-radius: 50%; border: 1px solid var(--muted); flex: none; }
 .lx-color.white { background: #fff; }
 .lx-color.black { background: #222; }
-.lx-empty { padding: 0.2rem 0.4rem; }
+.lx-empty { margin-top: 0.1rem; }
 .lx-challenge { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.7rem; margin-bottom: 0.3rem; }
 .lx-challenge label { display: inline-flex; align-items: center; gap: 0.3rem; }
-.lx-user { display: inline-flex; gap: 0.3rem; flex: 1 1 15rem; }
-.lx-user input { flex: 1; min-width: 6rem; }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
@@ -2034,10 +2139,7 @@ button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger
 .ls-greet-foot { display: flex; align-items: center; gap: 0.4rem; }
 .ls-greet-foot span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ls-server input { flex: 0 1 60%; }
-.lx-watch { flex: none; padding-bottom: 0.5rem; border-bottom: 1px solid var(--line); }
-.lx-watch.on h4 { color: var(--highlight); }
-.lx-watch .hint a { font-size: 0.85rem; }
-.lx-section h4 .lx-auto { display: inline-flex; float: right; text-transform: none; letter-spacing: 0; font-size: 0.85rem; font-weight: 500; color: var(--text); }
+
 /* Auto-accept rules: a line that opens into the rules. */
 /* The window that comes up when a challenge arrives. */
 #dlg-challenges {
@@ -2094,7 +2196,7 @@ button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger
 .ch-said { flex: 1 1 12rem; font-style: italic; }
 
 /* Engine and bot account, while connected. */
-.lx-about { margin: 0.3rem 0 0.5rem; background: var(--group); border-radius: var(--r-m); padding: 0.5rem 0.75rem; container-type: inline-size; }
+.lx-about { margin: 0.75rem 0 0; background: var(--group); border-radius: var(--r-m); padding: 0.65rem 0.85rem; container-type: inline-size; }
 .lx-about > summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.9rem; }
 .lx-about-title { font-weight: 600; }
 .lx-about-summary { color: var(--muted); margin-left: 0.3rem; }
@@ -2118,7 +2220,7 @@ button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger
 .lx-opt-table .k { color: var(--muted); overflow-wrap: anywhere; }
 .lx-opt-table .v { font-family: var(--mono); font-size: 0.8rem; overflow-wrap: anywhere; }
 .lx-opt-table .set { color: var(--accent); font-weight: 600; }
-.lx-rules { margin: 0.1rem 0 0.4rem; background: var(--group); border-radius: var(--r-s); padding: 0.45rem 0.7rem; font-size: 0.9rem; }
+.lx-rules { margin: 0 0 0.5rem; background: var(--group); border-radius: var(--r-m); padding: 0.6rem 0.85rem; font-size: 0.9rem; }
 .lx-rules.problem { box-shadow: inset 0 0 0 1px var(--danger); }
 .lx-rules summary { cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lx-rules[open] summary { white-space: normal; margin-bottom: 0.45rem; }
@@ -2132,10 +2234,8 @@ button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger
 .lx-rules .hint { font-size: 0.82rem; }
 .lx-rules .error { font-size: 0.85rem; margin-top: 0.3rem; }
 .lx-row.idle .lx-status { color: var(--muted); font-style: italic; }
-.lx-seek { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.5rem; margin: 0.1rem 0 0.3rem; font-size: 0.92rem; }
-.lx-seek input[type="number"] { width: 5rem; }
 #lx-seek-speed { font-weight: 600; }
-.lx-seek-state { margin: 0 0 0.3rem; color: var(--highlight); }
+.lx-seek-state { color: var(--highlight); }
 #analysis-pause { flex: none; padding: 0 0.4rem; line-height: 1.5; }
 #analysis-pause[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 #analysis.held .analysis-line { opacity: .7; }
@@ -2404,8 +2504,6 @@ td.tn-name .tn-swatch { margin-right: 0.45rem; }
   pointer-events: none; -webkit-user-drag: none; }
 .cap-group .cap-piece:last-child { margin-right: 0; }
 .cap-lead { font-size: 0.85rem; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
-.engine-args-row { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.3rem; }
-.engine-args-row > span { font-size: 0.8rem; color: var(--muted); flex: none; }
 .engine-args { font-family: var(--mono, ui-monospace, monospace); font-size: 0.85rem; }
 .engine-args-note { font-size: 0.8rem; color: var(--muted); margin-top: 0.15rem; }
 .engine-args-note:empty { display: none; }
@@ -2527,36 +2625,103 @@ kbd { font: inherit; font-size: 0.85em; padding: 0.08rem 0.42rem; border-radius:
 .ex-year { color: var(--muted); text-align: right; }
 #explorer-arrow { stroke: #003088; stroke-width: 0.14; stroke-linecap: round; opacity: .55; }
 
-/* Puzzles */
-#pane-puzzles { padding: 0.5rem 0.6rem; gap: 0.6rem; overflow-y: auto; }
-.pz-controls { display: flex; flex-direction: column; gap: 0.45rem; flex: none; }
-.pz-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.7rem; }
-.pz-row[hidden] { display: none; }
-.pz-row label { display: inline-flex; align-items: center; gap: 0.3rem; }
-.pz-row input[type="number"] { width: 4.6rem; }
-.pz-card { background: var(--group); border-radius: var(--r-m); padding: 0.9rem 1rem; display: flex; flex-direction: column; gap: 0.45rem; flex: none; }
-.pz-card[hidden] { display: none; }
-.pz-status { font-size: 1.15rem; font-weight: 700; }
+/* Puzzles: frosted-glass cards over a soft wash of the accent and two
+   warm tones, so the glass has colour to blur. Settings are rows as in the
+   macOS settings: a label (with a grey note) on the left, its control on
+   the right, hairlines between. */
+#pane-puzzles { padding: 0.8rem 0.8rem 1rem; gap: 0.75rem; overflow-y: auto; }
+.pz-glass { flex: none; }
+.pz-glass[hidden] { display: none; }
+
+/* Your score: the rating large, the counts in three small tiles. */
+.pz-hero { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem 1rem; flex-wrap: wrap; padding: 0.95rem 1.05rem; }
+.pz-rating { display: flex; flex-direction: column; }
+.pz-rating-k { font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+.pz-rating-v { font-size: 2.1rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.pz-stats { display: flex; gap: 0.4rem; }
+.pz-stat {
+  display: flex; flex-direction: column; align-items: center; min-width: 3.6rem; padding: 0.4rem 0.5rem;
+  border-radius: var(--r-m); background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+.pz-stat b { font-size: 1.15rem; font-variant-numeric: tabular-nums; line-height: 1.15; }
+.pz-stat span { font-size: 0.7rem; color: var(--muted); font-weight: 500; }
+.pz-stat.good b { color: var(--good); }
+.pz-stat.bad b { color: var(--danger); }
+.pz-stat.streak b { color: #ff9500; }
+
+/* Where the puzzles come from: a segmented control, frosted too. */
+.pz-seg {
+  flex: none; display: flex; gap: 2px; padding: 2px; border-radius: 0.72rem;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+}
+.pz-seg button {
+  flex: 1; padding: 0.38rem 0.5rem; border: 0; border-radius: calc(0.72rem - 2px); background: transparent; box-shadow: none;
+  color: var(--muted); font-weight: 550; font-size: 0.86rem;
+}
+.pz-seg button:hover:not(:disabled) { background: transparent; color: var(--text); }
+.pz-seg button.on, .pz-seg button.on:hover:not(:disabled) {
+  background: var(--thumb); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, .14), 0 0 0 0.5px rgba(0, 0, 0, .06);
+}
+
+.pz-settings { padding: 0 0.95rem; }
+.pz-set { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem 0.8rem; min-height: 1.9rem; padding: 0.55rem 0; }
+.pz-set + .pz-set { border-top: 0.5px solid var(--sep); }
+.pz-set-label { display: flex; flex-direction: column; min-width: 0; font-size: 0.88rem; }
+.pz-set-sub { font-size: 0.74rem; color: var(--muted); overflow-wrap: anywhere; }
+.pz-set select { flex: 0 1 auto; max-width: 60%; }
+.pz-set-ctl { display: inline-flex; align-items: center; gap: 0.3rem; flex: none; color: var(--muted); }
+.pz-set-ctl input[type="number"] { width: 4.6rem; text-align: right; }
+
+/* The buttons that fetch a puzzle: large, rounded as pills. */
+.pz-go { display: flex; gap: 0.5rem; flex: none; }
+.pz-go button { flex: 1; padding: 0.6rem 1rem; border-radius: 999px; font-weight: 600; font-size: 0.92rem; }
+.pz-go button:not(.primary) { background: var(--pz-glass); box-shadow: inset 0 0 0 0.5px var(--pz-edge), var(--pz-shadow); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+.pz-go button[hidden] { display: none; }
+
+/* The puzzle being played: a badge (the side to play, a tick, a cross),
+   what to do, the moves so far as chips, and what can be done. */
+.pz-card { padding: 1rem 1.05rem; display: flex; flex-direction: column; gap: 0.75rem; }
+.pz-head { display: flex; align-items: center; gap: 0.75rem; }
+.pz-badge {
+  flex: none; width: 2.4rem; height: 2.4rem; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 1.15rem; font-weight: 700; color: #fff; transition: background-color .2s var(--ease);
+}
+.pz-badge.white { background: #fff; box-shadow: inset 0 0 0 1px rgb(0 0 0 / .18), 0 2px 6px rgb(0 0 0 / .12); }
+.pz-badge.black { background: #1d1d1f; box-shadow: inset 0 0 0 1px rgb(255 255 255 / .18), 0 2px 6px rgb(0 0 0 / .2); }
+.pz-badge.good { background: var(--good); box-shadow: 0 3px 10px color-mix(in srgb, var(--good) 40%, transparent); }
+.pz-badge.bad { background: var(--danger); box-shadow: 0 3px 10px color-mix(in srgb, var(--danger) 40%, transparent); }
+.pz-badge.done { background: var(--muted); }
+.pz-head-text { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.pz-status { font-size: 1.02rem; font-weight: 650; line-height: 1.25; }
 .pz-status.good { color: var(--good); }
 .pz-status.bad { color: var(--danger); }
-.pz-info { color: var(--muted); font-size: 0.9rem; }
-.pz-themes { margin-top: 0.2rem; }
-.pz-line { font-size: 0.9rem; min-height: 1.2rem; }
-.pz-stats { color: var(--muted); font-size: 0.88rem; flex: none; }
+.pz-info { color: var(--muted); font-size: 0.82rem; }
+.pz-themes { margin-top: 0.15rem; }
+.pz-line { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.pz-line:empty { display: none; }
+.pz-move {
+  font: 600 0.8rem var(--mono); padding: 0.15rem 0.5rem; border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.pz-move:last-child { background: var(--tint); color: var(--accent); }
+.pz-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.pz-actions button { border-radius: 999px; padding-inline: 0.85rem; }
+.pz-actions button[hidden] { display: none; }
+.pz-actions .pz-leave { margin-left: auto; }
+.pz-error { flex: none; margin: 0; }
 body.puzzling .player { visibility: hidden; }
-.pz-controls .seg { align-self: flex-start; }
 
 /* ---- Lichess: playing with your own account ---- */
-.lx-me { flex: none; padding-bottom: 0.5rem; border-bottom: 1px solid var(--line); }
-.lx-me h4 { display: flex; align-items: baseline; gap: 0.5rem; }
-.lx-me-who { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 0.85rem; color: var(--text); font-weight: 600; display: inline-flex; gap: 0.5rem; align-items: baseline; }
-.lx-me-who a { font-weight: 500; font-size: 0.8rem; }
-.lx-signin { display: flex; flex-direction: column; gap: 0.4rem; }
+.lx-me-who { margin-left: auto; font-size: 0.85rem; color: var(--muted); display: inline-flex; gap: 0.6rem; align-items: baseline; min-width: 0; }
+.lx-me-who span { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lx-me-who a { font-size: 0.82rem; }
+.lx-signin { display: flex; flex-direction: column; gap: 0.55rem; }
 .lx-signin-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
 .lx-signin-row a, .lx-token-form a { font-size: 0.85rem; }
 .lx-token-form { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
 .lx-token-form input { flex: 1 1 14rem; }
-.lx-me-body { display: flex; flex-direction: column; gap: 0.45rem; }
+.lx-me-body { display: flex; flex-direction: column; }
 /* Quick pairing, as on Lichess's home page. */
 .lx-quick { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.2rem, 1fr)); gap: 0.35rem; }
 .lx-quick button { display: flex; flex-direction: column; align-items: center; padding: 0.4rem 0.2rem; line-height: 1.15; }
@@ -2565,11 +2730,10 @@ body.puzzling .player { visibility: hidden; }
 .lx-quick button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .lx-quick button.on span { color: inherit; }
 .lx-quick-opts { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
-.lx-me-seek { display: flex; align-items: center; gap: 0.5rem; padding: 0.35rem 0.5rem; background: var(--panel-2); border-radius: 0.35rem; font-weight: 600; }
+.lx-me-seek { display: flex; align-items: center; gap: 0.5rem; padding: 0.45rem 0.6rem; background: var(--tint); border-radius: var(--r-s); font-weight: 600; }
 .lx-me-seek > span:nth-child(2) { flex: 1; }
 .lx-spinner { width: 0.85rem; height: 0.85rem; border-radius: 50%; border: 2px solid var(--line); border-top-color: var(--highlight); animation: lx-spin 0.9s linear infinite; flex: none; }
 @keyframes lx-spin { to { transform: rotate(360deg); } }
-.lx-bot-head { margin: 0.2rem 0 0; font-size: 0.8rem; color: var(--muted); flex: none; }
 .lx-row .lx-label { font-size: 0.8rem; color: var(--muted); }
 .lx-row.myturn .lx-status { color: var(--highlight); font-weight: 700; }
 
@@ -2579,21 +2743,19 @@ body.puzzling .player { visibility: hidden; }
 .player .offer-note { color: var(--muted); font-weight: 500; }
 
 /* ---- Lichess: online bots ---- */
-.lx-online { flex: none; padding-bottom: 0.5rem; border-bottom: 1px solid var(--line); }
-.lx-online h4 { display: flex; align-items: center; gap: 0.4rem; }
-.lx-online-load { margin-left: auto; text-transform: none; letter-spacing: 0; }
-.lx-online-bar { display: flex; flex-wrap: wrap; gap: 0.35rem 0.5rem; align-items: center; margin-bottom: 0.4rem; }
+.lx-online-bar { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; align-items: center; margin: 0.15rem 0 0.6rem; }
 .lx-online-bar input[type="search"] { flex: 1 1 11rem; min-width: 8rem; }
 .lx-online-range { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--muted); }
 .lx-online-range input { width: 4.6rem; }
-.lx-online-list { display: flex; flex-direction: column; }
+.lx-online-list { display: flex; flex-direction: column; background: var(--group); border-radius: var(--r-m); padding: 0.15rem 0.5rem; }
+.lx-online-list:empty { display: none; }
 .lx-bot {
   /* Fixed last column so the rows line up whatever their buttons. */
   display: grid; grid-template-columns: minmax(7rem, 1.3fr) 4.4rem minmax(0, 1.6fr) 15rem; align-items: center;
-  gap: 0.2rem 0.6rem; padding: 0.35rem 0.3rem; border-bottom: 1px solid var(--line);
+  gap: 0.2rem 0.6rem; padding: 0.45rem 0.3rem; border-bottom: 0.5px solid var(--sep);
 }
 .lx-bot:last-child { border-bottom: 0; }
-.lx-bot:hover { background: var(--panel-2); }
+.lx-bot:hover { background: var(--fill); border-radius: var(--r-s); }
 .lx-bot .who { display: flex; align-items: center; gap: 0.35rem; min-width: 0; cursor: pointer; }
 .lx-bot .who .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lx-bot .who .flag { flex: none; }
@@ -2928,3 +3090,661 @@ body.puzzling .player { visibility: hidden; }
 .cmt-name { font-weight: 650; }
 .cmt-piece { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
 .cmt-blurb { font-size: 0.8rem; line-height: 1.35; color: var(--muted); }
+
+/* The AI panel's context meter: how much of the model's context the last
+   request used. */
+.ai-ctx { display: inline-flex; align-items: center; gap: 0.35rem; margin-right: 0.3rem; padding: 0.12rem 0.45rem; border-radius: 999px; font-size: 0.74rem; font-variant-numeric: tabular-nums; color: var(--muted); cursor: default; white-space: nowrap; }
+.ai-ctx[hidden] { display: none; }
+.ai-ctx:hover, .ai-ctx:focus-visible { background: var(--panel-2); color: var(--text); }
+.ai-ctx-bar { position: relative; width: 38px; height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--text) 13%, transparent); overflow: hidden; }
+.ai-ctx-bar i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--accent); transition: width 0.4s ease; }
+.ai-ctx.unknown .ai-ctx-bar { display: none; }
+.ai-ctx.warn .ai-ctx-bar i { background: #e0a020; }
+.ai-ctx.full .ai-ctx-bar i { background: var(--danger); }
+.ai-ctx.full { color: var(--danger); }
+.ai-ctx-set { display: inline-flex; align-items: center; gap: 0.4rem; }
+.ai-ctx-set input { width: 9rem; }
+
+/* ---- The Lichess pane: one part at a time, in grouped cards ----
+   A segmented control picks the part. Each part is a column of grouped,
+   rounded cards with small titles above and footnotes below, as in the
+   macOS settings: rows inside a card are split by hairlines. */
+.lx-seg { flex: none; margin-bottom: 0.2rem; }
+.lx-seg span { display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem; width: 100%; box-sizing: border-box; font-size: 0.86rem; padding: 0.32rem 0.3rem; }
+.lx-seg-dot { width: 0.42rem; height: 0.42rem; border-radius: 50%; flex: none; display: none; }
+.lx-seg-dot.on { display: block; background: var(--good); }
+.lx-seg-dot.wait { display: block; background: var(--highlight); }
+.lx-seg-dot.bad { display: block; background: var(--danger); }
+.lx-view { display: flex; flex-direction: column; flex: none; }
+.lx-view[hidden] { display: none; }
+.lx-view > :first-child, .lx-view > .lx-section:first-child > :first-child { margin-top: 0.75rem; }
+.lx-view-head { display: flex; align-items: center; gap: 0.5rem; margin: 1.1rem 0 0.4rem; }
+.lx-view-head h4 { margin: 0 0 0 0.75rem; }
+.lx-view-head > :last-child { margin-left: auto; }
+.lx-view-head .lx-auto { font-size: 0.82rem; }
+.lx-view > .lx-section:first-child > .lx-view-head:first-child { margin-top: 0.75rem; }
+
+.lx-group { margin: 1.1rem 0.75rem 0.4rem; font-size: 0.8rem; font-weight: 600; color: var(--muted); }
+.lx-group .count { margin-left: 0.25rem; color: var(--text); font-weight: 600; }
+.lx-card { background: var(--group); border-radius: var(--r-m); padding: 0 0.85rem; }
+.lx-card-row { padding: 0.65rem 0; }
+.lx-card-row + .lx-card-row { border-top: 0.5px solid var(--sep); }
+.lx-card-title { font-weight: 600; }
+.lx-card-sub { margin: 0; font-size: 0.86rem; color: var(--muted); }
+.lx-pad { padding: 0.75rem 0.85rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.lx-foot { margin: 0.4rem 0.75rem 0; font-size: 0.78rem; line-height: 1.4; color: var(--muted); }
+.lx-glyph {
+  flex: none; width: 1.75rem; height: 1.75rem; border-radius: 0.5rem; display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent); color: var(--on-accent); font-size: 1.05rem; line-height: 1;
+}
+.lx-me-head { display: flex; align-items: center; gap: 0.6rem; }
+
+/* Forms in a card: a full-width field, then a row of choices. */
+.lx-form { padding: 0.7rem 0.85rem; display: flex; flex-direction: column; gap: 0.55rem; }
+.lx-form > input[type="text"], .lx-user input { width: 100%; box-sizing: border-box; }
+.lx-form-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem 0.8rem; }
+.lx-form-row label { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.86rem; color: var(--muted); }
+.lx-form-row label.check { color: var(--text); }
+.lx-form-row button[type="submit"] { margin-left: auto; }
+.lx-inline { flex-direction: row; flex-wrap: wrap; align-items: center; }
+.lx-inline > input, .lx-inline > select { flex: 1 1 9rem; min-width: 0; width: auto; }
+.lx-inline > button { flex: none; }
+.lx-inline > input + button { margin-left: auto; }
+.lx-user { display: flex; gap: 0.4rem; align-items: center; }
+.lx-user input { flex: 1; min-width: 0; }
+
+/* What is being watched: a status card, tinted while something is. */
+.lx-now { display: flex; align-items: center; gap: 0.65rem; padding: 0.65rem 0.85rem; }
+.lx-now .lx-glyph { background: var(--fill-2); color: var(--muted); font-size: 0.85rem; }
+.lx-now-text { margin: 0; flex: 1; min-width: 0; font-size: 0.88rem; color: var(--muted); }
+.lx-now-text a { font-size: 0.82rem; white-space: nowrap; }
+.lx-watch.on .lx-now { background: var(--tint); }
+.lx-watch.on .lx-now .lx-glyph { background: var(--danger); color: #fff; }
+.lx-watch.on .lx-now-text { color: var(--text); }
+
+/* Lists of challenges and games: a card when they have rows. */
+.lx-view .lx-list:not(:empty) { background: var(--group); border-radius: var(--r-m); padding: 0.1rem 0.65rem; margin-top: 0.6rem; }
+.lx-head { gap: 0.55rem; }
+.lx-engine-row label { color: var(--text); font-size: 0.9rem; }
+.lx-quick-opts .hint { font-size: 0.8rem; }
+
+/* Lichess TV: a tile per channel, its icon in a coloured rounded square
+   (as in the macOS settings), the channel's name and who it has on now.
+   The channel being watched is outlined in the accent, marked Live. */
+.lx-tv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 0.5rem; }
+.lx-tv-tile {
+  display: flex; align-items: center; gap: 0.6rem; min-width: 0; text-align: left;
+  padding: 0.6rem 0.65rem; border: 0; border-radius: var(--r-m); background: var(--group); color: var(--text);
+  box-shadow: none; font: inherit; cursor: pointer; transition: background-color .15s var(--ease), box-shadow .15s var(--ease), transform .1s var(--ease);
+}
+.lx-tv-tile:hover:not(:disabled) { background: var(--fill-2); }
+.lx-tv-tile:active { transform: scale(.98); }
+.lx-tv-tile:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+.lx-tv-tile.on, .lx-tv-tile.on:hover:not(:disabled) { background: var(--tint); color: var(--text); border-color: transparent; box-shadow: inset 0 0 0 1.5px var(--accent); }
+.lx-tv-icon {
+  flex: none; width: 2rem; height: 2rem; border-radius: 0.55rem; display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; background: #8e8e93; box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / .08);
+}
+.lx-tv-icon svg { width: 1.15rem; height: 1.15rem; }
+.lx-tv-icon.best { background: linear-gradient(#ffb340, #ff9500); }
+.lx-tv-icon.bullet { background: linear-gradient(#ff6961, #ff3b30); }
+.lx-tv-icon.blitz { background: linear-gradient(#ff7aa0, #ff2d55); }
+.lx-tv-icon.rapid { background: linear-gradient(#5fd97f, #34c759); }
+.lx-tv-icon.classical { background: linear-gradient(#409cff, #007aff); }
+.lx-tv-icon.ultraBullet { background: linear-gradient(#c97cf0, #af52de); }
+.lx-tv-icon.bot { background: linear-gradient(#7d7aff, #5856d6); }
+.lx-tv-icon.computer { background: linear-gradient(#a2a2a7, #8e8e93); }
+.lx-tv-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.lx-tv-name { display: flex; align-items: center; gap: 0.35rem; font-size: 0.88rem; font-weight: 600; }
+.lx-tv-live {
+  display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.66rem; font-weight: 700; letter-spacing: .03em;
+  text-transform: uppercase; color: var(--danger);
+}
+.lx-tv-live::before { content: ''; width: 0.4rem; height: 0.4rem; border-radius: 50%; background: currentColor; animation: lx-tv-pulse 1.6s ease-in-out infinite; }
+@keyframes lx-tv-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .lx-tv-live::before { animation: none; } .lx-tv-tile:active { transform: none; } }
+.lx-tv-who { font-size: 0.8rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lx-tv-who.none { font-style: italic; }
+.lx-tv-title { color: var(--highlight); font-weight: 600; }
+.lx-tv-rating { font-size: 0.74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Settings in a card, a row each as in the macOS settings: what it is on
+   the left (with a grey note under it), its control on the right. */
+.lx-set { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem 0.8rem; min-height: 1.9rem; padding: 0.5rem 0; }
+.lx-set-label { display: flex; flex-direction: column; min-width: 0; font-size: 0.88rem; color: var(--text); }
+.lx-set-sub { font-size: 0.74rem; color: var(--muted); font-weight: 400; }
+.lx-set-ctl { display: inline-flex; align-items: center; gap: 0.35rem; flex: none; color: var(--muted); font-size: 0.86rem; }
+.lx-set-ctl input[type="number"] { width: 4.8rem; text-align: right; }
+.lx-set-plus { color: var(--muted); }
+.lx-seek-range { display: inline-flex; align-items: center; gap: 0.3rem; }
+.lx-seek-range[hidden] { display: none; }
+.lx-set-wide { flex-wrap: wrap; }
+.lx-set-wide input { flex: 1 1 12rem; min-width: 0; }
+.lx-seek-actions { display: flex; justify-content: flex-end; gap: 0.4rem; padding: 0.6rem 0; }
+#lx-seek-games { width: 4rem; }
+@container (max-width: 24rem) {
+  .lx-set:has(#lx-seek-mode) { flex-wrap: wrap; }
+}
+
+/* A switch, for the settings that are on or off. */
+input[type="checkbox"].lx-switch {
+  appearance: none; -webkit-appearance: none; position: relative; flex: none; margin: 0; cursor: pointer;
+  width: 2.15rem; height: 1.3rem; border-radius: 999px; background: var(--fill-2); box-shadow: none; vertical-align: middle;
+  transition: background-color .2s var(--ease);
+}
+input[type="checkbox"].lx-switch::after {
+  content: ''; position: absolute; top: 0.125rem; left: 0.125rem; width: 1.05rem; height: 1.05rem; border-radius: 50%;
+  border: 0; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / .25), 0 0 0 0.5px rgb(0 0 0 / .06); transition: transform .2s var(--ease);
+}
+input[type="checkbox"].lx-switch:checked { background: var(--good); box-shadow: none; }
+input[type="checkbox"].lx-switch:checked::after { top: 0.125rem; left: 0.125rem; width: 1.05rem; height: 1.05rem; border: 0; transform: translateX(0.85rem); }
+input[type="checkbox"].lx-switch:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+input[type="checkbox"].lx-switch:disabled { opacity: .5; cursor: default; }
+@media (prefers-reduced-motion: reduce) { input[type="checkbox"].lx-switch, input[type="checkbox"].lx-switch::after { transition: none; } }
+
+/* ==== Glass: every tab of the side panel ====
+   The panel has a soft wash of the accent and two warm tones; on it the
+   tabs' cards, lists and forms are frosted glass: translucent, blurring
+   what is behind, with a bright hairline edge and a soft shadow. Settings
+   are rows as in the macOS settings. Dark themes get darker glass. */
+body {
+  /* --glass-t is the transparency chosen in Settings → Appearance (0–90%).
+     Windows floating over the board are a little more solid. */
+  --glass-solid: clamp(6%, calc(100% - var(--glass-t, 48%)), 100%);
+  --glass: color-mix(in srgb, var(--panel) var(--glass-solid), transparent);
+  --glass-float: color-mix(in srgb, var(--panel) clamp(20%, calc(var(--glass-solid) + 14%), 100%), transparent);
+  --glass-edge: color-mix(in srgb, #fff 55%, transparent);
+  --glass-shadow: 0 1px 2px rgb(0 0 0 / .05), 0 8px 24px rgb(0 0 0 / .07);
+  --glass-fill: color-mix(in srgb, var(--text) 5%, transparent);
+  --pz-glass: var(--glass); --pz-edge: var(--glass-edge); --pz-shadow: var(--glass-shadow);
+}
+.moves-panel {
+  isolation: isolate;
+  background:
+    radial-gradient(22rem 16rem at 0 0, color-mix(in srgb, var(--accent) 26%, transparent), transparent 70%),
+    radial-gradient(20rem 15rem at 100% 10rem, color-mix(in srgb, #ff9f0a 20%, transparent), transparent 70%),
+    radial-gradient(24rem 16rem at 25% 24rem, color-mix(in srgb, #af52de 16%, transparent), transparent 70%),
+    radial-gradient(24rem 18rem at 100% 100%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 70%),
+    var(--panel);
+}
+:root:is([data-theme="cyberpunk"], [data-theme="obsidian"], [data-theme="dusk"]) body {
+  --glass-solid: clamp(4%, calc(90% - var(--glass-t, 48%)), 100%);
+  --glass-edge: color-mix(in srgb, #fff 12%, transparent);
+  --glass-shadow: 0 1px 2px rgb(0 0 0 / .3), 0 10px 28px rgb(0 0 0 / .3);
+  --glass-fill: color-mix(in srgb, var(--text) 7%, transparent);
+}
+.moves-panel :is(
+  .pz-glass, .lx-card, .lx-about, .lx-rules, .lx-online-list, .lx-view .lx-list:not(:empty), .lx-tv-tile,
+  .tn-card, .tn-setup .tn-grid, .tn-setup fieldset, .tn-verdict, .tn-head,
+  .games-search, .games-empty, .ex-body, .annotate, .review, .tp-bar
+), .moves-panel :is(#games-list, #moves) {
+  background: var(--glass); border-radius: var(--r-l);
+  -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
+}
+.moves-panel .lx-tv-tile:hover:not(:disabled) { background: color-mix(in srgb, var(--panel) 80%, transparent); }
+.moves-panel .pane .lx-tv-tile.on, .moves-panel .lx-tv-tile.on:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 16%, var(--glass)); box-shadow: inset 0 0 0 1.5px var(--accent), var(--glass-shadow);
+}
+.moves-panel .lx-watch.on .lx-now { background: color-mix(in srgb, var(--accent) 14%, var(--glass)); }
+.moves-panel .pane .tn-verdict.h1 { background: color-mix(in srgb, var(--good) 14%, var(--glass)); }
+.moves-panel .pane .tn-verdict.h0 { background: color-mix(in srgb, var(--danger) 12%, var(--glass)); }
+
+/* The tabs and the segmented controls: frosted tracks. */
+.moves-panel :is(.tabs, .seg, .segmented, .pz-seg) {
+  background: var(--glass-fill); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge);
+}
+/* Buttons in the tabs: rounded as pills, glassy when not the main one. */
+.moves-panel .pane button.small:not(.primary, .danger, .chip, .icon, .icon-btn, .seg button, .lx-tv-tile, .lx-quick button, [role="tab"]) {
+  border-radius: 999px; background: var(--glass); border-color: transparent;
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 1px 2px rgb(0 0 0 / .06);
+}
+.moves-panel .pane button.small:not(.primary, .danger, .chip, .icon, .icon-btn, .seg button, .lx-tv-tile, .lx-quick button, [role="tab"]):hover:not(:disabled) {
+  background: color-mix(in srgb, var(--panel) 85%, transparent);
+}
+.moves-panel .pane button.small:is(.primary, .danger) { border-radius: 999px; }
+.moves-panel .pane input[type="search"] { border-radius: 999px; padding-inline: 0.8rem; }
+
+/* Moves: the list of moves on a glass card, the file buttons as pills. */
+#pane-moves { padding: 0 0.7rem; gap: 0.6rem; }
+#pane-moves #moves { padding: 0.45rem 0.55rem; margin: 0; }
+#pane-moves .review, #pane-moves .annotate, #pane-moves .tp-bar { margin: 0; border: 0; padding: 0.7rem 0.85rem; }
+#pane-moves .moves-file { border-top: 0; padding: 0 0 0.6rem; }
+#pane-moves .moves-file button { padding-block: 0.4rem; }
+.moves-panel .nav { padding: 0 0.7rem 0.6rem; }
+.moves-panel .nav button { border-radius: 999px; }
+
+/* Games: the list, the search and the empty state are cards. */
+#pane-games { padding: 0.2rem 0.7rem 0.7rem; gap: 0.55rem; }
+#pane-games .games-empty { margin: auto 0; padding: 1.4rem 1rem; }
+#pane-games #games-list { margin: 0; padding: 0.35rem; }
+#pane-games .games-head .name { font-size: 0.95rem; }
+#pane-games .games-tools { margin-top: 0; }
+#pane-games .games-search { margin-top: 0; padding: 0.85rem 0.95rem; }
+
+/* Explorer: the moves table and the games on one card, hairlines between rows. */
+#pane-explorer { padding: 0.2rem 0.7rem 0.7rem; gap: 0.55rem; }
+#pane-explorer .ex-body { padding: 0.5rem 0.65rem 0.65rem; flex: none; }
+#pane-explorer .ex-table th, #pane-explorer .ex-table td { border-bottom: 0.5px solid var(--sep); }
+#pane-explorer .ex-table th { padding-block: 0.3rem; }
+#pane-explorer .ex-table td { padding-block: 0.32rem; }
+#pane-explorer .ex-row:hover { background: var(--glass-fill); }
+#pane-explorer .ex-game { border-bottom: 0.5px solid var(--sep); padding-block: 0.32rem; border-radius: 0; }
+#pane-explorer .ex-game:hover { background: var(--glass-fill); }
+#pane-explorer .chip { background: var(--glass-fill); }
+
+/* Lichess: the cards are glass already through the list above. */
+.moves-panel .lx-about-card { background: var(--glass-fill); }
+
+/* Tournament: the setup as cards of rows, the run view as cards. */
+#pane-tournament { padding: 0.2rem 0.75rem 0.9rem; }
+.tn-setup { gap: 0.75rem; }
+.tn-setup .tn-grid { padding: 0.8rem 0.95rem; gap: 0.55rem 0.9rem; }
+.tn-setup .tn-grid > label:not(.check) { color: var(--muted); font-size: 0.88rem; }
+.tn-setup fieldset { padding: 0.8rem 0.95rem; }
+.tn-setup legend { font-weight: 600; font-size: 0.86rem; }
+.tn-setup > .hint { margin: 0 0.75rem; font-size: 0.8rem; }
+.tn-actions button { border-radius: 999px; padding: 0.55rem 1.4rem; font-weight: 600; }
+.tn-run .tn-head { padding: 0.9rem 1rem; }
+.tn-run .tn-card { padding: 0.9rem 1rem; }
+#pane-games #games-list:empty { display: none; }
+#pane-games .games-empty button, .tn-actions button { border-radius: 999px; padding: 0.5rem 1.2rem; }
+
+/* ==== Glass: the column beside the board, and the floating windows ====
+   A faint wash of the same colours down the right of the window gives the
+   column's panels (game, engines, analysis, chat, commentary, opponent)
+   something to frost over. Windows floating over the board are frosted
+   too, a little more solid so the board does not show through too much. */
+body {
+  background:
+    radial-gradient(28rem 22rem at 100% 0, color-mix(in srgb, #ff9f0a 13%, transparent), transparent 70%),
+    radial-gradient(30rem 26rem at 100% 55%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 70%),
+    radial-gradient(28rem 22rem at 85% 100%, color-mix(in srgb, #af52de 12%, transparent), transparent 70%),
+    var(--bg);
+}
+.info > .panel, .info > .review {
+  background: var(--glass); border-radius: var(--r-l);
+  -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
+}
+:is(.fw.floating, .engine.floating, .float-win, .mh.floating) {
+  background: var(--glass-float); border-radius: var(--r-l);
+  -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge), 0 14px 40px rgb(0 0 0 / .22);
+}
+:is(.fw.floating, .engine.floating, .float-win).dragging { box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 20px 52px rgb(0 0 0 / .3); }
+/* Inside them: rows and chips on a faint fill rather than solid panel. */
+.info .gi-player, .info .gi-pt, .info .gi-kind, :is(.info, .floating) .mh-row { background: var(--glass-fill); }
+.info .gi-player.won { background: color-mix(in srgb, var(--good) 14%, transparent); }
+.info :is(.panel) button.small:not(.primary, .danger, .chip, .icon, .icon-btn, .float-toggle, .seg button, [role="tab"]) {
+  border-radius: 999px; background: var(--glass); border-color: transparent;
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 1px 2px rgb(0 0 0 / .06);
+}
+.info .seg, .info .segmented { background: var(--glass-fill); box-shadow: inset 0 0 0 0.5px var(--glass-edge); }
+
+/* An engine whose game is over: a Stopped pill in its header, in place of
+   its live numbers; its last search stays, a little dimmed. */
+.engine-stopped {
+  flex: none; display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.08rem 0.55rem; border-radius: 999px;
+  font-size: 0.74rem; font-weight: 650; color: var(--muted); background: var(--glass-fill, var(--fill));
+  box-shadow: inset 0 0 0 0.5px var(--sep);
+}
+.engine-stopped::before { content: ''; width: 0.45rem; height: 0.45rem; border-radius: 0.1rem; background: currentColor; }
+.engine-stopped[hidden] { display: none; }
+.engine.stopped .depth-badge { opacity: .55; }
+.engine.stopped :is(.lines, .engine-wdl, .engine-sum) { opacity: .7; transition: opacity .3s var(--ease); }
+/* A flag being looked up stays out of the way until it is known. */
+[data-flag-user][hidden] { display: none !important; }
+.ex-name-line { display: block; overflow: hidden; text-overflow: ellipsis; }
+.ex-name-line .cflag, .chat-line > .cflag, .lx-tv-who .cflag, .lx-now-text .cflag, .lx-seek-state .cflag,
+.game-row .cflag, .review-sum .who .cflag, #lx-account .cflag, .lx-me-who .cflag { margin-right: 0.25em; }
+
+/* ==== Glass: the Settings window ====
+   The window is frosted over the app; its settings are glass cards of rows
+   as in the macOS settings (a small title above each card, a grey note
+   under it), with switches for what is on or off. Older rows (.row and
+   .check) inside a card take the same look. */
+#dlg-settings {
+  background: color-mix(in srgb, var(--panel) clamp(30%, calc(var(--glass-solid) + 22%), 100%), transparent);
+  -webkit-backdrop-filter: blur(40px) saturate(180%); backdrop-filter: blur(40px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 24px 70px rgb(0 0 0 / .3);
+  width: min(44rem, calc(100vw - 2.5rem));
+}
+#dlg-settings::backdrop { background: rgb(0 0 0 / .12); backdrop-filter: blur(2px); }
+#dlg-settings .settings-tabs {
+  background: var(--glass-fill); box-shadow: inset 0 0 0 0.5px var(--glass-edge);
+  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+}
+#dlg-settings .settings-pane { gap: 0; overflow-y: auto; max-height: calc(100vh - 13rem); padding: 0.1rem 0.15rem 0.4rem; margin: 0 -0.15rem; }
+#dlg-settings .settings-pane > .hint { margin: 0 0.75rem 0.7rem; font-size: 0.8rem; }
+#dlg-settings .settings-pane > p.hint:not(:first-child) { margin-top: 0.5rem; }
+
+.set-group { margin: 1.1rem 0.75rem 0.4rem; font-size: 0.8rem; font-weight: 600; color: var(--muted); }
+.settings-pane > .set-group:first-child { margin-top: 0.3rem; }
+.set-foot { margin: 0.4rem 0.75rem 0; font-size: 0.78rem; line-height: 1.4; color: var(--muted); }
+#dlg-settings :is(.set-card, fieldset) {
+  background: color-mix(in srgb, var(--panel) clamp(25%, calc(var(--glass-solid) + 10%), 100%), transparent);
+  border-radius: var(--r-l); padding: 0 0.95rem; margin: 0;
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 1px 2px rgb(0 0 0 / .05), 0 6px 18px rgb(0 0 0 / .05);
+}
+#dlg-settings .set-card + .set-card, #dlg-settings :is(.set-card, fieldset) + fieldset, #dlg-settings fieldset + .set-card { margin-top: 0.75rem; }
+#dlg-settings .settings-pane > fieldset { margin-top: 0.75rem; padding-bottom: 0.3rem; }
+#dlg-settings .set-pad { padding: 0.85rem 0.95rem; }
+
+/* A row: what it is on the left, its control on the right. */
+#dlg-settings :is(.set-card, fieldset) > :is(.set-row, .row, .check, .ls-status, .db-file),
+#dlg-settings .ls-draw-rules > :is(.row, .check) {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem 1rem;
+  min-height: 2.35rem; margin: 0; padding: 0.5rem 0; font-size: 0.9rem; background: none; border-radius: 0;
+}
+#dlg-settings :is(.set-card, fieldset) > :is(.set-row, .row, .check, .ls-status, .db-file, .hint, .aic-font-sample, .cmt-cast) + :is(.set-row, .row, .check, .ls-status, .db-file, .hint, .aic-font-sample, .cmt-cast, .ls-draw-rules),
+#dlg-settings .ls-draw-rules > * + * { border-top: 0.5px solid var(--sep); }
+/* A switch row: the text first, the switch at the right end. */
+#dlg-settings :is(.set-card, fieldset, .ls-draw-rules) > .check { flex-direction: row-reverse; justify-content: space-between; cursor: pointer; }
+#dlg-settings label.set-row { cursor: pointer; }
+.set-label { display: flex; flex-direction: column; min-width: 0; font-size: 0.9rem; color: var(--text); }
+.set-sub { font-size: 0.75rem; color: var(--muted); font-weight: 400; }
+.set-ctl { display: inline-flex; align-items: center; gap: 0.45rem; flex: none; color: var(--muted); font-size: 0.85rem; }
+.set-ctl input[type="range"] { width: 9rem; accent-color: var(--accent); }
+.set-range-end { font-size: 0.74rem; }
+#dlg-settings .set-row > select { flex: 0 1 auto; max-width: 60%; }
+#dlg-settings :is(.set-card, fieldset) .hint { font-size: 0.8rem; margin: 0; padding: 0.5rem 0; }
+#dlg-settings .aic-font-sample { background: none; border-radius: 0; padding: 0.6rem 0; display: block; }
+#dlg-settings .cmt-cast { display: grid; margin: 0; padding: 0.6rem 0; }
+#dlg-settings .ls-status { background: none; }
+#dlg-settings .ls-draw-rules { margin: 0; }
+#dlg-settings fieldset > legend { float: left; margin: 0; padding: 0.7rem 0 0.35rem; font-size: 0.8rem; }
+#dlg-settings .ls-upgrade { margin-top: 0.75rem; border-radius: var(--r-l); }
+
+/* Every on/off setting in a card is a switch. */
+#dlg-settings :is(.set-card, fieldset) input[type="checkbox"] {
+  width: 2.15rem; height: 1.3rem; border-radius: 999px; background: var(--fill-2); box-shadow: none; flex: none;
+  transition: background-color .2s var(--ease);
+}
+#dlg-settings :is(.set-card, fieldset) input[type="checkbox"]::after {
+  content: ''; position: absolute; top: 0.125rem; left: 0.125rem; width: 1.05rem; height: 1.05rem; border-radius: 50%;
+  border: 0; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / .25), 0 0 0 0.5px rgb(0 0 0 / .06); transform: none;
+  transition: transform .2s var(--ease);
+}
+#dlg-settings :is(.set-card, fieldset) input[type="checkbox"]:checked { background: var(--good); }
+#dlg-settings :is(.set-card, fieldset) input[type="checkbox"]:checked::after { transform: translateX(0.85rem); }
+#dlg-settings :is(.set-card, fieldset) input[type="checkbox"]:focus-visible { box-shadow: 0 0 0 3px var(--ring); }
+
+/* The theme cards and the engine list sit on glass too. */
+#dlg-settings .theme-option { background: var(--glass-fill); }
+#dlg-settings :is(#engine-list, #engine-detail) {
+  background: color-mix(in srgb, var(--panel) clamp(25%, calc(var(--glass-solid) + 10%), 100%), transparent);
+  border-radius: var(--r-l); box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 6px 18px rgb(0 0 0 / .05);
+}
+#dlg-settings input[type="search"] { border-radius: 999px; padding-inline: 0.8rem; }
+#dlg-settings .settings-pane button.small:not(.primary, .danger) { border-radius: 999px; }
+
+/* The Moves tab before there are moves: ways to begin, as glass tiles
+   in two columns (one when the panel is narrow), then the latest games
+   and a box to paste a game or a position. */
+.moves-panel #moves.start {
+  display: block; padding: 0.7rem 0.8rem 1rem; background: none; box-shadow: none;
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+}
+.ms { display: flex; flex-direction: column; gap: 0.75rem; }
+.ms-hint { margin: 0 0.2rem; font-size: 0.85rem; color: var(--muted); }
+.ms-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.55rem; }
+@container (max-width: 22rem) { .ms-tiles { grid-template-columns: 1fr; } }
+.ms-tile, .ms-card {
+  background: var(--glass, var(--panel)); border-radius: var(--r-l);
+  -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge, var(--sep)), inset 0 1px 0 var(--glass-edge, transparent), var(--glass-shadow, none);
+}
+.ms-tile {
+  display: flex; align-items: center; gap: 0.7rem; padding: 0.75rem 0.8rem; text-align: left;
+  border: 0; color: var(--text); font: inherit; cursor: pointer; min-width: 0; white-space: normal;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+.ms-tile:hover { background: color-mix(in srgb, var(--panel) 80%, transparent); }
+.ms-tile:active { transform: scale(0.98); }
+.ms-icon {
+  flex: none; display: grid; place-items: center; width: 2.1rem; height: 2.1rem; border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+}
+.ms-icon svg { width: 1.15rem; height: 1.15rem; }
+.ms-tile.ms-main { background: color-mix(in srgb, var(--accent) 12%, var(--glass, var(--panel))); }
+.ms-tile.ms-main .ms-icon { background: var(--accent); color: var(--on-accent); }
+.ms-text { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.ms-text b { font-weight: 600; font-size: 0.95rem; }
+.ms-text span { font-size: 0.78rem; color: var(--muted); line-height: 1.3; }
+
+.ms-card { padding: 0.75rem 0.85rem; display: flex; flex-direction: column; gap: 0.5rem; }
+.ms-card[hidden] { display: none; }
+.ms-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+.ms-head b { font-weight: 600; font-size: 0.92rem; }
+.ms-head span { font-size: 0.75rem; color: var(--muted); }
+.ms-link { border: 0; background: none; padding: 0; color: var(--accent); font: inherit; font-size: 0.82rem; cursor: pointer; }
+.ms-link:hover { text-decoration: underline; }
+
+.ms-game {
+  display: grid; grid-template-columns: minmax(0, 1fr) 2.4rem auto; white-space: normal; align-items: center; gap: 0.45rem;
+  border: 0; background: none; color: var(--text); font: inherit; font-size: 0.86rem; text-align: left;
+  padding: 0.4rem 0.45rem; margin: 0 -0.45rem; border-radius: var(--r-m); cursor: pointer;
+}
+.ms-game + .ms-game { border-top: 0.5px solid var(--sep); border-radius: 0; }
+.ms-game:hover { background: var(--glass-fill, var(--fill)); border-radius: var(--r-m); }
+.ms-players { display: flex; align-items: baseline; gap: 0.35rem; min-width: 0; }
+.ms-player { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@container (max-width: 22rem) {
+  .ms-game { grid-template-columns: minmax(0, 1fr) 2.4rem; }
+  .ms-date { display: none; }
+  .ms-players { flex-direction: column; gap: 0; }
+  .ms-vs { display: none; }
+}
+.ms-player .cflag { margin-right: 0.3em; }
+.ms-vs { color: var(--muted); font-size: 0.75rem; flex: none; }
+.ms-res { text-align: center; font-variant-numeric: tabular-nums; font-size: 0.82rem; }
+.ms-date { color: var(--muted); font-size: 0.78rem; font-variant-numeric: tabular-nums; }
+
+.ms-paste-row { display: flex; gap: 0.5rem; align-items: flex-end; }
+.ms-paste-text {
+  flex: 1; min-width: 0; resize: vertical; min-height: 2.4rem; font: 0.82rem/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  border-radius: var(--r-m); border: 0; padding: 0.45rem 0.55rem; color: var(--text);
+  background: var(--glass-fill, var(--fill));
+}
+.ms-paste-text:focus { outline: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); outline-offset: 0; }
+.ms-note { margin: 0; font-size: 0.8rem; color: var(--danger); }
+.ms-note[hidden] { display: none; }
+
+/* Background music: the note button lights up while it plays, and
+   breathes while the station connects. */
+#btn-music[aria-pressed="true"] { color: var(--accent); }
+#btn-music.loading svg { animation: music-wait 1.2s ease-in-out infinite; }
+@keyframes music-wait { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { #btn-music.loading svg { animation: none; opacity: 0.6; } }
+#music-now.bad { color: var(--danger); }
+#music-station { max-width: 15rem; }
+#music-folder { overflow-wrap: anywhere; }
+
+/* Adding a radio station of your own: its name and stream address. */
+#dlg-settings #music-add-row { flex-direction: column; align-items: stretch; gap: 0.5rem; }
+#dlg-settings #music-add-row[hidden] { display: none; }
+.music-add-fields { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(12rem, 2fr); gap: 0.45rem; }
+.music-add-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 0.4rem; }
+.music-add-note { grid-column: 1 / -1; font-size: 0.8rem; color: var(--danger); }
+.music-add-note[hidden] { display: none; }
+.music-address { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+.music-address[hidden] { display: none; }
+
+/* ---------------------------------------------------------------------------
+   The AI panel in frosted glass, as the panes: a wash of colour under a
+   blurred, translucent panel; the tabs, the composer and the commentary
+   settings as glass on it; your messages in accent bubbles.
+   --------------------------------------------------------------------------- */
+#ai-panel {
+  isolation: isolate; border-radius: 1.25rem;
+  background:
+    radial-gradient(20rem 15rem at 0 0, color-mix(in srgb, var(--accent) 20%, transparent), transparent 70%),
+    radial-gradient(18rem 14rem at 100% 30%, color-mix(in srgb, #af52de 13%, transparent), transparent 70%),
+    radial-gradient(22rem 16rem at 10% 100%, color-mix(in srgb, #ff9f0a 13%, transparent), transparent 70%),
+    var(--glass-float);
+  -webkit-backdrop-filter: blur(40px) saturate(180%); backdrop-filter: blur(40px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge),
+    0 24px 60px rgb(0 0 0 / .22), 0 2px 8px rgb(0 0 0 / .08);
+}
+#ai-handle {
+  background: var(--glass-float);
+  -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), var(--glass-shadow);
+}
+#ai-handle:hover:not(:disabled) { background: var(--glass-float); }
+
+/* Chat · Commentary: a frosted track, the chosen one a lifted pill. */
+#pane-ai .ai-views { background: var(--glass-fill); padding: 3px; }
+#pane-ai .ai-views button.on, #pane-ai .ai-views button.on:hover:not(:disabled) {
+  background: var(--glass); box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 1px 3px rgb(0 0 0 / .12);
+}
+#pane-ai .aic-tool:hover:not(:disabled), #pane-ai .aic-tool[aria-pressed="true"] { background: var(--glass-fill); color: var(--text); }
+#pane-ai .ai-ctx:hover, #pane-ai .ai-ctx:focus-visible { background: var(--glass-fill); }
+
+/* The chats: pills on a glass strip, no rule under them. */
+#pane-ai .aic-head { border-bottom: 0; padding: 3px; border-radius: 999px; background: var(--glass-fill); }
+#pane-ai .aic-tab:hover:not(:disabled) { background: var(--glass-fill); }
+#pane-ai .aic-tab.on, #pane-ai .aic-tab.on:hover:not(:disabled) {
+  background: var(--glass); box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 1px 3px rgb(0 0 0 / .1);
+}
+
+/* Your messages: an accent bubble, as in Messages. */
+#pane-ai .aic-msg.me .aic-bubble {
+  background: var(--accent); color: var(--on-accent); border-bottom-right-radius: 0.4rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / .08);
+}
+#pane-ai .aic-body code { background: var(--glass-fill); }
+#pane-ai .aic-copy:hover { background: var(--glass-fill); }
+#pane-ai .aic-msg.error .aic-body { background: color-mix(in srgb, var(--danger) 10%, var(--glass)); }
+
+/* The suggestions and the composer: glass. */
+#pane-ai .aic-chips button {
+  background: var(--glass); box-shadow: inset 0 0 0 0.5px var(--glass-edge), var(--glass-shadow);
+  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+}
+#pane-ai .aic-chips button:hover { background: color-mix(in srgb, var(--panel) 80%, transparent); }
+#pane-ai .aic-form {
+  border-radius: 1.4rem; background: var(--glass);
+  -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
+}
+#pane-ai .aic-form:focus-within { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent), 0 0 0 3px var(--ring), var(--glass-shadow); }
+
+/* Commentary: its settings as a glass card of rows, each comment a card. */
+.cm-settings {
+  flex: none; display: flex; flex-direction: column; padding: 0 0.85rem; border-radius: var(--r-l);
+  background: var(--glass); -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
+}
+.cm-row { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; min-height: 2.5rem; padding: 0.45rem 0; font-size: 0.88rem; }
+label.cm-row { cursor: pointer; }
+.cm-row + .cm-row { border-top: 0.5px solid var(--sep); }
+.cm-row-text { display: flex; flex-direction: column; min-width: 0; color: var(--text); }
+.cm-row-sub { font-size: 0.74rem; color: var(--muted); }
+.cm-settings .cm-voice { justify-content: flex-end; flex: none; padding-top: 0.2rem; }
+.cm-settings .cm-row:has(#cm-speak) + .cm-voice { border-top: 0; padding-top: 0; min-height: 0; padding-bottom: 0.55rem; }
+.cm-settings #cm-voice { flex: 1 1 8rem; max-width: none; }
+#pane-ai .cm-item:not(.summary) {
+  padding: 0.65rem 0.8rem; border-radius: var(--r-l); background: var(--glass);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge), var(--glass-shadow);
+}
+#pane-ai .cm-item.summary {
+  background: color-mix(in srgb, var(--accent) 12%, var(--glass));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent), var(--glass-shadow);
+  border-radius: var(--r-l);
+}
+#pane-ai .cm-move { background: var(--glass-fill); }
+
+/* ---------------------------------------------------------------------------
+   Glassify board (Settings → Appearance → Board): the board and the pieces
+   in the panels' frosted glass. The squares are see-through tiles over a
+   wash of colour, each with a lit edge, under a gloss; the pieces are drawn
+   as glass (see makeGlassPiece in renderer.js).
+   --------------------------------------------------------------------------- */
+body.glass-board #board {
+  background:
+    radial-gradient(70% 60% at 0 0, color-mix(in srgb, var(--accent) 70%, transparent), transparent 75%),
+    radial-gradient(60% 55% at 100% 30%, color-mix(in srgb, #af52de 55%, transparent), transparent 75%),
+    radial-gradient(70% 60% at 20% 100%, color-mix(in srgb, #ff9f0a 55%, transparent), transparent 75%),
+    radial-gradient(60% 60% at 100% 100%, color-mix(in srgb, #30b0c7 45%, transparent), transparent 75%),
+    var(--panel);
+  border-radius: 1rem;
+  box-shadow: 0 18px 50px rgb(0 0 0 / .22), 0 2px 8px rgb(0 0 0 / .1);
+}
+body.glass-board .square.light { background: color-mix(in srgb, var(--light-sq) clamp(18%, calc(var(--glass-solid, 52%) - 14%), 100%), transparent); }
+body.glass-board .square.dark { background: color-mix(in srgb, var(--dark-sq) clamp(32%, calc(var(--glass-solid, 52%) + 4%), 100%), transparent); }
+/* No backdrop blur anywhere on the board: dozens of blurred layers are
+   drawn again at every frame of a move and stall an engine game. The wash
+   under the squares is soft already, so plain see-through looks the same. */
+body.glass-board .square {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .22), inset 0 0 0 0.5px rgb(255 255 255 / .1), inset 0 -1px 0 rgb(0 0 0 / .06);
+}
+/* A gloss across the board, under the pieces. */
+body.glass-board .squares::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(155deg, rgb(255 255 255 / .26) 0%, rgb(255 255 255 / .08) 34%, transparent 52%, transparent 80%, rgb(255 255 255 / .07) 100%);
+}
+/* Its edge: a fine bright rim over everything. */
+body.glass-board #board::after {
+  content: ''; position: absolute; inset: 0; z-index: 3; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .38), inset 0 1.5px 0 rgb(255 255 255 / .55);
+}
+/* The pieces are glass images, made once per theme (makeGlassPiece in
+   renderer.js): nothing on them to redraw while they slide. */
+/* Dark themes: a deeper wash, a softer rim. */
+:root:is([data-theme="cyberpunk"], [data-theme="obsidian"], [data-theme="dusk"]) body.glass-board #board::after {
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / .16), inset 0 1.5px 0 rgb(255 255 255 / .28);
+}
+:root:is([data-theme="cyberpunk"], [data-theme="obsidian"], [data-theme="dusk"]) body.glass-board .square {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / .1), inset 0 0 0 0.5px rgb(255 255 255 / .05);
+}
+
+/* The 3D board (board3d.js): a canvas over the flat board, which stays
+   underneath, invisible, as the model and for clicks handed down to it. */
+#board3d { position: absolute; inset: 0; width: 100%; height: 100%; display: none; z-index: 1; touch-action: none; }
+body.board-3d #board3d { display: block; }
+body.board-3d #board, body.board-3d #arrows { opacity: 0; }
+body.board-3d #board.movable ~ #board3d, body.board-3d .board-wrap:has(#board.movable) #board3d { cursor: pointer; }
+body.board-3d .piece.ghost { opacity: 0; }
+#board3d { cursor: grab; }
+#board3d.orbiting { cursor: grabbing; }
+
+/* The 3D board's Auto camera button, at its top right. */
+#cam3d-bar { position: absolute; top: 0.6rem; right: 0.6rem; z-index: 3; display: none; align-items: center; gap: 0.4rem; }
+body.board-3d #cam3d-bar { display: flex; }
+body.zen #cam3d-bar { display: none; }
+#cam3d, #view3d-reset {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.3rem 0.65rem 0.3rem 0.5rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; color: var(--muted);
+  background: var(--glass, var(--panel)); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: inset 0 0 0 0.5px var(--glass-edge, var(--sep)), var(--glass-shadow, 0 2px 8px rgb(0 0 0 / .12));
+}
+#cam3d svg, #view3d-reset svg { width: 1rem; height: 1rem; }
+#view3d-reset { padding: 0.3rem; width: 1.75rem; height: 1.75rem; justify-content: center; }
+#view3d-reset:disabled { opacity: 0.4; cursor: default; }
+#cam3d:hover:not(:disabled), #view3d-reset:hover:not(:disabled) { color: var(--text); background: var(--glass, var(--panel)); }
+#cam3d[aria-pressed="true"], #cam3d[aria-pressed="true"]:hover:not(:disabled) { color: var(--on-accent); background: var(--accent); box-shadow: 0 2px 8px rgb(0 0 0 / .18); }
+/* Depth tags and ponder bubbles over the 3D board (board3d.js). */
+#board3d-marks { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; display: none; }
+body.board-3d #board3d-marks { display: block; }
+#board3d-marks .mark3d { position: absolute; left: 0; top: 0; overflow: visible; }
+/* Zen mode: the 3D board fills the window, the players' rows (names,
+   clocks, the board's buttons) over it. */
+body.zen.board-3d #board3d, body.zen.board-3d #board3d-marks {
+  position: fixed; left: 0; top: var(--chrome-top, 0px); width: 100vw; height: calc(100vh - var(--chrome-top, 0px));
+}
+/* The players along the top and bottom of the window and the score down
+   its left edge, out of the board's way. */
+body.zen.board-3d section.table > .player { position: fixed; z-index: 3; left: 0.75rem; right: 0.75rem; width: auto; }
+body.zen.board-3d #player-top { top: calc(var(--chrome-top, 0px) + 0.6rem); }
+body.zen.board-3d #player-bottom { bottom: 0.6rem; }
+body.zen.board-3d #evalbar {
+  position: fixed; z-index: 3; left: 0.75rem; height: auto;
+  top: calc(var(--chrome-top, 0px) + var(--bar) + 1.2rem); bottom: calc(var(--bar) + 1.2rem);
+}
+body.zen.board-3d #evalbar:not([hidden]) ~ .board-wrap { margin-left: 0; }
+/* The way out of zen mode, at the top in the middle: the top player's
+   clock is at the right. */
+body.zen.board-3d #zen-exit { right: auto; left: 50%; transform: translateX(-50%); }

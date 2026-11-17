@@ -4,6 +4,9 @@ contextBridge.exposeInMainWorld('board', {
   // Send a command to the Go backend; rejects with the backend's error message.
   backend: (cmd, args) => ipcRenderer.invoke('backend', cmd, args),
   onEvent: (handler) => ipcRenderer.on('backend-event', (_e, event, data) => handler(event, data)),
+  // A command from the application menu.
+  onMenu: (handler) => ipcRenderer.on('menu', (_e, cmd, arg) => handler(cmd, arg)),
+  readClipboard: () => ipcRenderer.invoke('clipboard:read'),
   engines: {
     list: () => ipcRenderer.invoke('engines:list'),
     add: () => ipcRenderer.invoke('engines:add'),
@@ -19,10 +22,16 @@ contextBridge.exposeInMainWorld('board', {
     models: () => ipcRenderer.invoke('ai:models'),
     annotate: (game) => ipcRenderer.invoke('ai:annotate', game),
     cancel: () => ipcRenderer.invoke('ai:cancel'),
+    contextWindow: (model) => ipcRenderer.invoke('ai:contextWindow', model),
     chat: (id, messages, channel) => ipcRenderer.invoke('ai:chat', id, messages, channel),
     chatCancel: (channel) => ipcRenderer.invoke('ai:chatCancel', channel),
   },
   loadThemes: () => ipcRenderer.invoke('themes:load'),
+  music: {
+    chooseFolder: () => ipcRenderer.invoke('music:chooseFolder'),
+    list: (folder) => ipcRenderer.invoke('music:list', folder),
+    resolve: (url) => ipcRenderer.invoke('music:resolve', url),
+  },
   openPgn: () => ipcRenderer.invoke('pgn:open'),
   openEpd: () => ipcRenderer.invoke('epd:open'),
   savePgn: (pgn) => ipcRenderer.invoke('pgn:save', pgn),

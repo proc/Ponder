@@ -52,9 +52,9 @@ Rules:
 function buildMessages(game) {
   const list = (game.moves ?? []).map((m) => `ply ${m.ply}: ${m.number}${m.white ? '.' : '...'} ${m.san}`).join('\n');
   const user = [
-    game.white || game.black ? `White: ${game.white || '?'}\nBlack: ${game.black || '?'}\nResult: ${game.result || '*'}` : '',
+    game.white || game.black ? `White: ${game.white || '?'}${game.whiteElo ? ` (rated ${game.whiteElo})` : ''}\nBlack: ${game.black || '?'}${game.blackElo ? ` (rated ${game.blackElo})` : ''}\nResult: ${game.result || '*'}` : '',
     `Moves:\n${list}`,
-    `PGN:\n${String(game.pgn ?? '').trim()}`,
+    `The game as PGN (its tags give the players' names and ratings, the event and the time control):\n${String(game.pgn ?? '').trim()}`,
   ].filter(Boolean).join('\n\n');
   return [{ role: 'system', content: SYSTEM }, { role: 'user', content: user }];
 }
@@ -178,6 +178,19 @@ async function pickModel(settings, opts) {
   return model;
 }
 
+// The tokens a request took: { input, output }, from the OpenAI form
+// (prompt_tokens, completion_tokens) or Claude's (input_tokens, with what was
+// read from or written to the cache, and output_tokens).
+function usageOf(u) {
+  if (!u || typeof u !== 'object') return null;
+  const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  const input = u.prompt_tokens != null ? n(u.prompt_tokens) : n(u.input_tokens) + n(u.cache_creation_input_tokens) + n(u.cache_read_input_tokens);
+  const output = u.completion_tokens != null ? n(u.completion_tokens) : n(u.output_tokens);
+  return input || output ? { input, output } : null;
+}
+// Servers that refused stream_options: not sent to them again.
+const noUsageOption = new Set();
+
 // Settings for the request: OpenAI's newer models take no temperature but
 // their own; other servers are given one.
 const temperatureFor = (settings, t) => (providerOf(settings) === 'openai' ? {} : { temperature: t });
@@ -247,6 +260,7 @@ async function anthropicChat(settings, messages, opts = {}) {
   if (anthropicAdaptive(model)) params.thinking = { type: 'adaptive', display: 'summarized' };
   let text = '';
   let thinking = '';
+  let usage = null;
   try {
     const stream = ANTHROPIC_FALLBACK_MODELS.has(model)
       ? client.beta.messages.stream({ ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' }, { signal })
@@ -263,17 +277,18 @@ async function anthropicChat(settings, messages, opts = {}) {
       }
     }
     const final = await stream.finalMessage();
+    usage = usageOf(final.usage);
     if (final.stop_reason === 'refusal' && !text.trim()) throw new Error('Claude declined to answer this request');
   } catch (err) {
     if (signal?.aborted) {
       // Stopped part way: what came so far is the answer.
-      if (text.trim()) return { text: text.trim(), thinking: thinking.trim(), model, stopped: true };
+      if (text.trim()) return { text: text.trim(), thinking: thinking.trim(), model, stopped: true, usage };
       throw new Error('Stopped');
     }
     throw anthropicError(Anthropic, err, model);
   }
   if (!text.trim()) throw new Error('The model gave an empty answer');
-  return { text: text.trim(), thinking: thinking.trim(), model };
+  return { text: text.trim(), thinking: thinking.trim(), model, usage };
 }
 
 // Asks for commentary on the game: { summary, comments, model }.
@@ -281,7 +296,7 @@ async function annotate(settings, game, opts = {}) {
   if (PROVIDERS[providerOf(settings)].needsKey && !settings.key) throw new Error(`${who(settings)} needs an API key: add yours in Settings → AI`);
   if (PROVIDERS[providerOf(settings)].kind === 'anthropic') {
     const reply = await anthropicChat(settings, buildMessages(game), opts);
-    return { ...parseReply(reply.text, (game.moves ?? []).length), model: reply.model };
+    return { ...parseReply(reply.text, (game.moves ?? []).length), model: reply.model, usage: reply.usage };
   }
   const model = await pickModel(settings, opts);
   const data = await call(`${baseOf(settings)}/chat/completions`, {
@@ -291,7 +306,7 @@ async function annotate(settings, game, opts = {}) {
   const msg = data.choices?.[0]?.message;
   const text = typeof msg?.content === 'string' ? msg.content : Array.isArray(msg?.content) ? msg.content.map((p) => p.text ?? '').join('') : '';
   if (!text.trim()) throw new Error('The model gave an empty answer');
-  return { ...parseReply(text, (game.moves ?? []).length), model };
+  return { ...parseReply(text, (game.moves ?? []).length), model, usage: usageOf(data.usage) };
 }
 
 // A conversation: messages is the whole exchange so far (system, user,
@@ -305,9 +320,17 @@ async function chat(settings, messages, opts = {}) {
   const base = baseOf(settings);
   const name = who(settings);
   const model = await pickModel(settings, { signal, sendImpl });
-  const payload = JSON.stringify({ model, messages, ...temperatureFor(settings, 0.5), stream: true });
-  const headers = { Accept: 'text/event-stream, application/json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) };
-  if (settings.key) headers.Authorization = `Bearer ${settings.key}`;
+  // The tokens the request took are asked for at the end of the stream
+  // (stream_options); a server that does not know the option is asked again
+  // without it, and remembered.
+  const askUsage = !noUsageOption.has(base);
+  const request = (withUsage) => {
+    const payload = JSON.stringify({ model, messages, ...temperatureFor(settings, 0.5), stream: true, ...(withUsage ? { stream_options: { include_usage: true } } : {}) });
+    const headers = { Accept: 'text/event-stream, application/json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) };
+    if (settings.key) headers.Authorization = `Bearer ${settings.key}`;
+    return sendImpl(`${base}/chat/completions`, { method: 'POST', headers, body: payload, signal, onData });
+  };
+  let usage = null;
   let raw = '';      // everything the model said, thinking included
   let shown = '';    // what has been passed on
   let pending = '';  // an unfinished line of the stream
@@ -337,7 +360,9 @@ async function chat(settings, messages, opts = {}) {
       const data = line.slice(5).trim();
       if (!data || data === '[DONE]') continue;
       try {
-        const delta = JSON.parse(data).choices?.[0]?.delta;
+        const json = JSON.parse(data);
+        if (json.usage) usage = usageOf(json.usage) ?? usage;
+        const delta = json.choices?.[0]?.delta;
         const think = delta?.reasoning_content ?? delta?.reasoning;
         if (typeof think === 'string' && think) { reasoning += think; feed(''); }
         if (typeof delta?.content === 'string' && delta.content) feed(delta.content);
@@ -346,11 +371,15 @@ async function chat(settings, messages, opts = {}) {
   };
   let res;
   try {
-    res = await sendImpl(`${base}/chat/completions`, { method: 'POST', headers, body: payload, signal, onData });
+    res = await request(askUsage);
+    if (askUsage && (res.status === 400 || res.status === 422) && /stream_options|include_usage/i.test(res.text)) {
+      noUsageOption.add(base);
+      res = await request(false);
+    }
   } catch (err) {
     if (signal?.aborted) {
       // Stopped part way: what came so far is the answer.
-      if (shown.trim()) return { text: shown.trim(), thinking: thought.trim(), model, stopped: true };
+      if (shown.trim()) return { text: shown.trim(), thinking: thought.trim(), model, stopped: true, usage };
       throw new Error('Stopped');
     }
     throw new Error(`Could not reach ${name === 'The AI endpoint' ? 'the AI endpoint' : name} at ${new URL(base).origin} (${err.code ?? err.message}).${name === 'The AI endpoint' ? ' Is the server running?' : ''}`);
@@ -362,15 +391,64 @@ async function chat(settings, messages, opts = {}) {
   if (!raw) {
     // Not streamed: the whole answer is one JSON object.
     try {
-      const msg = JSON.parse(res.text).choices?.[0]?.message;
+      const whole = JSON.parse(res.text);
+      const msg = whole.choices?.[0]?.message;
       const text = typeof msg?.content === 'string' ? msg.content : Array.isArray(msg?.content) ? msg.content.map((p) => p.text ?? '').join('') : '';
       const think = msg?.reasoning_content ?? msg?.reasoning;
       if (typeof think === 'string') reasoning += think;
+      usage = usageOf(whole.usage) ?? usage;
       feed(text);
     } catch { throw new Error(`${name} did not answer in a form this app reads; is it an OpenAI-compatible API?`); }
   }
   if (!shown.trim()) throw new Error('The model gave an empty answer');
-  return { text: shown.trim(), thinking: thought.trim(), model };
+  return { text: shown.trim(), thinking: thought.trim(), model, usage };
 }
 
-module.exports = { chat, DEFAULTS, PROVIDERS, normalizeBase, buildMessages, parseReply, listModels, annotate, anthropicMessages };
+// --- The model's context window --------------------------------------------
+// How many tokens the model can take in, where the provider says: Claude's
+// Models API, Google's model information, and from a local server LM
+// Studio's, llama.cpp's or Ollama's own report of the model as loaded.
+// OpenAI does not say; null then (Settings → AI can give it).
+async function contextWindow(settings, model, opts = {}) {
+  const { sendImpl = send } = opts;
+  const p = providerOf(settings);
+  model = String(model ?? '').trim();
+  if (!model) return null;
+  const signal = opts.signal ?? AbortSignal.timeout(4000);
+  const getJson = async (url, init = {}) => {
+    try {
+      const body = init.body ? JSON.stringify(init.body) : undefined;
+      const headers = { Accept: 'application/json', ...(init.headers ?? {}) };
+      if (body) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(body); }
+      const res = await sendImpl(url, { method: init.method ?? 'GET', headers, body, signal });
+      return res.status >= 200 && res.status < 300 ? JSON.parse(res.text) : null;
+    } catch { return null; }
+  };
+  const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : null);
+  if (p === 'anthropic') {
+    try {
+      const { client } = anthropicClient(settings, opts.Anthropic);
+      const m = await client.models.retrieve(model, {}, { signal });
+      return num(m.max_input_tokens);
+    } catch { return null; }
+  }
+  if (p === 'google') {
+    if (!settings.key) return null;
+    const m = await getJson(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}`, { headers: { 'x-goog-api-key': settings.key } });
+    return num(m?.inputTokenLimit);
+  }
+  if (p === 'openai') return null;
+  // A local or other server: what it says of the model it has loaded.
+  const base = baseOf(settings);
+  const origin = new URL(base).origin;
+  const auth = settings.key ? { Authorization: `Bearer ${settings.key}` } : {};
+  const lms = await getJson(`${origin}/api/v0/models/${encodeURIComponent(model)}`, { headers: auth });
+  if (num(lms?.loaded_context_length ?? lms?.max_context_length)) return num(lms.loaded_context_length ?? lms.max_context_length);
+  const props = await getJson(`${base.replace(/\/v1$/, '')}/props`, { headers: auth });
+  if (num(props?.default_generation_settings?.n_ctx ?? props?.n_ctx)) return num(props.default_generation_settings?.n_ctx ?? props.n_ctx);
+  const ps = await getJson(`${origin}/api/ps`, { headers: auth });
+  const run = (ps?.models ?? []).find((m) => m.name === model || m.model === model || String(m.name).split(':')[0] === model);
+  return num(run?.context_length);
+}
+
+module.exports = { chat, DEFAULTS, PROVIDERS, normalizeBase, buildMessages, parseReply, listModels, annotate, anthropicMessages, contextWindow, usageOf };

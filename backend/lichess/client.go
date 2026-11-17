@@ -127,6 +127,13 @@ func SpeedOf(limit, increment int) string {
 	return "classical"
 }
 
+// UserInfo is a user's public profile, with their ratings by speed.
+func (c *Client) UserInfo(ctx context.Context, username string) (User, error) {
+	var u User
+	err := c.getJSON(ctx, "/api/user/"+url.PathEscape(username), &u)
+	return u, err
+}
+
 // RatingFor is the user's rating at a speed, or 0 if they have none.
 func (u User) RatingFor(speed string) int {
 	if p, ok := u.Perfs[speed]; ok && p.Games > 0 {

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard, safeStorage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, safeStorage, shell, Menu, protocol, net } = require('electron');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -183,6 +183,88 @@ ipcMain.handle('engines:choosePath', async (_e, kind, title) => {
   return pick.canceled ? null : pick.filePaths[0] ?? null;
 });
 
+// Background music from your own folder: the audio files in it (and its
+// subfolders, a few levels down), as file URLs the page can play.
+const MUSIC_TYPES = new Set(['.mp3', '.m4a', '.aac', '.ogg', '.oga', '.opus', '.flac', '.wav', '.webm']);
+ipcMain.handle('music:chooseFolder', async () => {
+  const pick = await dialog.showOpenDialog(win, { title: 'Choose a folder of music', properties: ['openDirectory'] });
+  return pick.canceled ? null : pick.filePaths[0] ?? null;
+});
+ipcMain.handle('music:list', async (_e, folder) => {
+  const { pathToFileURL } = require('url');
+  const found = [];
+  async function walk(dir, depth) {
+    let entries;
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (found.length >= 5000 || e.name.startsWith('.')) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory() && depth < 4) await walk(full, depth + 1);
+      else if (e.isFile() && MUSIC_TYPES.has(path.extname(e.name).toLowerCase())) {
+        found.push({ name: path.basename(e.name, path.extname(e.name)), url: pathToFileURL(full).href });
+      }
+    }
+  }
+  if (typeof folder === 'string' && folder) await walk(folder, 0);
+  return found;
+});
+
+// Radio stations of your own. The page cannot play a stream sent over
+// plain http (it is upgraded to https, which most such streams do not
+// have), so those are played through ponder-radio://, which fetches them
+// here. A link to a playlist (.pls, .m3u) is read for the stream in it.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'ponder-radio', privileges: { stream: true, supportFetchAPI: true, secure: true, standard: true } },
+]);
+function webUrl(raw) {
+  let u;
+  try { u = new URL(String(raw).trim()); } catch { return null; }
+  return u.protocol === 'http:' || u.protocol === 'https:' ? u : null;
+}
+function handleRadioProtocol() {
+  protocol.handle('ponder-radio', (req) => {
+    const target = webUrl(new URL(req.url).searchParams.get('u'));
+    if (!target) return new Response('Not a web address', { status: 400 });
+    const headers = { 'User-Agent': 'Ponder' };
+    const range = req.headers.get('range');
+    if (range) headers.Range = range;
+    return net.fetch(target.href, { headers, bypassCustomProtocolHandlers: true });
+  });
+}
+const PLAYLIST_TYPES = /mpegurl|scpls|x-scpls|pls\+xml|^text\//i;
+ipcMain.handle('music:resolve', async (_e, raw) => {
+  const u = webUrl(raw);
+  if (!u) throw new Error('Give a web address that starts with http:// or https://');
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), 10000);
+  try {
+    const res = await net.fetch(u.href, { headers: { 'User-Agent': 'Ponder' }, signal: ctl.signal });
+    if (!res.ok) throw new Error(`the station answered ${res.status} ${res.statusText}`.trim());
+    const type = res.headers.get('content-type') ?? '';
+    const listed = /\.(pls|m3u)$/i.test(u.pathname);
+    if (!listed && !PLAYLIST_TYPES.test(type)) {
+      res.body?.cancel().catch(() => {});
+      if (/\.m3u8$/i.test(u.pathname) || /apple|x-mpegurl/i.test(type)) throw new Error('that is an HLS stream, which Ponder cannot play: look for an MP3 or AAC stream');
+      return { url: res.url || u.href, type };
+    }
+    if (/html/i.test(type)) {
+      res.body?.cancel().catch(() => {});
+      throw new Error('that address is a web page, not a stream: look on the station\'s site for its stream or playlist link');
+    }
+    const text = (await res.text()).slice(0, 100000);
+    if (/^#EXT-X-/m.test(text)) throw new Error('that is an HLS stream, which Ponder cannot play: look for an MP3 or AAC stream');
+    // .pls: File1=…; .m3u: a line that is a web address.
+    const found = text.split(/\r?\n/).map((l) => l.trim().replace(/^File\d+=/i, '')).find((l) => webUrl(l));
+    if (!found) throw new Error('no stream was found in that playlist');
+    return { url: found, type: 'playlist' };
+  } catch (err) {
+    if (err.name === 'AbortError') throw new Error('the station did not answer');
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
 // How busy the computer's processors are: the share of time they were not
 // idle since the last time this was asked (0 to 1), over all of them.
 let cpuBefore = null;
@@ -294,6 +376,7 @@ ipcMain.handle('epd:open', async () => {
 });
 
 ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)));
+ipcMain.handle('clipboard:read', () => clipboard.readText());
 
 // ---------------------------------------------------------------------------
 // The PGN database: finished games can be added to a PGN file. Settings in
@@ -675,6 +758,7 @@ const publicAi = (s) => {
   const slot = aiSlot(s, provider);
   return {
     provider, baseUrl: s.baseUrl, model: slot.model ?? '', hasKey: Boolean(slot.key || slot.plainKey), defaultUrl: ai.DEFAULTS.baseUrl,
+    contextWindow: slot.contextWindow ?? null,
     providers: Object.entries(ai.PROVIDERS).map(([id, p]) => ({
       id, name: p.name, needsKey: p.needsKey, modelHint: p.modelHint ?? '', defaultModel: p.defaultModel ?? '',
       hasKey: Boolean(aiSlot(s, id).key || aiSlot(s, id).plainKey),
@@ -690,6 +774,12 @@ ipcMain.handle('ai:save', async (_e, patch) => {
   // The model and key are the chosen provider's.
   const slot = aiSlot(s, aiProvider(s));
   if (typeof patch?.model === 'string') slot.model = patch.model.trim();
+  // The context window given by hand ('' or 0: found from the provider).
+  if ('contextWindow' in (patch ?? {})) {
+    const n = Math.round(Number(patch.contextWindow));
+    if (Number.isFinite(n) && n > 0) slot.contextWindow = n; else delete slot.contextWindow;
+    aiWindows.clear();
+  }
   if (typeof patch?.key === 'string') {
     delete slot.key;
     delete slot.plainKey;
@@ -719,6 +809,22 @@ ipcMain.handle('ai:annotate', async (_e, game) => {
   }
 });
 ipcMain.handle('ai:cancel', () => { aiRun?.abort(); });
+
+// How many tokens the model can take in: as set in Settings → AI, else as
+// the provider says (asked once per model). null when nobody says.
+const aiWindows = new Map();
+ipcMain.handle('ai:contextWindow', async (_e, model) => {
+  const s = loadAi();
+  const req = await aiRequest(s);
+  const set = aiSlot(s, aiProvider(s)).contextWindow;
+  if (set) return set;
+  const name = String(model || req.model || '');
+  const key = `${req.provider}|${req.provider === 'local' ? s.baseUrl : ''}|${name}`;
+  if (!aiWindows.has(key)) aiWindows.set(key, ai.contextWindow(req, name).catch(() => null));
+  const n = await aiWindows.get(key);
+  if (n == null) aiWindows.delete(key); // asked again next time: the server may have loaded it since
+  return n;
+});
 
 // The AI tab's chat: the answer is streamed to the window as "aiChat"
 // events ({ id, delta }) and returned whole. One answer at a time.
@@ -991,6 +1097,7 @@ function createWindow() {
     show: false,
     backgroundColor: '#f5f5f7',
     title: 'Ponder',
+    autoHideMenuBar: true, // Windows and Linux: the menu bar shows with Alt
     // macOS: no title bar, the window's buttons over the page's top strip.
     ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset' } : {}),
     icon: path.join(__dirname, 'icon.png'), // Windows and Linux; macOS takes the bundle's
@@ -1017,11 +1124,154 @@ function createWindow() {
   win.webContents.on('will-navigate', (e) => e.preventDefault());
 }
 
+// ---------------------------------------------------------------------------
+// The application menu: Ponder's own commands, grouped as a chess program
+// would, in place of Electron's default. Each command is sent to the page,
+// which does what the button or key for it does. Shortcuts that are a
+// single key (F, Z, L…) are the page's own: on Windows and Linux they are
+// only shown beside the item; on macOS, where a menu cannot show a key
+// without taking it from text fields, they are left out (Help → Keyboard
+// Shortcuts lists them).
+// ---------------------------------------------------------------------------
+function buildMenu() {
+  const mac = process.platform === 'darwin';
+  const send = (cmd, arg) => () => {
+    const w = win && !win.isDestroyed() ? win : BrowserWindow.getFocusedWindow();
+    if (!w) return;
+    if (w.isMinimized()) w.restore();
+    w.webContents.send('menu', cmd, arg);
+  };
+  // A command; key is a page shortcut (shown only), accel a real one.
+  const item = (label, cmd, { key, accel, arg } = {}) => ({
+    label, click: send(cmd, arg),
+    ...(accel ? { accelerator: accel } : key && !mac ? { accelerator: key, registerAccelerator: false } : {}),
+  });
+  const sep = { type: 'separator' };
+
+  const template = [
+    ...(mac ? [{
+      label: 'Ponder',
+      submenu: [
+        { role: 'about', label: 'About Ponder' },
+        sep,
+        item('Settings…', 'settings', { accel: 'Cmd+,' }),
+        sep,
+        { role: 'services' },
+        sep,
+        { role: 'hide', label: 'Hide Ponder' }, { role: 'hideOthers' }, { role: 'unhide' },
+        sep,
+        { role: 'quit', label: 'Quit Ponder' },
+      ],
+    }] : []),
+    {
+      label: 'File',
+      submenu: [
+        item('New Game…', 'newGame', { accel: 'CmdOrCtrl+N' }),
+        sep,
+        item('Open PGN…', 'open', { accel: 'CmdOrCtrl+O' }),
+        item('Open Game Database', 'database', { accel: 'CmdOrCtrl+Shift+O' }),
+        item('Test Positions…', 'positions'),
+        sep,
+        item('Save Game…', 'save', { accel: 'CmdOrCtrl+S' }),
+        item('Copy Game as PGN', 'copyPgn', { accel: 'CmdOrCtrl+Shift+C' }),
+        item('Copy Position as FEN', 'copyFen', { accel: 'CmdOrCtrl+Alt+C' }),
+        item('Paste Game or Position', 'paste', { accel: 'CmdOrCtrl+Shift+V' }),
+        ...(mac ? [sep, { role: 'close' }] : [sep, item('Settings…', 'settings', { accel: 'Ctrl+,' }), sep, { role: 'quit', label: 'Exit' }]),
+      ],
+    },
+    {
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' }, { role: 'redo' }, sep,
+        { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+      ],
+    },
+    {
+      label: 'Game',
+      submenu: [
+        item('Takeback', 'takeback', { key: 'B' }),
+        sep,
+        item('First Move', 'first', { key: 'Home' }),
+        item('Previous Move', 'prev', { key: 'Left' }),
+        item('Next Move', 'next', { key: 'Right' }),
+        item('Last Move', 'last', { key: 'End' }),
+        sep,
+        item('Flip Board', 'flip', { key: 'F' }),
+        item('Annotate', 'annotate', { key: 'A' }),
+      ],
+    },
+    {
+      label: 'Analysis',
+      submenu: [
+        item('Analyse Position', 'analysis', { key: 'L' }),
+        item('Pause or Resume Analysis', 'pause', { key: 'P' }),
+        sep,
+        item('Opening Explorer', 'tab', { arg: 'explorer' }),
+        item('Ask the AI About the Game', 'ai', { accel: 'CmdOrCtrl+J' }),
+        sep,
+        item('Engines…', 'settings', { arg: 'engines' }),
+        item('Analysis Settings…', 'settings', { arg: 'analysis' }),
+      ],
+    },
+    {
+      label: 'Lichess',
+      submenu: [
+        item('Play', 'lichess', { arg: 'play' }),
+        item('Watch Lichess TV', 'lichess', { arg: 'watch' }),
+        item('Your Bot', 'lichess', { arg: 'engine' }),
+        item('Puzzles', 'tab', { arg: 'puzzles' }),
+        sep,
+        item('Lichess Settings…', 'settings', { arg: 'lichess' }),
+      ],
+    },
+    {
+      label: 'View',
+      submenu: [
+        item('Moves', 'tab', { arg: 'moves', accel: 'CmdOrCtrl+1' }),
+        item('Explorer', 'tab', { arg: 'explorer', accel: 'CmdOrCtrl+2' }),
+        item('Puzzles', 'tab', { arg: 'puzzles', accel: 'CmdOrCtrl+3' }),
+        item('Games', 'tab', { arg: 'games', accel: 'CmdOrCtrl+4' }),
+        item('Lichess', 'tab', { arg: 'lichess', accel: 'CmdOrCtrl+5' }),
+        item('Tournament', 'tab', { arg: 'tournament', accel: 'CmdOrCtrl+6' }),
+        sep,
+        item('Zen Mode', 'zen', { key: 'Z' }),
+        item('Appearance…', 'settings', { arg: 'appearance' }),
+        sep,
+        item('Sounds On or Off', 'sounds', { key: 'M' }),
+        item('Classical Music On or Off', 'music', { key: 'U' }),
+        sep,
+        { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' },
+        sep,
+        { role: 'togglefullscreen' },
+        ...(app.isPackaged ? [] : [sep, { role: 'reload' }, { role: 'toggleDevTools' }]),
+      ],
+    },
+    { role: 'windowMenu' },
+    {
+      role: 'help',
+      submenu: [
+        item('Keyboard Shortcuts', 'keys', { key: '?' }),
+        sep,
+        { label: 'Lichess.org', click: () => shell.openExternal('https://lichess.org') },
+        { label: 'UCI Engines and Options', click: () => shell.openExternal('https://backscattering.de/chess/uci/') },
+        { label: 'Stockfish', click: () => shell.openExternal('https://stockfishchess.org') },
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 app.whenReady().then(() => {
   // Run from source, the Dock would show Electron's icon.
   if (process.platform === 'darwin' && !app.isPackaged) {
     try { app.dock.setIcon(path.join(__dirname, 'icon.png')); } catch { /* keep Electron's */ }
   }
+  app.setAboutPanelOptions({
+    applicationName: 'Ponder', applicationVersion: app.getVersion(),
+    credits: 'A chess program: play engines and people, analyse, train, and run your engine on Lichess.',
+  });
+  buildMenu();
+  handleRadioProtocol();
   backend.start();
   applyDatabase(loadDatabase()).catch(() => {});
   createWindow();

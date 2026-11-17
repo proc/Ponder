@@ -184,7 +184,10 @@ function renderDbMoves(data) {
       const res = g.winner === 'white' ? '1-0' : g.winner === 'black' ? '0-1' : '½-½';
       const row = el('button', { type: 'button', className: 'ex-game', title: 'Open this game on the board' }, [
         el('span', { className: 'ex-rating', textContent: `${g.white.rating ?? ''}\n${g.black.rating ?? ''}` }),
-        el('span', { className: 'ex-names', textContent: `${g.white.name}\n${g.black.name}` }),
+        // Lichess games are by Lichess players: their flags beside their names.
+        ex.db === 'lichess'
+          ? el('span', { className: 'ex-names' }, [g.white.name, g.black.name].map((n) => el('span', { className: 'ex-name-line' }, [...[flagSpan(n)].filter(Boolean), n])))
+          : el('span', { className: 'ex-names', textContent: `${g.white.name}\n${g.black.name}` }),
         el('span', { className: `ex-result ${g.winner ?? 'draw'}`, textContent: res }),
         el('span', { className: 'ex-year', textContent: g.year ?? g.month ?? '' }),
       ]);

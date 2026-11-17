@@ -13,6 +13,27 @@
 //   size    its size when not resized: { w, h } in px
 //   start   (width, height) => { x, y }: where it first appears
 //   pill    () => content of the tray button while it is hidden
+
+// Floating windows overlap: the one last clicked or tabbed into comes to the
+// front. Every kind takes part (these, the engine panels, the challenges
+// window). The order is set through --float-z, which only the floating
+// styles read, so a panel back in its column is not affected. They stay in
+// 42–49, above windows not touched yet and below pop-ups and dialogs.
+const FLOAT_WINDOWS = '.fw.floating, .engine.floating, .float-win';
+let floatOrder = [];
+function raiseFloat(win) {
+  if (floatOrder.at(-1) === win) return;
+  floatOrder = floatOrder.filter((w) => w !== win && w.matches(FLOAT_WINDOWS));
+  floatOrder.push(win);
+  floatOrder.forEach((w, i) => w.style.setProperty('--float-z', String(Math.min(49, 42 + i))));
+}
+for (const type of ['pointerdown', 'focusin']) {
+  document.addEventListener(type, (e) => {
+    const win = e.target.closest?.(FLOAT_WINDOWS);
+    if (win) raiseFloat(win);
+  }, true);
+}
+
 function floatWindow(panel, o) {
   const st = (() => { try { return JSON.parse(localStorage.getItem(o.key)) || {}; } catch { return {}; } })();
   const save = () => { try { localStorage.setItem(o.key, JSON.stringify(st)); } catch { /* not kept */ } };

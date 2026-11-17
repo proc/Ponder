@@ -120,14 +120,28 @@ function trackChallenges(who, prev, next) {
   renderChallengeFloat();
 }
 window.trackChallenges = trackChallenges;
+window.renderChallengeFloat = renderChallengeFloat;
+$('#ch-float-auto-on').onchange = (e) => switchAutoChallenge(e.target.checked);
+$('#ch-float-auto-stop').onclick = () => lichessCommand('lichessSeekStop');
 
 function renderChallengeFloat() {
   const win = $('#ch-float');
   const items = [...chf.items];
   const upcoming = chfNext();
   const was = win.hidden;
-  win.hidden = items.length === 0 && !upcoming?.at;
+  // Auto challenge (or a run of random-bot challenges) can be stopped here.
+  const seeking = Boolean(lx.status.seek?.active);
+  const auto = typeof autoChallenge !== 'undefined' && autoChallenge;
+  win.hidden = items.length === 0 && !upcoming?.at && !(auto && seeking);
   if (win.hidden) return;
+  const row = $('#ch-float-auto');
+  row.hidden = !auto && !seeking;
+  $('#ch-float-auto-on').hidden = !auto;
+  $('#ch-float-auto-on').checked = auto;
+  $('#ch-float-auto-stop').hidden = auto;
+  $('#ch-float-auto-label').firstElementChild.textContent = auto ? 'Auto challenge' : 'Random bots';
+  const { games = 0, played = 0 } = lx.status.seek ?? {};
+  $('#ch-float-auto-sub').textContent = auto || games <= 0 ? 'without end' : `game ${Math.min(games, played + 1)} of ${games}`;
   // Each time it opens: at the bottom right.
   if (was) { delete chf.pos.x; delete chf.pos.y; }
   const next = $('#ch-float-next');

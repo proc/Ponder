@@ -12,7 +12,8 @@
   },
   "devDependencies": {
     "@electron/packager": "^20.0.0",
-    "electron": "^45.3.2"
+    "electron": "^45.3.2",
+    "three": "^0.187.0"
   },
   "productName": "Ponder",
   "dependencies": {

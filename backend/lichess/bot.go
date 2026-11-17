@@ -999,8 +999,11 @@ type runner struct {
 	// The clock, in seconds, for the PGN.
 	initial, increment int64
 	eng                *uci.Engine
-	greeted            bool // hello was said (or it was too late to)
-	thinking           int  // ply the engine is searching for, or -1
+	engPath            string   // what the engine was started from,
+	engArgs            []string // to find it when its options change
+	pendingOpts        []string // option changes for before its next search
+	greeted            bool     // hello was said (or it was too late to)
+	thinking           int      // ply the engine is searching for, or -1
 	lastInfo           time.Time
 	lastStats          time.Time // when the depth and counts were last sent on their own
 	// The engine's newest search line, and the ply it is for: what the
@@ -1133,8 +1136,9 @@ func (r *runner) startEngine(cfg EngineConfig) error {
 	if err != nil {
 		return err
 	}
-	// Its options first, as it is loaded; Ponder is set below.
-	if err := eng.ApplyOptions(cfg.Options, "Ponder"); err != nil {
+	// Its options first, as it is loaded; Ponder is set below. Engines that
+	// can give their win/draw/loss chances are asked to, for its window.
+	if err := eng.ApplyOptions(uci.WithWDL(eng.Options, cfg.Options), "Ponder"); err != nil {
 		eng.Quit()
 		return err
 	}
@@ -1158,10 +1162,53 @@ func (r *runner) startEngine(cfg EngineConfig) error {
 	}
 	r.b.mu.Lock()
 	r.eng = eng
+	r.engPath, r.engArgs, r.pendingOpts = cfg.Path, cfg.Args, nil
 	r.canPonder = canPonder
 	r.pondering, r.nextPonder, r.discard = "", "", 0
 	r.b.mu.Unlock()
 	return nil
+}
+
+// UpdateEngineOptions gives the engine of every game in progress that was
+// started from path with args its newly saved options: at once when it is
+// not searching, otherwise before its next search. Ponder stays as the bot
+// set it. It returns how many games' engines it reached.
+func (b *Bot) UpdateEngineOptions(path string, args []string, opts map[string]string) int {
+	b.mu.Lock()
+	if game.SameEngine(path, args, b.cfg.Engine.Path, b.cfg.Engine.Args) {
+		b.cfg.Engine.Options = opts
+	}
+	type send struct {
+		eng  *uci.Engine
+		cmds []string
+	}
+	var now []send
+	n := 0
+	for _, r := range b.games {
+		if r.eng == nil || r.finished || !game.SameEngine(path, args, r.engPath, r.engArgs) {
+			continue
+		}
+		n++
+		cmds := uci.OptionCommands(r.eng.OptionChanges(uci.WithWDL(r.eng.Options, opts), "Ponder"))
+		if len(cmds) == 0 {
+			continue
+		}
+		// Searching: its own move, or pondering, or a stopped search still
+		// to answer.
+		busy := r.pondering != "" || r.discard > 0 || (r.pos.Turn == r.color && r.thinking == len(r.moves))
+		if busy {
+			r.pendingOpts = append(r.pendingOpts, cmds...)
+		} else {
+			now = append(now, send{r.eng, cmds})
+		}
+	}
+	b.mu.Unlock()
+	for _, s := range now {
+		for _, c := range s.cmds {
+			s.eng.Send(c)
+		}
+	}
+	return n
 }
 
 func (r *runner) stopEngine() {
@@ -1368,9 +1415,15 @@ func (r *runner) engineCommandsLocked(st GameState) []string {
 		}
 		r.pondering = ""
 	}
+	// Options saved while it was searching: now, before a new search.
+	flush := func() {
+		cmds = append(cmds, r.pendingOpts...)
+		r.pendingOpts = nil
+	}
 	switch {
 	case ourTurn && canMove && r.thinking != n:
 		r.thinking = n
+		flush()
 		cmds = append(cmds, position(), "go "+clock)
 	case !ourTurn && canMove && r.canPonder && r.pondering == "" && r.nextPonder != "" &&
 		r.nextPly == n && n > 0 && r.moves[n-1] == r.nextAfter:
@@ -1380,6 +1433,7 @@ func (r *runner) engineCommandsLocked(st GameState) []string {
 			if after := r.pos.Make(reply); len(after.LegalMoves()) > 0 {
 				r.pondering, r.ponderBase = reply.UCI(), n
 				r.ponderLine = uci.Info{}
+				flush()
 				cmds = append(cmds, position(reply.UCI()), "go ponder "+clock)
 			}
 		}
@@ -1602,6 +1656,15 @@ func (r *runner) lineLocked(in uci.Info, pos chess.Position) game.EngineInfo {
 	}
 	if r.color == chess.Black {
 		out.CP, out.Mate = -out.CP, -out.Mate
+	}
+	// The chances are the engine's own (it is to move in every line it
+	// searches, pondering too): White's first, as everywhere.
+	if in.HasWDL {
+		w := in.WDL
+		if r.color == chess.Black {
+			w[0], w[2] = w[2], w[0]
+		}
+		out.WDL = &w
 	}
 	for i, s := range in.PV {
 		if i == 12 {

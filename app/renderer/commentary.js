@@ -1,7 +1,7 @@
 'use strict';
 // Live commentary: while a game is being played (yours, an engine's, a
 // Lichess game, a tournament game on the board), every few moves the AI
-// model is sent the position and all the moves that led to it and asked to
+// model is sent the game as PGN (players, ratings, every move) and the position, and asked to
 // comment as a chess commentator would; when the game ends it is asked for
 // a summary. The comments show in a card beside the board and, in full, in
 // the AI panel's Commentary view. The model is the one set in Settings → AI.
@@ -199,7 +199,7 @@ function cmEval() {
   return '';
 }
 
-function cmMessages(kind, from) {
+function cmMessages(kind, from, pgn = '') {
   const white = state.players.white?.name || 'White';
   const black = state.players.black?.name || 'Black';
   const n = state.moves.length;
@@ -210,7 +210,12 @@ function cmMessages(kind, from) {
   if (state.external?.label) parts.push(`Event: ${state.external.label}`);
   if (state.opening) parts.push(`Opening: ${state.opening}`);
   if (state.startFen && !/^rnbqkbnr\/pppppppp\/8\/8\/8\/8\/PPPPPPPP\/RNBQKBNR w KQkq/.test(state.startFen)) parts.push(`The game started from this position (FEN): ${state.startFen}`);
-  parts.push(`All the moves so far:\n${cmMoves(0) || '(none yet)'}`);
+  // The whole game as PGN: its tags (the players' names and ratings, the
+  // event, the time control, the opening) and its moves with any
+  // annotations and engine evaluations. The plain move list when there is
+  // no PGN to be had.
+  if (pgn.trim()) parts.push(`The game as PGN:\n${pgn.trim()}`);
+  else parts.push(`All the moves so far:\n${cmMoves(0) || '(none yet)'}`);
   if (kind === 'comment' && from > 0 && from < n) parts.push(`Played since your last comment:\n${cmMoves(from)}`);
   parts.push(`${kind === 'summary' ? 'The final position' : 'The position now'} (FEN): ${fen}`);
   if (kind === 'summary') parts.push(`Result: ${state.result}${state.reason ? ` (${state.reason})` : ''}.`);
@@ -250,9 +255,18 @@ async function askCommentary(kind) {
   cm.note = '';
   renderCommentary();
   try {
-    const reply = await api.ai.chat(id, cmMessages(kind, from), 'commentary');
+    let pgn = '';
+    try { pgn = await gamePgn(); } catch { /* no game to write: the moves go as a list */ }
+    if (cm.id !== id) {
+      // Overtaken while the PGN was being written (a new game, turned off).
+      const at = cm.feed.indexOf(entry);
+      if (at >= 0 && !entry.text) cm.feed.splice(at, 1);
+      return;
+    }
+    const reply = await api.ai.chat(id, cmMessages(kind, from, pgn), 'commentary');
     entry.text = String(reply.text ?? '').replace(/\s+/g, ' ').trim();
     cm.model = reply.model ?? cm.model;
+    window.aiNoteUsage?.(cm, reply); // the context meter
     entry.live = false;
     annotateFromComment(entry); // on its move, when annotating is on
     speakCommentary(entry.text); // read aloud, when that is on
@@ -319,7 +333,7 @@ function syncCommentary() {
     if (cm.busy) api.ai.chatCancel?.('commentary');
     // The last game's comment being said is finished; one waiting is not.
     cm.pendingSpeech = '';
-    Object.assign(cm, { game: state.game, feed: [], lastPly: n, wasLive: live, summed: false, note: '' });
+    Object.assign(cm, { game: state.game, feed: [], lastPly: n, wasLive: live, summed: false, note: '', usage: null });
     renderCommentary();
   }
   if (n < cm.lastPly) cm.lastPly = n; // a takeback
@@ -470,7 +484,7 @@ function renderCommentary() {
   const grew = rows.length !== feed.children.length;
   aicSync(feed, rows);
   if (atEnd && (grew || cm.busy)) feed.scrollTop = feed.scrollHeight;
-  $('#cm-note').textContent = cm.note || 'Each comment sends the model the position and all the moves so far (Settings → AI sets the model).';
+  $('#cm-note').textContent = cm.note || 'Each comment sends the model the game so far as PGN (the players, their ratings and every move) and the position now (Settings → AI sets the model).';
   $('#cm-note').classList.toggle('error', Boolean(cm.note));
   window.renderCommentator?.(); // Pip, when on, says it instead of the card
 }
@@ -484,6 +498,7 @@ function showAiView(view) {
     b.setAttribute('aria-selected', String(on));
   }
   try { localStorage.setItem('aiView', view); } catch { /* not kept */ }
+  window.renderAiContext?.();
   if (view === 'commentary') { renderCommentary(); $('#cm-feed').scrollTop = $('#cm-feed').scrollHeight; } else window.openAiChat?.(false);
 }
 for (const b of $('#ai-views').querySelectorAll('button')) b.onclick = () => showAiView(b.dataset.view);

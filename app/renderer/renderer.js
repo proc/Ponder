@@ -35,7 +35,7 @@ async function loadThemes() {
       const blur = Math.max(0, ...[...svg.matchAll(/stdDeviation="([\d.]+)/g)].map((m) => +m[1]));
       const pad = Math.ceil(blur * 3);
       const framed = svg.replace(/viewBox="[^"]*"/, `viewBox="${x - pad} ${y - pad} ${w + 2 * pad} ${h + 2 * pad}"`);
-      pieces[key] = { url: URL.createObjectURL(new Blob([framed], { type: 'image/svg+xml' })), h, pad };
+      pieces[key] = { url: URL.createObjectURL(new Blob([framed], { type: 'image/svg+xml' })), h, pad, aspect: (w + 2 * pad) / (h + 2 * pad) };
       maxH = Math.max(maxH, h);
     }
     if (Object.keys(pieces).length === 12) themes[name] = { pieces, maxH };
@@ -62,16 +62,91 @@ function setTheme(name, { save = true } = {}) {
   if (save) {
     try { localStorage.setItem('theme', name); } catch { /* storage unavailable */ }
   }
+  window.board3d?.restyle(); // the 3D board's colours follow the theme
   if (state) { renderBoard(); renderMoves(); renderGameInfo(); } // the Game card's preview is drawn in the theme
 }
+
+// How see-through the glass is (Settings → Appearance): 0 is solid, 90
+// almost clear. The styles read it as --glass-t; it is kept on this computer.
+const GLASS_DEFAULT = 48;
+let glassTransparency = (() => {
+  try { const v = parseInt(localStorage.getItem('glassTransparency'), 10); return Number.isFinite(v) ? Math.max(0, Math.min(90, v)) : GLASS_DEFAULT; } catch { return GLASS_DEFAULT; }
+})();
+function setGlassTransparency(v, { save = true } = {}) {
+  glassTransparency = Math.max(0, Math.min(90, Math.round(+v || 0)));
+  document.documentElement.style.setProperty('--glass-t', `${glassTransparency}%`);
+  if ($('#glass-transparency-value')) $('#glass-transparency-value').textContent = `${glassTransparency}%`;
+  if (save) try { localStorage.setItem('glassTransparency', String(glassTransparency)); } catch { /* storage unavailable */ }
+}
+setGlassTransparency(glassTransparency, { save: false });
 
 function savedTheme() {
   try { return localStorage.getItem('theme') || DEFAULT_THEME; } catch { return DEFAULT_THEME; }
 }
 
+// Glass pieces (Glassify board): each piece of a theme drawn once into an
+// image of glass (a body of clear or smoked glass in its shape, the drawing
+// over it partly see-through, a sheen across the top), so that on the board
+// it costs no more than the plain piece: no masks or filters to redraw while
+// it slides. Made the first time they are needed; until then the plain piece.
+const glassArt = new Map(); // "theme/key" -> art, or a promise of it
+const GLASS_PX = 360;       // height drawn: sharp on a large board on a 2x screen
+async function makeGlassPiece(art, white) {
+  const img = new Image();
+  img.src = art.url;
+  await img.decode();
+  const H = GLASS_PX;
+  const W = Math.max(1, Math.round(H * (art.aspect || 1)));
+  const layer = (fill) => {
+    const c = new OffscreenCanvas(W, H);
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0, W, H);
+    g.globalCompositeOperation = 'source-in';
+    g.fillStyle = fill(g);
+    g.fillRect(0, 0, W, H);
+    return c;
+  };
+  const vertical = (g, stops) => {
+    const grad = g.createLinearGradient(0, 0, W * 0.09, H);
+    for (const [at, colour] of stops) grad.addColorStop(at, colour);
+    return grad;
+  };
+  const body = layer((g) => vertical(g, white
+    ? [[0, 'rgba(255,255,255,.72)'], [1, 'rgba(255,255,255,.38)']]
+    : [[0, 'rgba(52,52,60,.7)'], [1, 'rgba(10,10,16,.82)']]));
+  const sheen = layer((g) => vertical(g, [[0, 'rgba(255,255,255,.7)'], [0.26, 'rgba(255,255,255,.28)'], [0.48, 'rgba(255,255,255,0)'],
+    [0.82, 'rgba(255,255,255,0)'], [1, 'rgba(255,255,255,.2)']]));
+  const out = new OffscreenCanvas(W, H);
+  const g = out.getContext('2d');
+  g.drawImage(body, 0, 0);
+  g.globalAlpha = 0.72;
+  g.drawImage(img, 0, 0, W, H);
+  g.globalAlpha = 1;
+  g.drawImage(sheen, 0, 0);
+  const blob = await out.convertToBlob({ type: 'image/png' });
+  return { ...art, url: URL.createObjectURL(blob) };
+}
+let glassRedraw = 0;
+function glassPieceArt(name, key, art) {
+  const id = `${name}/${key}`;
+  const got = glassArt.get(id);
+  if (got && !(got instanceof Promise)) return got;
+  if (!got) {
+    glassArt.set(id, makeGlassPiece(art, key.startsWith('white')).then((g) => {
+      glassArt.set(id, g);
+      // Once they are made, the board shows them.
+      cancelAnimationFrame(glassRedraw);
+      glassRedraw = requestAnimationFrame(() => { if (state && glassBoard) renderBoard(); });
+      return g;
+    }, () => { glassArt.set(id, art); return art; }));
+  }
+  return art;
+}
+
 function pieceImage(type, white, name = theme) {
   const key = `${white ? 'white' : 'black'}-${PIECE_NAMES[type]}`;
-  const art = themes[name]?.pieces[key];
+  let art = themes[name]?.pieces[key];
+  if (art && glassBoard) art = glassPieceArt(name, key, art);
   const img = el('img', { className: 'piece', alt: key.replace('-', ' '), draggable: false });
   if (art) {
     img.src = art.url;
@@ -664,6 +739,21 @@ function flyCaptured(piece, col, row) {
 // pinned piece still counts, one lined up behind another does not). Only
 // pieces with more attackers than defenders are in the result, each with
 // { net, attackers, defenders }.
+// Glassify board: translucent squares over a wash of colour, and pieces of
+// glass (a bright rim, a sheen across the top). Off by default.
+let glassBoard = (() => { try { return localStorage.getItem('glassBoard') === 'on'; } catch { return false; } })();
+document.body.classList.toggle('glass-board', glassBoard);
+// 3D board: board3d.js draws the board and pieces in 3D over this one.
+let board3dOn = (() => { try { return localStorage.getItem('board3d') === 'on'; } catch { return false; } })();
+function setBoard3d(on, { save = true } = {}) {
+  const ok = window.board3d ? window.board3d.setActive(on) : !on;
+  board3dOn = Boolean(on) && ok !== false;
+  if (save) try { localStorage.setItem('board3d', board3dOn ? 'on' : 'off'); } catch { /* storage unavailable */ }
+  if ($('#board-3d')) $('#board-3d').checked = board3dOn;
+}
+// board3d.js is a module: it runs after this script, and says when it is there.
+if (window.board3d) setBoard3d(board3dOn, { save: false });
+else window.addEventListener('board3d-ready', () => setBoard3d(board3dOn, { save: false }), { once: true });
 let attackMarks = (() => { try { return localStorage.getItem('attackMarks') !== 'off'; } catch { return true; } })();
 function attackCounts(pieces) {
   const at = (f, r) => (f >= 0 && f < 8 && r >= 1 && r <= 8 ? pieces[FILES[f] + r] : undefined);
@@ -780,9 +870,12 @@ function renderBoard() {
   if (puzzleView || exploring()) legalFor(shownFen());
   renderShapes();
   window.explorerFollow?.();
+  window.board3d?.sync(); // the 3D board, when it is on, copies this one
 }
 
 function squareAt(x, y) {
+  // The 3D board covers this one: the square under the pointer there.
+  if (window.board3d?.active) return window.board3d.squareAt(x, y);
   return document.elementFromPoint(x, y)?.closest('.square')?.dataset.sq ?? null;
 }
 
@@ -907,6 +1000,19 @@ function formatClock(ms) {
   return `${mm}:${ss}`;
 }
 
+// A side's Lichess username, for their flag: the Lichess game being played
+// or watched, or a game from a file that was played on Lichess (its Site),
+// whose names are then Lichess usernames. '' when there is none.
+function lichessUser(side) {
+  const live = state?.external?.users?.[side];
+  if (live) return live;
+  const tags = state?.tags ?? [];
+  const tag = (n) => tags.find((t) => t.name === n)?.value ?? '';
+  if (!/lichess\.org/i.test(tag('Site'))) return '';
+  const name = tag(side === 'white' ? 'White' : 'Black');
+  return name && name !== '?' ? name : '';
+}
+
 function renderPlayers() {
   const bottom = flipped ? 'black' : 'white';
   const top = flipped ? 'white' : 'black';
@@ -917,7 +1023,7 @@ function renderPlayers() {
     $('.name', box).textContent = player ? player.name : side === 'white' ? 'White' : 'Black';
     // The country flag of a Lichess player, before the name.
     const flagBox = $('.pflag', box);
-    const code = typeof flagFor === 'function' ? flagFor(state.external?.users?.[side]) : '';
+    const code = typeof flagFor === 'function' ? flagFor(lichessUser(side)) : '';
     const emoji = code ? flagEmoji(code) : '';
     flagBox.hidden = !emoji;
     flagBox.textContent = emoji;
@@ -1034,6 +1140,127 @@ function renderStatus() {
 // The moves, one row per move number as on Lichess: number, White's move,
 // Black's move. With a computer analysis, mistakes carry ?! ? ?? and a
 // comment row with the better move, and the result ends the list.
+const START_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+// What the Moves tab shows before there are moves: a way into each part
+// of the app, a box to paste a game or a position, and the latest games
+// in the open file (the game database, usually).
+const START_ICONS = {
+  new: '<path d="M12 5v14M5 12h14"/>',
+  lichess: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  puzzles: '<path d="M10 3h4v3a2 2 0 1 0 4 0h3v5h-3a2 2 0 1 0 0 4h3v6h-6v-3a2 2 0 1 0-4 0v3H4v-6h3a2 2 0 1 0 0-4H4V6h6z"/>',
+  open: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  explorer: '<path d="M6 3v12M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 9a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM18 9a9 9 0 0 1-9 9"/>',
+  analysis: '<path d="M3 17l5-5 4 4 8-8M14 8h6v6"/>',
+};
+function startScreen() {
+  const icon = (name) => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('aria-hidden', 'true');
+    svg.innerHTML = `<g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${START_ICONS[name]}</g>`;
+    return svg;
+  };
+  const tile = (name, title, sub, run, primary = false) => {
+    const b = el('button', { type: 'button', className: 'ms-tile' + (primary ? ' ms-main' : '') }, [
+      el('span', { className: 'ms-icon' }, [icon(name)]),
+      el('span', { className: 'ms-text' }, [el('b', { textContent: title }), el('span', { textContent: sub })]),
+    ]);
+    b.onclick = run;
+    return b;
+  };
+  const tiles = el('div', { className: 'ms-tiles' }, [
+    tile('new', 'New game', 'Play an engine, a friend, or watch two engines', () => $('#btn-new').click(), true),
+    tile('lichess', 'Lichess', 'Play online, watch TV, or run your bot', () => showTab('lichess')),
+    tile('puzzles', 'Puzzles', 'Train tactics at your rating', () => showTab('puzzles')),
+    tile('explorer', 'Openings', 'Explore what masters and Lichess play', () => showTab('explorer')),
+    tile('open', 'Open PGN', 'Load games from a file', () => openPgn()),
+    tile('analysis', 'Analyse', 'Turn on the engine and move freely', () => { if ($('#btn-analysis').getAttribute('aria-pressed') !== 'true') $('#btn-analysis').click(); }),
+  ]);
+
+  const input = el('textarea', { className: 'ms-paste-text', rows: 2, spellcheck: false, placeholder: 'Paste a PGN or a FEN' });
+  const load = el('button', { type: 'button', className: 'small', textContent: 'Load', disabled: true });
+  const note = el('p', { className: 'ms-note', hidden: true });
+  input.oninput = () => { load.disabled = !input.value.trim(); note.hidden = true; };
+  input.onkeydown = (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !load.disabled) load.click(); };
+  load.onclick = async () => {
+    load.disabled = true;
+    const err = await loadPastedText(input.value);
+    if (err) {
+      note.textContent = err;
+      note.hidden = false;
+      load.disabled = false;
+    }
+  };
+  const paste = el('div', { className: 'ms-card ms-paste' }, [
+    el('div', { className: 'ms-head' }, [el('b', { textContent: 'Paste a game' }), el('span', { textContent: '⌘/Ctrl+Enter' })]),
+    el('div', { className: 'ms-paste-row' }, [input, load]),
+    note,
+  ]);
+
+  const recent = el('div', { className: 'ms-card ms-recent', hidden: true });
+  fillRecentGames(recent);
+  return el('div', { className: 'ms' }, [
+    el('p', { className: 'ms-hint', textContent: 'Move a piece on the board to start analysing, or:' }),
+    tiles, recent, paste,
+  ]);
+}
+
+// A game (PGN) or a position (FEN) from the clipboard or the start screen,
+// put on the board. Returns what went wrong, or '' when it is on the board.
+async function loadPastedText(raw) {
+  const text = String(raw ?? '').trim();
+  if (!text) return 'There is nothing to paste: copy a PGN or a FEN first.';
+  // A FEN is one line of six fields (or four) starting with the ranks.
+  const fen = /^[1-8pnbrqkPNBRQK]+(\/[1-8pnbrqkPNBRQK]+){7}\s+[wb]\s/.test(text) && !text.includes('\n');
+  if (state?.active && !state.external && !(await confirmDialog('Put this on the board? The game you are playing will be abandoned.', 'Load'))) return '';
+  const pgn = fen ? `[SetUp "1"]\n[FEN "${text.replace(/"/g, '')}"]\n[Result "*"]\n\n*\n` : text;
+  try {
+    await api.backend('loadPgnText', { pgn, source: fen ? 'Position' : 'Pasted game' });
+    return '';
+  } catch (err) {
+    return fen ? `That position could not be set up: ${errorText(err)}` : `That is not a game Ponder can read: ${errorText(err)}`;
+  }
+}
+
+// The latest games of the open file, newest first. Fetched again only
+// when the file or its number of games changes.
+async function fillRecentGames(card) {
+  if (!collection) return;
+  const key = `${collection.path}:${collection.total}`;
+  if (fillRecentGames.key !== key) {
+    fillRecentGames.key = key;
+    fillRecentGames.games = api.backend('listGames', { filter: '', limit: 5, sort: 'index', desc: true })
+      .then((list) => list?.games ?? [], () => []);
+  }
+  const games = await fillRecentGames.games;
+  if (!games.length || !card.isConnected) return;
+  const results = { '1-0': '1–0', '0-1': '0–1', '1/2-1/2': '½–½' };
+  const name = (n, g) => {
+    const span = el('span', { className: 'ms-player', textContent: n || '?' });
+    const flag = g.lichess && n ? flagSpan(n) : null;
+    if (flag) span.prepend(flag);
+    return span;
+  };
+  const isDb = database?.path && collection.path === database.path;
+  card.replaceChildren(
+    el('div', { className: 'ms-head' }, [
+      el('b', { textContent: isDb ? 'Recent games' : `Latest in ${collection.source}` }),
+      Object.assign(el('button', { type: 'button', className: 'ms-link', textContent: 'All games' }), { onclick: () => showTab('games') }),
+    ]),
+    ...games.map((g) => {
+      const row = el('button', { type: 'button', className: 'ms-game' }, [
+        el('span', { className: 'ms-players' }, [name(g.white, g), el('span', { className: 'ms-vs', textContent: 'vs' }), name(g.black, g)]),
+        el('b', { className: 'ms-res', textContent: results[g.result] ?? '*' }),
+        el('span', { className: 'ms-date', textContent: (g.date ?? '').replace(/\.\?\?/g, '').replace(/^\?+$/, '') }),
+      ]);
+      row.onclick = () => selectGame(g.index);
+      return row;
+    }),
+  );
+  card.hidden = false;
+}
+
 function renderMoves() {
   const box = $('#moves');
   const [, turn, , , , fullmove] = state.startFen.split(' ');
@@ -1107,8 +1334,12 @@ function renderMoves() {
       el('span', { textContent: state.reason ?? '' }),
     ]));
   }
+  // Nothing to list yet: ways to begin, in place of an empty list.
+  const blank = !nodes.length && !state.active && !state.external && state.startFen === START_FEN;
+  box.classList.toggle('start', blank);
+  if (blank) nodes.push(startScreen());
   box.replaceChildren(...nodes);
-  (box.querySelector('.move.current, .vmove.current') ?? box.lastElementChild)?.scrollIntoView({ block: 'nearest' });
+  if (!blank) (box.querySelector('.move.current, .vmove.current') ?? box.lastElementChild)?.scrollIntoView({ block: 'nearest' });
   $('#nav-first').disabled = $('#nav-prev').disabled = ply === 0 && !varNode;
   $('#nav-next').disabled = varNode ? !varNode.children.length : ply === livePly();
   $('#nav-last').disabled = ply === livePly() && !varNode;
@@ -1499,6 +1730,7 @@ function logEngineInfo(info) {
     // The chip's colour: who the score favours (scores are from White's side).
     tone: !info.hasEval ? '' : (info.isMate ? info.mate : info.cp) > 0 ? 'white' : (info.isMate ? info.mate : info.cp) < 0 ? 'black' : '',
     nodes: info.nodes ? formatCount(info.nodes) : '', line: info.pv?.length ? numberedFromPly(info.ply, info.pv) : '',
+    wdl: info.wdl ?? null,
   };
   // One row a move, newest first, however the lines arrive (a game put on
   // the board later brings its earlier moves at once).
@@ -1517,6 +1749,13 @@ function renderEngineHead(side) {
   const stats = $(`#engine-${side} .stats`);
   if (!stats) return;
   const info = engineInfo[side];
+  // Once the game is over the engine is not searching any more: the header
+  // says so in place of its live numbers, and the window is dimmed a little.
+  const stopped = engineStopped();
+  const panel = $(`#engine-${side}`);
+  panel.classList.toggle('stopped', stopped);
+  const pill = $('.engine-stopped', panel);
+  if (pill) pill.hidden = !stopped;
   // The depth has a place of its own, in large figures.
   const badge = $(`#engine-${side} .depth-badge`);
   if (badge) {
@@ -1525,11 +1764,19 @@ function renderEngineHead(side) {
     badge.title = info?.depth ? `The search has reached depth ${info.depth}${info.pondering ? ", on its opponent's time" : ''}` : '';
   }
   if ($(`#engine-${side}`).classList.contains('float-hidden')) syncEnginePill();
+  stats.hidden = stopped;
   stats.textContent = info
     ? [info.pondering ? 'pondering' : '', info.nodes ? `${formatCount(info.nodes)} nodes` : '',
       info.nps ? `${formatCount(info.nps)} n/s` : ''].filter(Boolean).join(' · ')
     : '';
   stats.title = !info ? '' : info.pondering ? "Thinking on its opponent's time" : 'Its search for its move';
+  if (badge && stopped && info?.depth) badge.title = `Its last search reached depth ${info.depth}`;
+}
+
+// The engines are stopped: the game they played is over (on this board, or
+// your engine's Lichess game shown here).
+function engineStopped() {
+  return Boolean(state && !state.active && !state.external?.live);
 }
 
 // While your engine's Lichess game is on the board, its window leaves the
@@ -1706,12 +1953,14 @@ function renderEngineInfo() {
         el('div', { className: 'head' }, [
           el('span', { className: 'side-dot ' + side, title: side === 'white' ? 'White' : 'Black' }),
           el('span', { className: 'engine-name' }),
+          el('span', { className: 'engine-stopped', hidden: true, textContent: 'Stopped', title: 'The game is over: the engine is not searching' }),
           el('span', { className: 'depth-badge', hidden: true }, [el('small', { textContent: 'Depth' }), el('b')]),
           el('span', { className: 'stats' }),
           el('button', { type: 'button', className: 'float-toggle' }),
           el('button', { type: 'button', className: 'float-toggle float-close', textContent: '✕', title: 'Hide the engine window (a button at the bottom right brings it back)', ariaLabel: 'Hide the engine window' }),
         ]),
         el('div', { className: 'engine-sum', hidden: true }),
+        el('div', { className: 'wdl-sum engine-wdl', hidden: true }),
         el('div', { className: 'lines' }),
         el('div', { className: 'messages' }),
       );
@@ -1726,6 +1975,13 @@ function renderEngineInfo() {
     floatEngine(panel, state.external?.kind === 'bot');
 
     const log = engineLog[side] ?? [];
+    // Its latest win/draw/loss chances, for the move it searched last.
+    const wdlRow = log.find((r) => r.wdl && !r.pondering);
+    const wdlBox = $('.engine-wdl', panel);
+    if (wdlBox) {
+      wdlBox.hidden = !wdlRow;
+      if (wdlRow) wdlBox.replaceChildren(...wdlSummary(wdlRow.wdl));
+    }
     const openLines = engineLineOpen[side] ??= new Set();
     const rows = log.map((r) => {
       // The move searched for: its number from the position searched.
@@ -1739,6 +1995,7 @@ function renderEngineInfo() {
             : `Its search for move ${fullmove}, to depth ${r.depth}${r.nodes ? `, ${r.nodes} nodes` : ''}`,
         }),
         el('span', { className: 'score ' + r.tone, textContent: r.score || '–' }),
+        ...(log.some((x) => x.wdl) ? [r.wdl ? wdlBar(r.wdl, true) : el('span', { className: 'wdl-bar mini none' })] : []),
         // How deep the search for this move got.
         ...(r.depth ? [el('span', {
           className: 'depth', textContent: `d${r.depth}`,
@@ -2050,7 +2307,7 @@ function renderGameInfo() {
     const d = diff?.[side];
     return el('div', { className: `gi-player ${side}` + (pt === '1' ? ' won' : '') + (live && state.turn === side ? ' to-move' : '') }, [
       el('span', { className: `gi-dot ${side}`, title: side === 'white' ? 'White' : 'Black' }),
-      ...[typeof flagSpan === 'function' ? flagSpan(ext?.users?.[side]) : null].filter(Boolean),
+      ...[typeof flagSpan === 'function' ? flagSpan(lichessUser(side)) : null].filter(Boolean),
       el('span', { className: 'gi-name', textContent: name, title: name }),
       ...(kind ? [el('span', { className: 'gi-kind', textContent: kind })] : []),
       el('span', { className: 'gi-rating' }, rating ? [String(rating), ...(d != null ? [el('span', { className: 'gi-diff ' + (d > 0 ? 'up' : d < 0 ? 'down' : ''), textContent: ` ${d > 0 ? '+' : d < 0 ? '−' : '±'}${Math.abs(d)}` })] : [])] : []),
@@ -2859,6 +3116,9 @@ function renderGames() {
     const [resText, resKind] = results[g.result] ?? ['*', 'open'];
     const player = (cls, name, won) => {
       const c = cell(cls + (won ? ' won' : ''), name || '?');
+      // A game played on Lichess: the names are Lichess players, with flags.
+      const flag = g.lichess && name ? flagSpan(name) : null;
+      if (flag) c.prepend(flag);
       c.prepend(el('i', { className: 'side' }));
       return c;
     };
@@ -3251,7 +3511,10 @@ async function openPgn(given, { list = false } = {}) {
   if (result.index < 0) setStatus(`None of the games in ${result.name} could be loaded.`);
 }
 $('#btn-open').onclick = () => openPgn();
+// In the app, Ctrl/⌘+O and S come from the application menu; these are
+// for when there is none (the page open on its own).
 window.addEventListener('keydown', (e) => {
+  if (api.onMenu) return;
   if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
   const key = e.key.toLowerCase();
   if (key !== 's' && key !== 'o') return;
@@ -3307,6 +3570,8 @@ function fillEngineSelects() {
   }
   // The Tournament tab lists the engines too.
   if (typeof refreshTournamentEngines === 'function') refreshTournamentEngines();
+  // So does the Lichess tab, for the engine your bot plays with.
+  window.fillLichessEngine?.();
 }
 
 function saveSetup() {
@@ -3444,52 +3709,180 @@ function joinArgs(args) {
   return (args ?? []).map((a) => (a === '' || /[\s"'\\]/.test(a) ? `"${a.replace(/(["\\])/g, '\\$1')}"` : a)).join(' ');
 }
 
-function renderEngineList() {
-  const rows = engines.map((engine) => {
-    const name = el('input', { type: 'text', value: engine.name, maxLength: 60 });
-    name.onchange = async () => { engines = await api.engines.update(engine.id, { name: name.value }); fillEngineSelects(); fillAnalysisSettings(); };
-    const changed = Object.keys(engine.options ?? {}).length;
-    const options = el('button', { type: 'button', textContent: changed ? `Options (${changed})` : 'Options' });
-    options.onclick = () => openOptions(engine);
-    const remove = el('button', { type: 'button', textContent: 'Remove', disabled: !!engine.builtin });
-    remove.onclick = async () => { engines = await api.engines.remove(engine.id); renderEngineList(); fillEngineSelects(); fillAnalysisSettings(); };
-    const parts = [name, el('div', { className: 'path', textContent: engine.builtin ? 'Bundled with the app' : `\u200E${engine.path}\u200E`, title: engine.builtin ? '' : engine.path })];
-    if (!engine.builtin) {
-      const args = el('input', {
-        type: 'text', className: 'engine-args', value: joinArgs(engine.args), spellcheck: false,
-        placeholder: 'Command-line options, e.g. --uci or -threads 4 (none)',
-        title: 'Passed to the engine when it starts. Spaces separate options; put an option with spaces in quotes.',
-      });
-      const note = el('div', { className: 'engine-args-note' });
-      args.onchange = async () => {
-        let list;
-        try {
-          list = splitArgs(args.value);
-        } catch (err) {
-          note.textContent = errorText(err);
-          note.className = 'engine-args-note error';
-          return;
-        }
-        engines = await api.engines.update(engine.id, { args: list });
-        args.value = joinArgs(list);
-        // Check that the engine starts with them.
-        note.textContent = 'Starting the engine…';
-        note.className = 'engine-args-note';
-        try {
-          const info = await api.engines.probe(engine.id);
-          note.textContent = `Starts with these options: ${info.name}${info.author ? ' by ' + info.author : ''}`;
-          engineError(null);
-        } catch (err) {
-          note.textContent = `The engine did not start with these options: ${errorText(err)}`;
-          note.className = 'engine-args-note error';
-        }
-      };
-      parts.push(el('label', { className: 'engine-args-row' }, [el('span', { textContent: 'Command line' }), args]), note);
-    }
-    return el('div', { className: 'engine-row' }, [el('div', { className: 'grow' }, parts), options, remove]);
-  });
-  $('#engine-list').replaceChildren(...rows);
+// The engine manager: a dense list on the left (sorted by name, with a
+// search box, arrow keys to move) and the chosen engine's details on the
+// right, so twenty engines and more stay easy to find and edit.
+let engineSel = null;
+const engineSort = (a, b) => (!!b.builtin - !!a.builtin) || a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+
+function engineUses(engine) {
+  const uses = [];
+  if (engine.id === analysisSettings().engineId) uses.push('Analysis');
+  if (typeof lx !== 'undefined' && engine.id === lx.settings?.engineId) uses.push('Lichess');
+  return uses;
 }
+
+function engineShown() {
+  const query = $('#engine-filter').value.trim().toLowerCase();
+  const words = query.split(/\s+/).filter(Boolean);
+  return engines.filter((e) => {
+    const text = `${e.name} ${e.path ?? ''} ${(e.args ?? []).join(' ')}`.toLowerCase();
+    return words.every((w) => text.includes(w));
+  }).sort(engineSort);
+}
+
+function renderEngineList() {
+  if (!engines.some((e) => e.id === engineSel)) engineSel = (engines.find((e) => e.id === analysisSettings().engineId) ?? [...engines].sort(engineSort)[0])?.id ?? null;
+  renderEngineItems();
+  renderEngineDetail();
+}
+
+function renderEngineItems() {
+  const shown = engineShown();
+  const query = $('#engine-filter').value.trim();
+  $('#engine-count').textContent = query ? `${shown.length} of ${engines.length}` : `${engines.length} engine${engines.length === 1 ? '' : 's'}`;
+  const items = shown.map((engine) => {
+    const uses = engineUses(engine);
+    const item = el('button', {
+      type: 'button', role: 'option', className: 'engine-item', tabIndex: engine.id === engineSel ? 0 : -1,
+      ariaSelected: String(engine.id === engineSel), title: engine.builtin ? engine.name : `${engine.name}\n${engine.path}`,
+    }, [
+      el('span', { className: 'engine-item-name', textContent: engine.name }),
+      ...(Object.keys(engine.options ?? {}).length || engine.args?.length ? [el('span', { className: 'engine-mark set', title: 'Options or a command line are set' })] : []),
+      ...(uses.length ? [el('span', { className: 'engine-mark use', title: `Used for ${uses.join(' and ')}` })] : []),
+    ]);
+    item.dataset.id = engine.id;
+    item.onclick = () => selectEngine(engine.id);
+    return item;
+  });
+  const list = $('#engine-list');
+  list.replaceChildren(...(items.length ? items : [el('p', { className: 'hint engine-none', textContent: engines.length ? 'No engine matches.' : 'No engines yet.' })]));
+}
+
+function selectEngine(id, { focus = true } = {}) {
+  engineSel = id;
+  for (const item of $('#engine-list').querySelectorAll('.engine-item')) {
+    const on = item.dataset.id === id;
+    item.ariaSelected = String(on);
+    item.tabIndex = on ? 0 : -1;
+    if (on) { item.scrollIntoView({ block: 'nearest' }); if (focus) item.focus(); }
+  }
+  renderEngineDetail();
+}
+
+function engineChanged() { fillEngineSelects(); fillAnalysisSettings(); }
+
+function renderEngineDetail() {
+  const box = $('#engine-detail');
+  const engine = engines.find((e) => e.id === engineSel);
+  if (!engine) { box.replaceChildren(el('p', { className: 'hint', textContent: 'Add an engine to see it here.' })); return; }
+
+  const name = el('input', { type: 'text', className: 'engine-detail-name', value: engine.name, maxLength: 60, ariaLabel: 'Name', spellcheck: false, readOnly: !!engine.builtin });
+  name.onchange = async () => {
+    if (!name.value.trim()) { name.value = engine.name; return; }
+    engines = await api.engines.update(engine.id, { name: name.value.trim() });
+    renderEngineItems(); engineChanged();
+  };
+  name.onkeydown = (e) => { if (e.key === 'Enter') name.blur(); };
+  const tags = [
+    ...(engine.builtin ? ['Built-in'] : []),
+    ...engineUses(engine).map((u) => `${u} engine`),
+  ].map((t) => el('span', { className: 'tag', textContent: t }));
+
+  const fields = [];
+  fields.push(el('div', { className: 'engine-field' }, [el('span', { textContent: 'Program' }),
+    el('span', { className: 'engine-path', textContent: engine.builtin ? 'Bundled with the app' : engine.path })]));
+
+  if (!engine.builtin) {
+    const args = el('input', {
+      type: 'text', className: 'engine-args', value: joinArgs(engine.args), spellcheck: false,
+      placeholder: 'None, e.g. --uci or -threads 4',
+      title: 'Passed to the engine when it starts. Spaces separate options; put an option with spaces in quotes.',
+    });
+    const note = el('div', { className: 'engine-args-note' });
+    args.onkeydown = (e) => { if (e.key === 'Enter') args.blur(); };
+    args.onchange = async () => {
+      let list;
+      try {
+        list = splitArgs(args.value);
+      } catch (err) {
+        note.textContent = errorText(err);
+        note.className = 'engine-args-note error';
+        return;
+      }
+      engines = await api.engines.update(engine.id, { args: list });
+      args.value = joinArgs(list);
+      renderEngineItems();
+      // Check that the engine starts with them.
+      note.textContent = 'Starting the engine…';
+      note.className = 'engine-args-note';
+      try {
+        const info = await api.engines.probe(engine.id);
+        note.textContent = `Starts with these options: ${info.name}${info.author ? ' by ' + info.author : ''}`;
+        engineError(null);
+      } catch (err) {
+        note.textContent = `The engine did not start with these options: ${errorText(err)}`;
+        note.className = 'engine-args-note error';
+      }
+    };
+    fields.push(el('label', { className: 'engine-field' }, [el('span', { textContent: 'Command line' }), el('span', {}, [args, note])]));
+  }
+
+  const set = Object.entries(engine.options ?? {});
+  const optionsBtn = el('button', { type: 'button', className: 'small', textContent: 'Edit options…', title: 'The engine’s own settings: threads, hash size and more' });
+  optionsBtn.onclick = () => openOptions(engine);
+  fields.push(el('div', { className: 'engine-field engine-field-top' }, [el('span', { textContent: 'Options' }),
+    el('span', { className: 'engine-opts' }, [
+      ...(set.length
+        ? set.map(([k, v]) => el('span', { className: 'engine-opt', textContent: `${k} ${v === true ? 'on' : v === false ? 'off' : v}`, title: `${k}: ${v}` }))
+        : [el('span', { className: 'hint', textContent: 'All at the engine’s defaults' })]),
+    ]),
+    el('span', {}, [optionsBtn])]));
+
+  const foot = [];
+  if (!engine.builtin) {
+    const remove = el('button', { type: 'button', className: 'small danger', textContent: 'Remove engine' });
+    remove.onclick = async () => {
+      const order = engineShown();
+      const at = order.findIndex((e) => e.id === engine.id);
+      engines = await api.engines.remove(engine.id);
+      engineSel = (order[at + 1] ?? order[at - 1])?.id ?? null;
+      renderEngineList(); engineChanged();
+    };
+    foot.push(remove);
+  }
+
+  box.replaceChildren(
+    el('div', { className: 'engine-detail-head' }, [name, ...(tags.length ? [el('div', { className: 'engine-tags' }, tags)] : [])]),
+    el('div', { className: 'engine-fields' }, fields),
+    el('div', { className: 'engine-foot' }, foot),
+  );
+}
+
+// Keys: arrows, Home and End move through the list; in the search box,
+// Down goes to the list and Enter picks the first match.
+$('#engine-list').onkeydown = (e) => {
+  const order = engineShown();
+  const at = order.findIndex((x) => x.id === engineSel);
+  const to = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: order.length - 1, PageDown: at + 8, PageUp: at - 8 }[e.key];
+  if (to === undefined || !order.length) return;
+  e.preventDefault();
+  if (e.key === 'ArrowUp' && at <= 0) { $('#engine-filter').focus(); return; }
+  selectEngine(order[Math.max(0, Math.min(order.length - 1, to))].id);
+};
+$('#engine-filter').oninput = () => {
+  const shown = engineShown();
+  if (shown.length && !shown.some((e) => e.id === engineSel)) { engineSel = shown[0].id; renderEngineDetail(); }
+  renderEngineItems();
+};
+$('#engine-filter').onkeydown = (e) => {
+  const shown = engineShown();
+  if (e.key === 'Escape' && e.target.value) { e.preventDefault(); e.stopPropagation(); e.target.value = ''; renderEngineItems(); selectEngine(engineSel, { focus: false }); }
+  else if ((e.key === 'ArrowDown' || e.key === 'Enter') && shown.length) {
+    e.preventDefault();
+    selectEngine(shown.some((x) => x.id === engineSel) && e.key === 'ArrowDown' ? engineSel : shown[0].id);
+  }
+};
 
 $('#engine-add').onclick = async () => {
   engineError(null);
@@ -3498,11 +3891,15 @@ $('#engine-add').onclick = async () => {
   try {
     const added = await api.engines.add();
     engines = await api.engines.list();
+    if (added?.engine) {
+      engineSel = added.engine.id;
+      $('#engine-filter').value = '';
+    }
     renderEngineList();
-    fillEngineSelects();
-    fillAnalysisSettings();
+    if (added?.engine) selectEngine(added.engine.id, { focus: false });
+    engineChanged();
     if (added?.error) {
-      engineError(`${added.engine.name} was added, but did not start as a UCI engine (${added.error}). If it needs command-line options, enter them under its name.`);
+      engineError(`${added.engine.name} was added, but did not start as a UCI engine (${added.error}). If it needs command-line options, enter them beside Command line.`);
     } else if (added?.engine) {
       // A new engine: straight to its UCI options (threads, hash, …).
       const engine = engines.find((e) => e.id === added.engine.id);
@@ -3539,13 +3936,16 @@ const OPTION_NOTES = {
 const isPathOption = (o) => o.type === 'string' && /path|dir|folder|file/i.test(o.name);
 const wantsFolder = (o) => /path|dir|folder/i.test(o.name) && !/file/i.test(o.name);
 
-async function openOptions(engine) {
-  engineError(null);
+// report: where an engine that does not start says so (Settings → Engines
+// by default; the Lichess tab passes its own).
+async function openOptions(engine, report = engineError) {
+  report(null);
   let info;
   try {
     info = await api.engines.probe(engine.id);
+    if (!info) throw new Error(`${engine.name} did not answer.`);
   } catch (err) {
-    engineError(err);
+    report(err);
     return;
   }
   optionsEngine = engine;
@@ -3695,10 +4095,28 @@ $('#form-options').addEventListener('submit', async (e) => {
   engines = await api.engines.update(optionsEngine.id, { options });
   renderEngineList();
   dlgOptions.close();
+  const saved = engines.find((e) => e.id === optionsEngine.id) ?? optionsEngine;
   // The analysis engine picks the new options up at once.
-  if (analysis.on && analysisSettings().engineId === optionsEngine.id) { stopAnalysis(); startAnalysis(); }
-  // So does the engine playing on Lichess, from its next game.
-  window.lichessEngineChanged?.(optionsEngine.id);
+  const restarted = analysis.on && analysisSettings().engineId === saved.id;
+  if (restarted) { stopAnalysis(); startAnalysis(); }
+  // Copies of it playing now (the game on the board, the Lichess bot's
+  // games) are sent them too, between two searches; new Lichess games
+  // start with them.
+  let reached = 0;
+  try {
+    const r = await api.backend('engineOptions', {
+      path: saved.path, args: saved.args ?? [],
+      options: Object.fromEntries(Object.entries(saved.options ?? options).map(([k, v]) => [k, String(v)])),
+    });
+    reached = r?.engines ?? 0;
+  } catch (err) {
+    flashNote(`The options could not be sent to the running engine: ${errorText(err)}`);
+  }
+  window.lichessEngineChanged?.(saved.id);
+  if (reached || restarted) {
+    const where = [reached ? `${reached === 1 ? 'the engine' : `${reached} copies of the engine`} playing now` : '', restarted ? 'the analysis' : ''].filter(Boolean).join(' and ');
+    flashNote(`${saved.name}: options sent to ${where}`);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -3735,6 +4153,16 @@ $('#result-card').onchange = (e) => setResultCard(e.target.checked);
 $('#versus-on').onchange = (e) => window.setVersus?.(e.target.checked);
 $('#ko-on').onchange = (e) => window.setKo?.(e.target.checked);
 $('#bot-switch').onchange = (e) => window.setBotAutoSwitch?.(e.target.checked);
+$('#glass-board').onchange = (e) => {
+  glassBoard = e.target.checked;
+  try { localStorage.setItem('glassBoard', glassBoard ? 'on' : 'off'); } catch { /* storage unavailable */ }
+  document.body.classList.toggle('glass-board', glassBoard);
+  window.board3d?.restyle();
+  if (state) renderBoard();
+};
+$('#board-3d').onchange = (e) => setBoard3d(e.target.checked);
+$('#board-3d-auto').onchange = (e) => window.board3d?.setAutoCamera(e.target.checked);
+$('#board-3d-fx').onchange = (e) => window.board3d?.setCaptureEffects(e.target.checked);
 $('#attack-marks').onchange = (e) => {
   attackMarks = e.target.checked;
   try { localStorage.setItem('attackMarks', attackMarks ? 'on' : 'off'); } catch { /* storage unavailable */ }
@@ -3742,6 +4170,9 @@ $('#attack-marks').onchange = (e) => {
 };
 $('#moves-scores').onchange = (e) => setMovesPref('scores', e.target.checked);
 $('#sound-volume').oninput = (e) => sounds.setVolume(e.target.value / 100);
+// The glass changes as the slider moves; double-click it for the usual amount.
+$('#glass-transparency').oninput = (e) => setGlassTransparency(e.target.value);
+$('#glass-transparency').ondblclick = () => { $('#glass-transparency').value = GLASS_DEFAULT; setGlassTransparency(GLASS_DEFAULT); };
 $('#sound-test').onclick = () => {
   sounds.play('move');
   setTimeout(() => sounds.play('capture'), 350);
@@ -3763,12 +4194,18 @@ async function openSettings(pane) {
   $('#anim-speed').value = animSpeed;
   $('#result-card').checked = resultCard;
   $('#attack-marks').checked = attackMarks;
+  $('#glass-board').checked = glassBoard;
+  $('#board-3d').checked = board3dOn;
+  $('#board-3d-auto').checked = Boolean(window.board3d?.autoCamera);
+  $('#board-3d-fx').checked = window.board3d?.captureEffects ?? true;
   if (typeof vs !== 'undefined') $('#versus-on').checked = vs.on;
   if (typeof ko !== 'undefined') $('#ko-on').checked = ko.on;
   $('#bot-switch').checked = window.botAutoSwitchOn?.() ?? true;
   window.fillAiSettings?.();
   $('#moves-scores').checked = movesPrefs.scores;
   $('#sound-volume').value = Math.round(sounds.volume * 100);
+  $('#glass-transparency').value = glassTransparency;
+  setGlassTransparency(glassTransparency, { save: false });
   renderThemeList();
   engines = await api.engines.list();
   engineError(null);
@@ -3951,6 +4388,44 @@ function formatScore(line) {
   return (p > 0 ? '+' : p < 0 ? '−' : '') + Math.abs(p).toFixed(2);
 }
 
+// Win/draw/loss chances, as engines report them with UCI_ShowWDL: three
+// numbers in thousandths, White's win first (the backend turns them White's
+// way). Shown as a bar of three parts and as percentages.
+function wdlPercents(wdl) {
+  const total = wdl.reduce((a, b) => a + b, 0) || 1;
+  const exact = wdl.map((n) => (n * 100) / total);
+  const out = exact.map(Math.floor);
+  // Round so the three still add up to 100.
+  const order = exact.map((v, i) => [v - out[i], i]).sort((a, b) => b[0] - a[0]);
+  for (let k = 0; k < 100 - out.reduce((a, b) => a + b, 0); k++) out[order[k][1]]++;
+  return out;
+}
+
+function wdlText(wdl) {
+  const [w, d, l] = wdlPercents(wdl);
+  return `White wins ${w}% · draw ${d}% · Black wins ${l}%`;
+}
+
+function wdlBar(wdl, mini = false) {
+  const p = wdlPercents(wdl);
+  return el('span', { className: 'wdl-bar' + (mini ? ' mini' : ''), title: `The engine's chances: ${wdlText(wdl)}`, role: 'img', ariaLabel: wdlText(wdl) },
+    ['w', 'd', 'l'].map((k, i) => el('i', { className: k, style: `flex-grow: ${p[i]}` })));
+}
+
+// The bar with the three figures under it, for a window's best line.
+function wdlSummary(wdl) {
+  const [w, d, l] = wdlPercents(wdl);
+  return [
+    // The figures first, large enough to read at a glance, then the bar.
+    el('span', { className: 'wdl-nums' }, [
+      el('span', { className: 'w' }, [el('b', { textContent: `${w}%` }), ' White']),
+      el('span', { className: 'd' }, [el('b', { textContent: `${d}%` }), ' Draw']),
+      el('span', { className: 'l' }, [el('b', { textContent: `${l}%` }), ' Black']),
+    ]),
+    wdlBar(wdl),
+  ];
+}
+
 // Numbered moves of a line, e.g. "12… Nf6 13. Bg5 Be7".
 function numberedLine(fen, san) {
   const [, turn, , , , fullmove] = fen.split(' ');
@@ -4018,6 +4493,8 @@ function renderAnalysis() {
       rows.push(el('p', { className: 'hint held-note', textContent: 'Paused — these lines are for the position when you paused. Resume to analyse this one.' }));
     }
     const swatches = analysisSettings().altArrows && data.lines.length > 1;
+    // Win/draw/loss chances, when the engine reports them.
+    const anyWdl = data.lines.some((l) => l.wdl);
     // One row a line, whatever its length: the whole line shows on hover,
     // or wrapped once the row is clicked.
     rows.push(...data.lines.map((line, i) => {
@@ -4026,6 +4503,7 @@ function renderAnalysis() {
       const row = el('div', { className: 'analysis-line' + (open ? ' open' : ''), title: open ? 'Click to show one row' : 'Click to show the whole line' }, [
         el('span', { className: `line-swatch l${i + 1}` + (swatches ? '' : ' none'), title: !swatches ? '' : i ? `Arrow colour of line ${i + 1}` : 'The best line: its arrow' }),
         el('span', { className: 'score ' + (line.isMate ? (line.mate > 0 ? 'white' : 'black') : line.cp > 0 ? 'white' : line.cp < 0 ? 'black' : ''), textContent: formatScore(line) }),
+        ...(anyWdl ? [line.wdl ? wdlBar(line.wdl, true) : el('span', { className: 'wdl-bar mini none' })] : []),
         el('span', { className: 'pv', textContent: text, title: open ? '' : text }),
       ]);
       row.onclick = () => {
@@ -4037,6 +4515,9 @@ function renderAnalysis() {
     }));
   }
   $('#analysis-lines').replaceChildren(...rows);
+  const best = !analysis.error && !analysis.paused && data?.state !== 'over' && data?.state !== 'error' ? data?.lines?.[0] : null;
+  $('#analysis-wdl').hidden = !best?.wdl;
+  if (best?.wdl) $('#analysis-wdl').replaceChildren(...wdlSummary(best.wdl));
   renderEvalBar();
   renderArrow();
   window.renderPositionBar?.();
@@ -4254,12 +4735,11 @@ function renderArrow() {
   renderDatabaseButton();
   initLichess();
   initTournament();
-  // The game database opens with the app: the Games tab lists it, unless a
-  // game is being played or another tab was chosen meanwhile.
+  // The game database opens with the app, listed in the Games tab; the
+  // app starts on the Moves tab (its start screen shows the latest games).
   await listDatabase();
-  if (collection && database?.path && collection.path === database.path && workspace.dataset.tab === 'moves'
-    && !state?.active && !state?.external?.live) {
-    showTab('games');
+  if (collection && database?.path && collection.path === database.path) {
     renderDatabaseButton();
+    renderMoves(); // the start screen's latest games, now there are some
   }
 })();

@@ -34,10 +34,14 @@ type Info struct {
 	ScoreCP  int
 	IsMate   bool
 	Mate     int
-	Nodes    int64
-	NPS      int64
-	TimeMs   int64
-	PV       []string
+	// HasWDL: the engine sent its win/draw/loss chances ("wdl W D L", in
+	// thousandths, from the side to move), as engines do with UCI_ShowWDL.
+	HasWDL bool
+	WDL    [3]int
+	Nodes  int64
+	NPS    int64
+	TimeMs int64
+	PV     []string
 }
 
 // Handlers receive asynchronous engine output. They are called from the
@@ -339,6 +343,30 @@ func PlanOptions(listed []Option, opts map[string]string, skip ...string) []Opti
 // PlanOptions gives, and waits until the engine has taken them in: an
 // engine that stops over one (a hash too large, a file not found) is
 // reported here rather than at its first search.
+// WithWDL returns opts with UCI_ShowWDL turned on when the engine offers
+// it and opts do not set it, so the engine reports its win/draw/loss
+// chances. The option only adds to the engine's output.
+func WithWDL(listed []Option, opts map[string]string) map[string]string {
+	offered := false
+	for _, o := range listed {
+		if strings.EqualFold(o.Name, "UCI_ShowWDL") && o.Type == "check" {
+			offered = true
+		}
+	}
+	if !offered {
+		return opts
+	}
+	out := make(map[string]string, len(opts)+1)
+	for k, v := range opts {
+		if strings.EqualFold(k, "UCI_ShowWDL") {
+			return opts
+		}
+		out[k] = v
+	}
+	out["UCI_ShowWDL"] = "true"
+	return out
+}
+
 func (e *Engine) ApplyOptions(opts map[string]string, skip ...string) error {
 	plan := PlanOptions(e.Options, opts, skip...)
 	for _, s := range plan {
@@ -349,6 +377,49 @@ func (e *Engine) ApplyOptions(opts map[string]string, skip ...string) error {
 	}
 	e.Applied = plan
 	return nil
+}
+
+// OptionChanges is what to send a running engine so that its options become
+// opts: the settings that are new or changed since the last ApplyOptions or
+// OptionChanges, and the engine's own default for an option no longer set.
+// It records opts as applied; the caller sends the result (OptionCommands)
+// while the engine is not searching.
+func (e *Engine) OptionChanges(opts map[string]string, skip ...string) []OptionSetting {
+	plan := PlanOptions(e.Options, opts, skip...)
+	before := map[string]string{}
+	for _, s := range e.Applied {
+		before[strings.ToLower(s.Name)] = s.Value
+	}
+	var out []OptionSetting
+	kept := map[string]bool{}
+	for _, s := range plan {
+		key := strings.ToLower(s.Name)
+		kept[key] = true
+		if v, ok := before[key]; !ok || v != s.Value {
+			out = append(out, s)
+		}
+	}
+	for _, s := range e.Applied {
+		if kept[strings.ToLower(s.Name)] {
+			continue
+		}
+		for _, o := range e.Options {
+			if strings.EqualFold(o.Name, s.Name) && o.Type != "button" && o.Default != s.Value {
+				out = append(out, OptionSetting{o.Name, o.Default})
+			}
+		}
+	}
+	e.Applied = plan
+	return out
+}
+
+// OptionCommands are the setoption lines for settings.
+func OptionCommands(settings []OptionSetting) []string {
+	cmds := make([]string, 0, len(settings))
+	for _, s := range settings {
+		cmds = append(cmds, "setoption name "+s.Name+" value "+s.Value)
+	}
+	return cmds
 }
 
 // NewGame tells the engine a new game starts and waits until it is ready.
@@ -505,6 +576,22 @@ func parseInfo(f []string) (Info, bool) {
 				}
 				i += 2
 				useful = true
+			}
+		case "wdl":
+			if i+3 < len(f) {
+				var w [3]int
+				ok := true
+				for k := 0; k < 3; k++ {
+					n, err := strconv.Atoi(f[i+1+k])
+					if err != nil || n < 0 {
+						ok = false
+					}
+					w[k] = n
+				}
+				if ok {
+					in.HasWDL, in.WDL = true, w
+				}
+				i += 3
 			}
 		case "pv":
 			in.PV = append([]string(nil), f[i+1:]...)

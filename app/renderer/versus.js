@@ -5,7 +5,7 @@
 // go off again. Each card has the player's colour, name, title and rating,
 // and what Lichess knows of them once it has answered (record, games, flag)
 // with their score against each other. A click or Esc sends it away at once;
-// Settings → General turns it off.
+// Settings → Appearance turns it off.
 
 const vs = { game: null, bg: null, queued: null, timers: [], on: (() => { try { return localStorage.getItem('versus') !== 'off'; } catch { return true; } })() };
 const VS_HOLD = 5500; // ms the cards face each other
@@ -176,7 +176,7 @@ window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#versu
 // "DRAW GAME"), then who won, then the two players with the score between
 // them: the winner's card lit, the loser's knocked askew. It holds a few
 // seconds and goes; a click or Esc sends it away at once. The result card
-// is underneath when it leaves. Settings → General turns it off.
+// is underneath when it leaves. Settings → Appearance turns it off.
 // ---------------------------------------------------------------------------
 // bg: a game of your engine's that ended off the board (it plays several at
 // once), shown in place of the board's game.

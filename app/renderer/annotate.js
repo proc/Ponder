@@ -315,6 +315,7 @@ $('#an-ai').onclick = async () => {
     const moves = state.moves.map((m, i) => { const { n, white } = plyNumber(i + 1); return { ply: i + 1, number: n, white, san: m.san }; });
     const reply = await api.ai.annotate({
       pgn, moves, white: state.players?.white?.name ?? '', black: state.players?.black?.name ?? '', result: state.result ?? '*',
+      whiteElo: state.players?.white?.rating ?? '', blackElo: state.players?.black?.rating ?? '',
     });
     if (state?.game !== game) return; // another game meanwhile: not its commentary
     const hadSummary = Boolean(notes.before?.comment);
@@ -368,6 +369,7 @@ function showAiSettings(s) {
   $('#ai-key').value = '';
   $('#ai-key').placeholder = s.hasKey ? 'A key is saved (type a new one to replace it)' : local ? 'Not needed for most local servers' : `Your ${p.name ?? ''} API key`;
   $('#ai-models').replaceChildren();
+  $('#ai-ctx-size').value = s.contextWindow ?? '';
   aiSay(`${AI_WHERE[s.provider] ?? AI_WHERE.local} ${AI_NOTE}`);
 }
 async function fillAiSettings() {
@@ -387,6 +389,16 @@ async function saveAiSetting(patch) {
   } catch (err) { aiSay(errorText(err), true); return false; }
 }
 $('#ai-provider').addEventListener('change', (e) => saveAiSetting({ provider: e.target.value }));
+$('#ai-ctx-size').addEventListener('change', async (e) => {
+  await saveAiSetting({ contextWindow: e.target.value });
+  // The meter takes the new size at once.
+  for (const holder of [aic.chat, typeof cm !== 'undefined' ? cm : null]) {
+    if (!holder?.usage) continue;
+    const n = await api.ai.contextWindow?.(holder.usage.model).catch(() => null);
+    holder.usage.window = Number(n) > 0 ? Number(n) : null;
+  }
+  window.renderAiContext?.();
+});
 $('#ai-url').addEventListener('change', (e) => saveAiSetting({ baseUrl: e.target.value }));
 $('#ai-model').addEventListener('change', (e) => saveAiSetting({ model: e.target.value }));
 $('#ai-key').addEventListener('change', (e) => { if (e.target.value) saveAiSetting({ key: e.target.value }); });

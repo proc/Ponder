@@ -27,6 +27,9 @@ type Entry struct {
 	Round  string `json:"round"`
 	Plies  int    `json:"plies"`
 	Err    string `json:"error,omitempty"` // the game's text could not be read
+	// Lichess: the game was played on Lichess (its Site), so the names are
+	// Lichess usernames.
+	Lichess bool `json:"lichess,omitempty"`
 }
 
 // record is what the index keeps per game: the headers the list shows and
@@ -38,6 +41,7 @@ type record struct {
 	length                                   int32 // length of that chunk
 	plies                                    int32
 	sub                                      int32 // which game within the chunk
+	lichess                                  bool  // its Site is on lichess.org
 }
 
 // Collection is an indexed PGN file of any size.
@@ -56,7 +60,7 @@ func (c *Collection) Len() int { return len(c.records) }
 func (c *Collection) Entry(i int) Entry {
 	r := &c.records[i]
 	return Entry{Index: i, White: r.white, Black: r.black, Result: r.result, Date: r.date,
-		Event: r.event, Round: r.round, Plies: int(r.plies), Err: c.errs[i]}
+		Event: r.event, Round: r.round, Plies: int(r.plies), Err: c.errs[i], Lichess: r.lichess}
 }
 
 // Find returns the games whose headers contain every word (case-insensitive),
@@ -338,6 +342,8 @@ func scanChunk(ch chunk, in *interner) chunkResult {
 				cur.round = in.get(t.Value)
 			case "Result":
 				cur.result = in.get(t.Value)
+			case "Site":
+				cur.lichess = strings.Contains(strings.ToLower(t.Value), "lichess.org")
 			}
 		},
 		move:   func(string) { cur.plies++ },

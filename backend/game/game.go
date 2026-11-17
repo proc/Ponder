@@ -145,16 +145,19 @@ type EngineString struct {
 
 // EngineInfo is a search update, with the score from White's point of view.
 type EngineInfo struct {
-	Side    string   `json:"side"`
-	Depth   int      `json:"depth"`
-	HasEval bool     `json:"hasEval"`
-	CP      int      `json:"cp"`
-	IsMate  bool     `json:"isMate"`
-	Mate    int      `json:"mate"`
-	Nodes   int64    `json:"nodes"`
-	NPS     int64    `json:"nps"`
-	PV      []string `json:"pv"`
-	Ply     int      `json:"ply"`
+	Side    string `json:"side"`
+	Depth   int    `json:"depth"`
+	HasEval bool   `json:"hasEval"`
+	CP      int    `json:"cp"`
+	IsMate  bool   `json:"isMate"`
+	Mate    int    `json:"mate"`
+	// WDL: win/draw/loss chances in thousandths, White's first, when the
+	// engine reports them.
+	WDL   *[3]int  `json:"wdl,omitempty"`
+	Nodes int64    `json:"nodes"`
+	NPS   int64    `json:"nps"`
+	PV    []string `json:"pv"`
+	Ply   int      `json:"ply"`
 	// The move the engine means to play and the reply it expects (UCI), for
 	// arrows on the board; Played once it has chosen the move.
 	Best   string `json:"best,omitempty"`
@@ -199,6 +202,9 @@ type current struct {
 	extRunning   bool
 	// Searches stopped by a takeback: their bestmove is to be ignored.
 	ignoreBest [2]int
+	// Option changes saved while the engine was searching: sent before
+	// its next search.
+	pendingOpts [2][]string
 }
 
 // bookSoFar is the book opening reached by the last move played.
@@ -285,7 +291,7 @@ func (m *Manager) NewGame(cfg Config) error {
 			OnExit:     func() { m.onEngineExit(gen, side) },
 		})
 		if err == nil {
-			if err = e.ApplyOptions(p.Options); err == nil {
+			if err = e.ApplyOptions(uci.WithWDL(e.Options, p.Options)); err == nil {
 				err = e.NewGame()
 			}
 			if err != nil {
@@ -342,9 +348,62 @@ func (m *Manager) startTurnLocked() {
 		})
 	}
 	if engine != nil {
+		for _, c := range g.pendingOpts[side] {
+			engine.Send(c)
+		}
+		g.pendingOpts[side] = nil
 		engine.Go(g.positionCmd(), g.goCmd(side))
 	}
 	m.emitStateLocked()
+}
+
+// SameEngine reports whether a running engine was started from path with
+// args: how an engine of the app's list is found among those running.
+func SameEngine(path string, args []string, p string, a []string) bool {
+	if path != p || len(args) != len(a) {
+		return false
+	}
+	for i := range args {
+		if args[i] != a[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// UpdateEngineOptions gives the engines of the current game started from
+// path with args their newly saved options: at once when an engine is not
+// searching, otherwise just before its next search (UCI engines take
+// options only between searches). It returns how many engines it reached.
+func (m *Manager) UpdateEngineOptions(path string, args []string, opts map[string]string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	g := m.g
+	if g == nil || g.over() {
+		return 0
+	}
+	n := 0
+	for i, e := range g.engines {
+		p := g.players[i]
+		if e == nil || !SameEngine(path, args, p.EnginePath, p.EngineArgs) {
+			continue
+		}
+		n++
+		g.players[i].Options = opts
+		cmds := uci.OptionCommands(e.OptionChanges(uci.WithWDL(e.Options, opts)))
+		if len(cmds) == 0 {
+			continue
+		}
+		side := chess.Color(i)
+		if g.pos.Turn == side { // searching for its move
+			g.pendingOpts[side] = append(g.pendingOpts[side], cmds...)
+			continue
+		}
+		for _, c := range cmds {
+			e.Send(c)
+		}
+	}
+	return n
 }
 
 func (g *current) positionCmd() string {
@@ -574,6 +633,13 @@ func (m *Manager) onInfo(gen int, side chess.Color, in uci.Info) {
 	}
 	if side == chess.Black {
 		out.CP, out.Mate = -out.CP, -out.Mate
+	}
+	if in.HasWDL {
+		w := in.WDL
+		if side == chess.Black {
+			w[0], w[2] = w[2], w[0]
+		}
+		out.WDL = &w
 	}
 	p := g.pos
 	for i, s := range in.PV {

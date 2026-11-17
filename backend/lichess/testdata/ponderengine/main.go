@@ -49,6 +49,7 @@ func main() {
 		score = "10"
 	}
 	pondering := false
+	wdl := "" // " wdl W D L" once UCI_ShowWDL is on
 	out := bufio.NewWriter(os.Stdout)
 	say := func(s string) {
 		fmt.Fprintln(out, s)
@@ -69,7 +70,14 @@ func main() {
 		case "uci":
 			say("id name Ponder Tester")
 			say("option name Ponder type check default false")
+			say("option name UCI_ShowWDL type check default false")
 			say("uciok")
+		case "setoption":
+			// Win/draw/loss chances once asked for: always 600/300/100,
+			// from its own side.
+			if strings.Contains(line, "name UCI_ShowWDL value true") {
+				wdl = " wdl 600 300 100"
+			}
 		case "isready":
 			say("readyok")
 		case "position":
@@ -93,7 +101,7 @@ func main() {
 			}
 			time.Sleep(30 * time.Millisecond)
 			if best, ok := first(pos); ok {
-				say("info depth 1 score cp " + score + " nodes 1 pv " + best.UCI())
+				say("info depth 1 score cp " + score + wdl + " nodes 1 pv " + best.UCI())
 			}
 			say(answer(pos))
 		case "ponderhit", "stop":

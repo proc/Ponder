@@ -691,6 +691,25 @@ func (s *Server) public(w http.ResponseWriter, r *http.Request) bool {
 		fmt.Fprint(w, out)
 	case len(parts) == 4 && parts[0] == "api" && parts[1] == "stream" && parts[2] == "game":
 		s.streamMoves(w, r, parts[3])
+	case path == "/api/tv/channels":
+		// Every channel shows the same game: the featured one.
+		s.mu.Lock()
+		out := map[string]any{}
+		if g := s.featuredLocked(""); g != nil {
+			white, _ := g.players()
+			for _, ch := range []string{"best", "blitz", "bot"} {
+				out[ch] = map[string]any{"user": map[string]string{"id": white.ID, "name": white.Name, "title": white.Title},
+					"rating": white.Rating, "gameId": g.ID, "color": "white"}
+			}
+		}
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, line(out))
+	case path == "/api/tv/feed" || len(parts) == 4 && parts[0] == "api" && parts[1] == "tv" && parts[3] == "feed":
+		s.mu.Lock()
+		s.Log = append(s.Log, "GET "+path)
+		s.mu.Unlock()
+		s.tvFeed(w, r)
 	case path == "/masters" || path == "/lichess":
 		// The opening explorer: needs a token, like the real one.
 		if r.Header.Get("Authorization") != "Bearer "+s.Token {
@@ -852,6 +871,64 @@ func (s *Server) streamMoves(w http.ResponseWriter, r *http.Request, id string) 
 	}
 	s.mu.Unlock()
 	flushLines(w, r, ch, first)
+}
+
+// featuredLocked is the game on TV: the one shown before (cur), while it
+// goes on; else the latest auto game being played.
+func (s *Server) featuredLocked(cur string) *Game {
+	if g := s.games[cur]; g != nil && g.Status == "started" {
+		return g
+	}
+	var found *Game
+	for _, g := range s.games {
+		if g.auto && g.Status == "started" && (found == nil || g.ID > found.ID) {
+			found = g
+		}
+	}
+	return found
+}
+
+// tvFeed is /api/tv/feed: a "featured" line for each game put on TV, then
+// a "fen" line for each of its moves. Like Lichess, the next game comes on
+// once the one shown is over.
+func (s *Server) tvFeed(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	fl, _ := w.(http.Flusher)
+	cur, sent := "", 0
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		var out []string
+		s.mu.Lock()
+		if g := s.featuredLocked(cur); g != nil {
+			if g.ID != cur {
+				cur, sent = g.ID, len(g.Moves)
+				white, black := g.players()
+				wms, bms := s.clocksLocked(g)
+				pl := func(color string, u user, ms int64) map[string]any {
+					return map[string]any{"color": color, "user": map[string]string{"id": u.ID, "name": u.Name, "title": u.Title},
+						"rating": u.Rating, "seconds": ms / 1000}
+				}
+				out = append(out, line(map[string]any{"t": "featured", "d": map[string]any{"id": g.ID, "orientation": "white",
+					"players": []any{pl("white", white, wms), pl("black", black, bms)}, "fen": g.pos.FEN()}}))
+			}
+			for ; sent < len(g.Moves); sent++ {
+				out = append(out, line(map[string]any{"t": "fen", "d": s.entryAtLocked(g, sent+1)}))
+			}
+		}
+		s.mu.Unlock()
+		for _, l := range out {
+			fmt.Fprintln(w, l)
+		}
+		if fl != nil && len(out) > 0 {
+			fl.Flush()
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-tick.C:
+		}
+	}
 }
 
 // AutoGame starts a game between two players that the server plays

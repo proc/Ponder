@@ -2,8 +2,9 @@
 // Country flags beside Lichess players' names. Lichess keeps each player's
 // flag in their profile ("US", "GB-SCT", "_rainbow"…); Ponder asks for the
 // names it shows, many at a time, and keeps the answers for the session.
-// flagSpan(username) is the flag to put beside a name, or null (no flag, or
-// not known yet: the views are drawn again when the answer comes).
+// flagSpan(username) is the flag to put beside a name, or null when the
+// player has none. While it is being looked up it is an empty placeholder,
+// filled in when the answer comes (the views are also drawn again).
 
 const flags = { known: new Map(), want: new Set(), timer: null };
 
@@ -63,7 +64,31 @@ async function fetchFlags() {
   if (!got) return;
   let any = false;
   for (const id of ids) if (got[id]) { flags.known.set(id, got[id]); any = true; }
+  fillFlagPlaceholders();
   if (any) redrawFlags();
+}
+
+// The placeholders put in while flags were looked up, filled in (or taken
+// away for players without one).
+function fillFlagPlaceholders() {
+  for (const node of document.querySelectorAll('[data-flag-user]')) {
+    const code = flags.known.get(node.dataset.flagUser);
+    if (code == null) continue;
+    const emoji = flagEmoji(code);
+    delete node.dataset.flagUser;
+    if (!emoji) { node.remove(); continue; }
+    node.textContent = emoji;
+    node.title = node.ariaLabel = flagName(code);
+    node.hidden = false;
+  }
+}
+
+// A line of text with a player's flag put before their name in it.
+function withFlag(text, name) {
+  const at = name ? text.indexOf(name) : -1;
+  const flag = at < 0 ? null : flagSpan(name);
+  if (!flag) return [text];
+  return [text.slice(0, at), flag, text.slice(at)];
 }
 
 // The views that show names, drawn again with the flags in.
@@ -73,12 +98,18 @@ function redrawFlags() {
     () => window.renderMe?.(), () => window.updateVersus?.(), () => window.updateKo?.(),
     () => { if (!$('#match-history').hidden) window.renderMatchHistory?.(); },
     () => { if (!$('#ch-float').hidden) window.renderChallengeFloat?.(); },
+    () => window.renderChat?.(), () => window.renderLichessTV?.(), () => window.renderLichessWatch?.(),
   ];
   for (const f of calls) { try { f(); } catch { /* that view is not there */ } }
 }
 
 function flagSpan(user, className = 'cflag') {
   const code = flagFor(user);
+  if (code === null) {
+    const span = el('span', { className, hidden: true });
+    span.dataset.flagUser = String(user).trim().toLowerCase();
+    return span;
+  }
   const emoji = flagEmoji(code);
   if (!emoji) return null;
   return el('span', { className, textContent: emoji, title: flagName(code), ariaLabel: flagName(code) });

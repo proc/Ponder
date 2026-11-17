@@ -241,8 +241,10 @@ type SpectateGame struct {
 
 // SpectateStatus is sent to the UI as the "lichessWatch" event.
 type SpectateStatus struct {
-	Active  bool   `json:"active"`
-	User    string `json:"user"`
+	Active bool   `json:"active"`
+	User   string `json:"user"` // the player followed; for TV, what is watched ("Lichess TV · Blitz")
+	// TV is the Lichess TV channel being watched ("" when following a player).
+	TV      string `json:"tv,omitempty"`
 	State   string `json:"state"` // idle, looking, live, waiting
 	GameID  string `json:"gameId"`
 	URL     string `json:"url"`
@@ -273,6 +275,9 @@ type Spectator struct {
 	// Save, when set, receives the PGN of each watched game that finishes
 	// while it is followed.
 	Save func(pgn string)
+	// On TV, how long a game that ended stays on the board before the next
+	// one, and how long to wait for its end to be known.
+	TVHold, TVWait time.Duration
 }
 
 // watched is a game being followed.
@@ -302,11 +307,13 @@ type watched struct {
 	resyncing bool
 	// How the ratings changed, once the rated game is over.
 	ratingDiff *game.RatingDiff
+	// stop ends the game's stream (when the game is dropped).
+	stop context.CancelFunc
 }
 
 func NewSpectator(emit func(string, any), show func(game.ExternalView)) *Spectator {
 	return &Spectator{emit: emit, show: show, Poll: 5 * time.Second, status: SpectateStatus{State: "idle"},
-		wake: make(chan struct{}, 1)}
+		wake: make(chan struct{}, 1), TVHold: 3 * time.Second, TVWait: 8 * time.Second}
 }
 
 // Active reports whether a player is being followed.
@@ -443,6 +450,8 @@ func (s *Spectator) refreshLocked() {
 	switch {
 	case live > 0:
 		st.State, st.Message = "live", ""
+	case len(s.games) > 0 && st.TV != "":
+		st.State, st.Message = "waiting", "Game over. The next game comes on shortly…"
 	case len(s.games) > 0 && sawLive:
 		st.State, st.Message = "waiting", "Game over. Waiting for "+st.User+"'s next game…"
 	case len(s.games) > 0:
@@ -553,7 +562,11 @@ func (w *watched) kind() string {
 
 // add starts following an exported game, unless it is followed already.
 // It goes on the board when nothing is, or when the game there is over.
-func (s *Spectator) add(ctx context.Context, gen int, username string, g GameExport) {
+//
+// On TV (tvSide set: the side the board is turned to) the game replaces
+// whatever was on the board.
+func (s *Spectator) add(ctx context.Context, gen int, username string, g GameExport, tvSide ...string) {
+	tv := len(tvSide) > 0
 	s.mu.Lock()
 	known := gen != s.gen || s.games[g.ID] != nil || s.skip[g.ID]
 	s.mu.Unlock()
@@ -574,11 +587,19 @@ func (s *Spectator) add(ctx context.Context, gen int, username string, g GameExp
 		s.publish()
 	}
 	if v := g.VariantKey(); v != "" && v != "standard" && v != "fromPosition" {
-		fail(fmt.Errorf("%s is playing %s, which Ponder cannot show", username, v))
+		if tv {
+			fail(fmt.Errorf("the game on TV is %s, which Ponder cannot show; the next one may be standard chess", v))
+		} else {
+			fail(fmt.Errorf("%s is playing %s, which Ponder cannot show", username, v))
+		}
 		return
 	}
 	w := &watched{id: g.ID, white: g.Players.White, black: g.Players.Black, side: "white"}
-	if strings.EqualFold(g.Players.Black.ID(), username) {
+	if tv {
+		if tvSide[0] == "black" {
+			w.side = "black"
+		}
+	} else if strings.EqualFold(g.Players.Black.ID(), username) {
 		w.side = "black"
 	}
 	fen := g.InitialFen
@@ -605,6 +626,9 @@ func (s *Spectator) add(ctx context.Context, gen int, username string, g GameExp
 		w.wms, w.bms, w.clocked = g.Clock.Initial*1000, g.Clock.Initial*1000, true
 	}
 	w.label = "Watching " + username + " · " + w.kind()
+	if tv {
+		w.label = username + " · " + w.kind()
+	}
 	if st := g.StatusName(); st != "started" && st != "created" && st != "" {
 		w.finished = true
 		w.result, w.reason = resultOf(GameState{Status: st, Winner: g.Winner})
@@ -625,13 +649,22 @@ func (s *Spectator) add(ctx context.Context, gen int, username string, g GameExp
 		}
 	}
 	// A finished game is only shown when there is nothing else to show.
-	if (w.finished && len(s.games) > 0) || (!w.finished && live >= MaxWatched) {
+	if !tv && ((w.finished && len(s.games) > 0) || (!w.finished && live >= MaxWatched)) {
 		s.mu.Unlock()
 		return
 	}
+	if tv {
+		// TV shows one game: the one before goes.
+		for _, o := range s.games {
+			if o.stop != nil {
+				o.stop()
+			}
+		}
+		s.games, s.order = map[string]*watched{}, nil
+	}
 	s.games[g.ID] = w
 	s.order = append(s.order, g.ID)
-	if cur := s.games[s.shown]; cur == nil || cur.finished {
+	if cur := s.games[s.shown]; tv || cur == nil || cur.finished {
 		s.shown = g.ID
 	}
 	// Games that are over make way for the new one, but for the one on the board.
@@ -639,6 +672,9 @@ func (s *Spectator) add(ctx context.Context, gen int, username string, g GameExp
 		keep := s.order[:0]
 		for _, id := range s.order {
 			if o := s.games[id]; o.finished && id != s.shown {
+				if o.stop != nil {
+					o.stop()
+				}
 				delete(s.games, id)
 				continue
 			}
@@ -646,11 +682,15 @@ func (s *Spectator) add(ctx context.Context, gen int, username string, g GameExp
 		}
 		s.order = keep
 	}
+	var sctx context.Context
+	if !w.finished {
+		sctx, w.stop = context.WithCancel(ctx)
+	}
 	s.refreshLocked()
 	s.mu.Unlock()
 	s.push(gen, g.ID)
 	if !w.finished {
-		go s.stream(ctx, gen, g.ID)
+		go s.stream(sctx, gen, g.ID)
 	}
 }
 
@@ -733,6 +773,9 @@ func (s *Spectator) finish(gen int, id, status, winner string) {
 		return
 	}
 	w.finished = true
+	if w.stop != nil {
+		w.stop() // its stream is over already
+	}
 	w.result, w.reason = resultOf(GameState{Status: status, Winner: winner})
 	if w.rated && w.result != "*" {
 		go s.ratingDiffs(gen, id)

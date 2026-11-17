@@ -35,13 +35,16 @@ func (c Config) key() string {
 // Line is one of the engine's candidate lines. Scores are from White's
 // point of view.
 type Line struct {
-	MultiPV int      `json:"multipv"`
-	Depth   int      `json:"depth"`
-	CP      int      `json:"cp"`
-	IsMate  bool     `json:"isMate"`
-	Mate    int      `json:"mate"`
-	SAN     []string `json:"san"`
-	UCI     []string `json:"uci"`
+	MultiPV int  `json:"multipv"`
+	Depth   int  `json:"depth"`
+	CP      int  `json:"cp"`
+	IsMate  bool `json:"isMate"`
+	Mate    int  `json:"mate"`
+	// WDL: the engine's win/draw/loss chances in thousandths, White's
+	// first; absent when the engine does not report them.
+	WDL *[3]int  `json:"wdl,omitempty"`
+	SAN []string `json:"san"`
+	UCI []string `json:"uci"`
 }
 
 // Update is sent to the UI as the "analysis" event.
@@ -130,7 +133,7 @@ func (a *Analyzer) Start(cfg Config) error {
 			multi = true
 		}
 	}
-	if err := eng.ApplyOptions(cfg.Options, "MultiPV"); err != nil {
+	if err := eng.ApplyOptions(uci.WithWDL(eng.Options, cfg.Options), "MultiPV"); err != nil {
 		eng.Quit()
 		return fmt.Errorf("analysis engine: %w", err)
 	}
@@ -314,6 +317,13 @@ func (a *Analyzer) onInfo(gen int, in uci.Info) {
 	line := Line{MultiPV: in.MultiPV, Depth: in.Depth, CP: in.ScoreCP, IsMate: in.IsMate, Mate: in.Mate}
 	if a.pos.Turn == chess.Black { // engines score from the side to move
 		line.CP, line.Mate = -line.CP, -line.Mate
+	}
+	if in.HasWDL {
+		w := in.WDL
+		if a.pos.Turn == chess.Black {
+			w[0], w[2] = w[2], w[0]
+		}
+		line.WDL = &w
 	}
 	p := a.pos
 	for i, s := range in.PV {

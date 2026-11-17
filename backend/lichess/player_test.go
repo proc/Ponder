@@ -287,7 +287,7 @@ func TestOnlineBotsAndStatus(t *testing.T) {
 	srv := httptest.NewServer(f)
 	defer srv.Close()
 	c := NewClient(srv.URL, "")
-	ctx := t.Context()
+	ctx := context.Background()
 	bots, err := c.OnlineBots(ctx, 3)
 	if err != nil || len(bots) != 3 {
 		t.Fatalf("bots %d err %v", len(bots), err)
@@ -356,7 +356,7 @@ func TestPlayersInfo(t *testing.T) {
 	f := fake.New("secret", "Alice")
 	srv := httptest.NewServer(f)
 	defer srv.Close()
-	info := NewClient(srv.URL, "").Players(t.Context(), []string{"maia1", "Bob"}, "blitz")
+	info := NewClient(srv.URL, "").Players(context.Background(), []string{"maia1", "Bob"}, "blitz")
 	for _, name := range []string{"maia1", "Bob"} {
 		p := info.Players[name]
 		if p.Error != "" || len(p.Profile) == 0 || len(p.History) == 0 || len(p.Perf) == 0 {

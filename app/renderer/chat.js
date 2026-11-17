@@ -87,7 +87,11 @@ function chatLineNode(line) {
   if (line.system) node.classList.add('system');
   if (!line.at) node.classList.add('earlier');
   else node.title = new Date(line.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  if (!line.system) node.append(el('span', { className: 'chat-user', textContent: line.user }));
+  if (!line.system) {
+    const flag = flagSpan(line.user);
+    if (flag) node.append(flag);
+    node.append(el('span', { className: 'chat-user', textContent: line.user }));
+  }
   node.append(document.createTextNode(line.text));
   return node;
 }
