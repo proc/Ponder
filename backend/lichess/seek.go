@@ -187,6 +187,22 @@ type SeekStatus struct {
 	Played  int  `json:"played"`
 	Games   int  `json:"games"`
 	Playing bool `json:"playing"`
+	// Failed is the last challenge that could not be sent, and why: for the
+	// challenges window.
+	Failed *SeekFailure `json:"failed,omitempty"`
+}
+
+// SeekFailure is a challenge Lichess refused to send.
+type SeekFailure struct {
+	At        int64  `json:"at"` // Unix ms
+	User      string `json:"user"`
+	Title     string `json:"title,omitempty"`
+	Rating    int    `json:"rating,omitempty"`
+	Limit     int    `json:"limit"`
+	Increment int    `json:"increment"`
+	Rated     bool   `json:"rated"`
+	Speed     string `json:"speed,omitempty"`
+	Error     string `json:"error"`
 }
 
 type seeker struct {
@@ -677,11 +693,16 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		p.Username = u.Username
 	}
 	ch, err := b.challenge(p)
+	failed := func(st *SeekStatus, why string) {
+		st.Failed = &SeekFailure{At: time.Now().UnixMilli(), User: name, Title: u.Title, Rating: rating,
+			Limit: p.Limit, Increment: p.Increment, Rated: p.Rated, Speed: speed, Error: why}
+	}
 	if self, opponent, wait := ChallengeLimit(err); self {
 		// Your bot is rate limited: the loop holds every challenge until
 		// the time is up (the hold outlives this search, so a new one
 		// started meanwhile waits too).
 		b.holdChallenges(wait)
+		b.seekUpdate(sk, func(st *SeekStatus) { failed(st, "Lichess refused it: too many requests") })
 		return false, "", 0
 	} else if opponent {
 		// The bot challenged has played its bot games for the day: leave it
@@ -695,11 +716,15 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		sk.resting[strings.ToLower(u.ID)] = time.Now().Add(wait)
 		b.seekUpdate(sk, func(st *SeekStatus) {
 			st.Message = fmt.Sprintf("%s has played as many bot games as Lichess allows today: passed over for %s.", name, waitText(wait))
+			failed(st, fmt.Sprintf("It has played as many bot games as Lichess allows today; passed over for %s", waitText(wait)))
 		})
 		return false, "", seekPause
 	}
 	if err != nil {
-		b.seekUpdate(sk, func(st *SeekStatus) { st.Message = fmt.Sprintf("Could not challenge %s: %v", name, err) })
+		b.seekUpdate(sk, func(st *SeekStatus) {
+			st.Message = fmt.Sprintf("Could not challenge %s: %v", name, err)
+			failed(st, err.Error())
+		})
 		return false, "", seekPause
 	}
 	b.mu.Lock()

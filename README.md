@@ -230,6 +230,10 @@ rest holds the moves or game list beside engine analysis and game details.
   position reached, on the same side and clock. Its clock waits while the
   new engine starts; if that one can't be started, the engine before comes
   back.
+  In your engine's Lichess game, its bar has **⇄ Engine** too, with
+  **↻ Reload** only: the engine starts again with its options as saved now,
+  and goes on from the position. Swapping for another engine isn't offered
+  there.
 - **Keyboard** – ← → move by move, ↑ ↓ / Home End to the start and end, F
   flip, Z zen mode (only the board and players). Flip and zen mode are also the two
   icons at the board's bottom right corner, L analysis, P pause it, B
@@ -1135,7 +1139,12 @@ only watch has no chat Ponder can show, so its note stays in the side panel.
 engine, by you, or by the random-bot challenger) shows in a small window
 floating over the app, with how it stands: waiting for an answer, with the
 seconds left before it is withdrawn and a Cancel button; accepted; declined,
-with the reason given; no answer; or withdrawn. An answered challenge stays
+with the reason given; no answer; or withdrawn. A challenge that could not
+be sent at all is listed as **Not sent**, with the error: for example
+Lichess refusing it for too many requests, a bot that has played its bot
+games for the day, or another challenge still waiting. The window lists
+every challenge out, including those already waiting when Ponder connects,
+such as ones sent on the Lichess website. An answered challenge stays
 a few seconds (✕ dismisses it at once) and the window closes when none is
 left. While your engine is challenging random bots, a challenge that was
 declined or not answered stays in the window, marked so, until the next one
@@ -1144,7 +1153,10 @@ bottom row turns **Auto challenge** off (the same switch as in the Lichess
 tab), or, for a set number of random-bot games, says which game it is on
 with a Stop button; the row stays when the window is folded. The
 window opens at the bottom right of the app; drag it by its header to move it,
-fold it with the arrow or a double-click. It is hidden in zen mode.
+fold it with the arrow or a double-click. ✕ in its header hides it, and it
+stays hidden, even after a restart, until you show it again. While it is
+hidden, a **Challenges** button at the bottom right of the window says how
+many challenges are waiting and brings it back. It is hidden in zen mode.
 
 **Floating engine window** – while your engine's Lichess game is on the
 board, the engine's window (its search, lines and messages) leaves the side

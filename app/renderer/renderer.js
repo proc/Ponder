@@ -1075,7 +1075,9 @@ function renderPlayers() {
     // An engine in a game played here can be swapped or reloaded mid-game.
     const loading = Boolean(state.loading?.includes(side));
     const swap = $('.engine', box);
-    swap.hidden = !(state.active && !state.external && player?.type === 'engine');
+    // Your engine's Lichess game: its bar has the button too, to reload it.
+    const botEngine = state.external?.kind === 'bot' && state.external.live && state.external.side === side;
+    swap.hidden = !((state.active && !state.external && player?.type === 'engine') || botEngine);
     swap.dataset.side = side;
     swap.disabled = loading;
     swap.textContent = loading ? '⇄ Starting…' : '⇄ Engine';
@@ -2921,8 +2923,30 @@ async function replaceEngine(side, player) {
     notify(String(err.message || err), { title: player.enginePath ? 'The engine was not swapped' : 'The engine was not reloaded' });
   }
 }
+async function reloadBotEngine() {
+  closeEngineMenu();
+  const id = state?.external?.id;
+  try {
+    await api.lichess.reloadEngine(id);
+  } catch (err) {
+    notify(errorText(err), { title: 'The engine was not reloaded' });
+  }
+}
 async function openEngineMenu(btn) {
   const side = btn.dataset.side;
+  if (state?.external?.kind === 'bot') {
+    // Your engine's Lichess game: it can be started again, not swapped.
+    const b = el('button', { type: 'button', role: 'menuitem' }, ['↻ Reload', el('span', { className: 'count', textContent: 'with its saved options' })]);
+    b.onclick = reloadBotEngine;
+    engineMenu.replaceChildren(el('div', { className: 'menu-head', textContent: 'Your engine on Lichess' }), b);
+    const r = btn.getBoundingClientRect();
+    engineMenu.hidden = false;
+    const w = engineMenu.offsetWidth, h = engineMenu.offsetHeight;
+    engineMenu.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.right - w))}px`;
+    engineMenu.style.top = `${r.bottom + 4 + h > innerHeight - 8 ? Math.max(8, r.top - h - 4) : r.bottom + 4}px`;
+    b.focus();
+    return;
+  }
   const now = state?.players?.[side];
   if (!now || now.type !== 'engine') return;
   try { engines = await api.engines.list(); } catch { /* the list as it was */ }

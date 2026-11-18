@@ -210,6 +210,7 @@ func (p *Player) follow(ctx context.Context, gen int) {
 			return
 		}
 		started := time.Now()
+		go p.loadOutgoing(ctx, gen, client)
 		err := client.StreamEvents(ctx, func(e Event) { p.onEvent(ctx, gen, e) })
 		if ctx.Err() != nil {
 			return
@@ -249,6 +250,34 @@ func (p *Player) me() string {
 		return ""
 	}
 	return p.account.ID
+}
+
+// loadOutgoing reads the challenges the account has out, made here or
+// elsewhere (on the website, before Ponder connected).
+func (p *Player) loadOutgoing(ctx context.Context, gen int, client *Client) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_, out, err := client.CurrentChallenges(cctx)
+	if err != nil {
+		return
+	}
+	p.mu.Lock()
+	if gen != p.gen {
+		p.mu.Unlock()
+		return
+	}
+	added := false
+	for i := range out {
+		ch := out[i]
+		if _, known := p.outgoing[ch.ID]; !known && (ch.Status == "" || ch.Status == "created") {
+			p.outgoing[ch.ID] = &ch
+			added = true
+		}
+	}
+	p.mu.Unlock()
+	if added {
+		p.emit()
+	}
 }
 
 func (p *Player) onEvent(ctx context.Context, gen int, e Event) {

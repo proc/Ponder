@@ -1893,11 +1893,11 @@ body.zen .float-win { display: none; }
 .chf-state.waiting { color: var(--muted); }
 .chf-state.waiting::before { background: var(--highlight); animation: chf-wait 1.2s ease-in-out infinite; }
 .chf-state.accepted { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
-.chf-state.declined { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.chf-state.declined, .chf-state.failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
 @keyframes chf-wait { 50% { opacity: .3; } }
 @media (prefers-reduced-motion: reduce) { .chf-state.waiting::before { animation: none; } }
 .chf-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chf-row.declined .chf-detail { white-space: normal; }
+.chf-row.declined .chf-detail, .chf-row.failed .chf-detail { white-space: normal; }
 .chf-meta { font-size: 0.8rem; }
 /* When the next challenge to a random bot goes out. */
 .chf-next {

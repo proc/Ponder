@@ -718,6 +718,9 @@ function lichessEngine(settings) {
 }
 
 ipcMain.handle('lichess:settings', () => publicLichess(loadLichess()));
+// Your engine's game in progress gets its engine started again, with the
+// options as now saved (Settings → Engines).
+ipcMain.handle('lichess:reloadEngine', (_e, id) => backend.request('lichessReloadEngine', { id: String(id ?? ''), engine: lichessEngine(loadLichess()) }));
 
 // ---------------------------------------------------------------------------
 // AI: the provider (OpenAI, Claude, Google AI, or an OpenAI-compatible

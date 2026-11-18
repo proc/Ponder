@@ -7,20 +7,40 @@
 // header; the arrow folds it down to the header. It opens at the bottom
 // right of the app's window each time. While your engine is challenging random bots,
 // a declined challenge stays until the next one goes out, and the window
-// counts down to it.
+// counts down to it. ✕ hides it, until the button it leaves in the tray at
+// the bottom right is pressed; whether it is hidden is kept.
 
 const chf = {
   items: new Map(), // key -> { who, c, state, text, endedAt, timer }
   pos: (() => { try { return JSON.parse(localStorage.getItem('challengeFloat')) || {}; } catch { return {}; } })(),
 };
-const CHF_KEEP = { accepted: 6000, declined: 14000, expired: 12000, gone: 8000 };
+const CHF_KEEP = { accepted: 6000, declined: 14000, expired: 12000, gone: 8000, failed: 20000 };
 const CHF_LABEL = {
   waiting: 'Waiting for an answer', accepted: 'Accepted', declined: 'Declined',
-  expired: 'No answer', gone: 'Withdrawn',
+  expired: 'No answer', gone: 'Withdrawn', failed: 'Not sent',
 };
 
+// A challenge Lichess would not send (refused, rate limited, no such
+// player…): a row with the error, kept like a declined one.
+const chfClock = (limit, inc) => {
+  const m = limit / 60;
+  return `${{ 0.25: '¼', 0.5: '½', 0.75: '¾' }[m] ?? String(+m.toFixed(1))}+${inc}`;
+};
+let chfFails = 0;
+function chfFailed(who, f) {
+  const key = `${who}:failed:${++chfFails}`;
+  // It takes the place of those not accepted before it, as a new challenge does.
+  for (const [k, old] of chf.items) if (old.who === who && old.held) { clearTimeout(old.timer); chf.items.delete(k); }
+  const c = { id: key, user: f.user, title: f.title ?? '', rating: f.rating ?? 0, tc: f.limit != null ? chfClock(f.limit, f.increment ?? 0) : '',
+    rated: Boolean(f.rated), speed: f.speed ?? '', color: f.color ?? 'random' };
+  chf.items.set(key, { who, c, state: 'waiting', text: '' });
+  chfEnd(key, 'failed', String(f.error ?? '').replace(/^Error:\s*/, ''));
+  renderChallengeFloat();
+}
+window.challengeNotSent = chfFailed;
+
 function chfSave() {
-  try { localStorage.setItem('challengeFloat', JSON.stringify({ folded: Boolean(chf.pos.folded) })); } catch { /* not kept */ }
+  try { localStorage.setItem('challengeFloat', JSON.stringify({ folded: Boolean(chf.pos.folded), hidden: Boolean(chf.pos.hidden) })); } catch { /* not kept */ }
 }
 
 // At the bottom right of the app's window, or where it was dragged to since
@@ -113,6 +133,9 @@ function trackChallenges(who, prev, next) {
     const why = kind === 'declined' ? (msg.split(/declined(?: (?:the|your) challenge)?[:,.]?\s*/i)[1] ?? '').replace(/\.$/, '') : '';
     chfEnd(recent[0], kind, why);
   }
+  // The random-bot challenger could not send one.
+  const failed = next.seek?.failed;
+  if (who === 'engine' && failed && failed.at !== prev.seek?.failed?.at) chfFailed('engine', failed);
   // No longer challenging random bots: those kept for the next one go.
   if (who === 'engine' && (!next.seek?.active || next.seek.playing)) {
     for (const [key, it] of chf.items) if (it.held) chfExpire(key, it);
@@ -132,7 +155,15 @@ function renderChallengeFloat() {
   // Auto challenge (or a run of random-bot challenges) can be stopped here.
   const seeking = Boolean(lx.status.seek?.active);
   const auto = typeof autoChallenge !== 'undefined' && autoChallenge;
-  win.hidden = items.length === 0 && !upcoming?.at && !(auto && seeking);
+  const wanted = !(items.length === 0 && !upcoming?.at && !(auto && seeking));
+  win.hidden = !wanted || Boolean(chf.pos.hidden);
+  // Hidden with ✕: a button in the tray says how it stands, and brings it back.
+  const pill = chfPill();
+  pill.hidden = !(wanted && chf.pos.hidden);
+  if (!pill.hidden) {
+    const waitingNow = items.filter(([, it]) => it.state === 'waiting').length;
+    pill.textContent = 'Challenges' + (waitingNow ? ` · ${waitingNow} waiting` : upcoming?.at ? ' · next soon' : '');
+  }
   if (win.hidden) return;
   const row = $('#ch-float-auto');
   row.hidden = !auto && !seeking;
@@ -179,14 +210,28 @@ function renderChallengeFloat() {
   chfPlace();
 }
 
+// The tray button standing in for the window while it is hidden.
+let chfPillEl = null;
+function chfPill() {
+  if (!chfPillEl) {
+    chfPillEl = el('button', { type: 'button', className: 'fw-pill', hidden: true, title: 'Show the challenges window' });
+    chfPillEl.onclick = () => { chf.pos.hidden = false; chfSave(); renderChallengeFloat(); };
+    $('#float-tray').append(chfPillEl);
+  }
+  return chfPillEl;
+}
+
 (() => {
   const win = $('#ch-float');
+  const close = $('#ch-float-close');
+  close.onclick = () => { chf.pos.hidden = true; chfSave(); renderChallengeFloat(); };
+  close.addEventListener('pointerdown', (e) => e.stopPropagation());
   const head = $('#ch-float-head');
   const toggle = $('#ch-float-fold');
   const fold = () => { chf.pos.folded = !chf.pos.folded; chfSave(); renderChallengeFloat(); };
   toggle.onclick = fold;
   toggle.addEventListener('pointerdown', (e) => e.stopPropagation());
-  head.addEventListener('dblclick', (e) => { if (e.target !== toggle) fold(); });
+  head.addEventListener('dblclick', (e) => { if (e.target !== toggle && e.target !== close) fold(); });
   head.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
     e.preventDefault();

@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld('board', {
     settings: () => ipcRenderer.invoke('lichess:settings'),
     save: (patch) => ipcRenderer.invoke('lichess:save', patch),
     connect: () => ipcRenderer.invoke('lichess:connect'),
+    reloadEngine: (id) => ipcRenderer.invoke('lichess:reloadEngine', id),
     configure: () => ipcRenderer.invoke('lichess:configure'),
     signIn: () => ipcRenderer.invoke('lichess:signIn'),
     signInCancel: () => ipcRenderer.invoke('lichess:signInCancel'),

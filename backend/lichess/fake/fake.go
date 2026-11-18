@@ -197,6 +197,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, line(map[string]string{"error": msg}))
 	}
 	switch {
+	case path == "/api/challenge" && r.Method == "GET":
+		// The challenges waiting: those to the bot and those it sent.
+		s.mu.Lock()
+		in, out := []*challenge{}, []*challenge{}
+		for _, c := range s.pending {
+			if c.Direction == "out" {
+				out = append(out, c)
+			} else {
+				in = append(in, c)
+			}
+		}
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, line(map[string]any{"in": in, "out": out}))
 	case path == "/api/account":
 		s.mu.Lock()
 		u := s.me()
@@ -1401,6 +1415,33 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Resign(q.Get("id"), side)
 		fmt.Fprint(w, line(map[string]string{"ok": "1"}))
+	case "/_fake/sent":
+		// A challenge the bot sent elsewhere (on the website, before Ponder
+		// connected): waiting, and never answered; no event tells of it.
+		to := q.Get("to")
+		if to == "" {
+			to = "SlowBot"
+		}
+		s.mu.Lock()
+		opp := user{ID: strings.ToLower(to), Name: to, Title: "BOT", Rating: 1800}
+		c := newChallenge(s.id(), s.me(), opp, false, 300, 0, "random", "")
+		c.Direction = "out"
+		s.pending[c.ID] = c
+		s.mu.Unlock()
+		fmt.Fprint(w, line(map[string]string{"id": c.ID}))
+	case "/_fake/botsdone":
+		// That bot has played its bot games for the day (for seconds).
+		secs, _ := strconv.ParseFloat(q.Get("secs"), 64)
+		if secs == 0 {
+			secs = 3600
+		}
+		s.mu.Lock()
+		if s.BotsDone == nil {
+			s.BotsDone = map[string]float64{}
+		}
+		s.BotsDone[strings.ToLower(q.Get("bot"))] = secs
+		s.mu.Unlock()
+		fmt.Fprint(w, line(map[string]bool{"ok": true}))
 	case "/_fake/games":
 		s.mu.Lock()
 		out := map[string]any{}

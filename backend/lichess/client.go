@@ -455,6 +455,17 @@ func (c *Client) Decline(ctx context.Context, id, reason string) error {
 	return c.call(ctx, "POST", "/api/challenge/"+url.PathEscape(id)+"/decline", form, nil)
 }
 
+// CurrentChallenges are the challenges waiting for an answer: those sent to
+// the account (in) and those it sent (out), wherever they were made.
+func (c *Client) CurrentChallenges(ctx context.Context) (in, out []Challenge, err error) {
+	var got struct {
+		In  []Challenge `json:"in"`
+		Out []Challenge `json:"out"`
+	}
+	err = c.getJSON(ctx, "/api/challenge", &got)
+	return got.In, got.Out, err
+}
+
 func (c *Client) Cancel(ctx context.Context, id string) error {
 	return c.call(ctx, "POST", "/api/challenge/"+url.PathEscape(id)+"/cancel", url.Values{}, nil)
 }

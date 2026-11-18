@@ -873,3 +873,36 @@ func TestSeekChallengesUpToTheGamesAtOnce(t *testing.T) {
 		t.Errorf("%d challenges sent, want 3", n)
 	}
 }
+
+// The engine of a game in progress is started again, and goes on playing
+// from where the game is.
+func TestReloadEngineMidGame(t *testing.T) {
+	h := newHarness(t, Policy{})
+	h.fake.MaxPlies = 200
+	h.connect()
+	id := h.fake.Challenge("Alice", false, false, 600, 0, "random", "standard")
+	h.waitFor("incoming challenge", func(s Status) bool { return len(s.Incoming) == 1 })
+	if err := h.bot.Accept(id); err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitFor("a few moves", func(s Status) bool { return len(s.Games) == 1 && s.Games[0].Moves >= 4 })
+	at := s.Games[0].Moves
+	h.bot.mu.Lock()
+	before := h.bot.games[id].eng
+	h.bot.mu.Unlock()
+	if err := h.bot.ReloadEngine(id, nil); err != nil {
+		t.Fatal(err)
+	}
+	h.bot.mu.Lock()
+	after := h.bot.games[id].eng
+	h.bot.mu.Unlock()
+	if after == nil || after == before {
+		t.Fatal("the engine was not started again")
+	}
+	h.waitFor("more moves after the reload", func(s Status) bool {
+		return len(s.Games) == 1 && (s.Games[0].Moves >= at+4 || s.Games[0].Finished)
+	})
+	if err := h.bot.ReloadEngine("nope", nil); err == nil {
+		t.Fatal("reloaded a game that is not there")
+	}
+}

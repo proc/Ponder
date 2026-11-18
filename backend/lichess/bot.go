@@ -344,6 +344,7 @@ func (b *Bot) follow(ctx context.Context, gen int) {
 		client := b.client
 		b.mu.Unlock()
 		started := time.Now()
+		go b.loadOutgoing(ctx, gen, client)
 		err := client.StreamEvents(ctx, func(e Event) { b.onEvent(ctx, gen, e) })
 		if ctx.Err() != nil {
 			return
@@ -377,6 +378,35 @@ func (b *Bot) follow(ctx context.Context, gen int) {
 			b.state, b.message = "connected", ""
 		}
 		b.mu.Unlock()
+	}
+}
+
+// loadOutgoing reads the challenges the bot has out, made here or
+// elsewhere (on the website, by another program, before Ponder connected):
+// the event stream tells only of those made while it is open.
+func (b *Bot) loadOutgoing(ctx context.Context, gen int, client *Client) {
+	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	_, out, err := client.CurrentChallenges(cctx)
+	if err != nil {
+		return
+	}
+	b.mu.Lock()
+	if gen != b.gen {
+		b.mu.Unlock()
+		return
+	}
+	added := false
+	for i := range out {
+		ch := out[i]
+		if _, known := b.outgoing[ch.ID]; !known && (ch.Status == "" || ch.Status == "created") {
+			b.outgoing[ch.ID] = &ch
+			added = true
+		}
+	}
+	b.mu.Unlock()
+	if added {
+		b.emit()
 	}
 }
 
@@ -1859,6 +1889,34 @@ func (b *Bot) Watching() string {
 	return b.watching
 }
 
+// ReloadEngine starts the engine of a game in progress again: to take
+// options changed since it started, or to free an engine that is stuck.
+// With engine given (its options as saved now), that is used from here on,
+// for this game and the next ones. The game goes on from where it is.
+func (b *Bot) ReloadEngine(id string, engine *EngineConfig) error {
+	b.mu.Lock()
+	r := b.games[id]
+	if r == nil || r.finished {
+		b.mu.Unlock()
+		return errors.New("that game is not in progress")
+	}
+	if engine != nil && engine.Path != "" {
+		b.cfg.Engine = *engine
+	}
+	b.mu.Unlock()
+	r.stopEngine()
+	// What the engine before was doing is forgotten: the new one starts
+	// with no search, ponder or answer owed.
+	b.mu.Lock()
+	r.pondering, r.ponderBase, r.ponderLine = "", 0, uci.Info{}
+	r.ponder, r.nextPonder, r.nextAfter, r.nextPly = "", "", "", 0
+	r.discard, r.hitPly, r.pendingOpts = 0, -1, nil
+	r.message = "Reloading the engine…"
+	b.mu.Unlock()
+	b.emit()
+	return b.Play(id)
+}
+
 // Play hands a game to the engine: one that was already going when
 // connecting, or that started elsewhere.
 func (b *Bot) Play(id string) error {
@@ -1876,8 +1934,6 @@ func (b *Bot) Play(id string) error {
 	r.thinking = -1
 	r.message = ""
 	cfg := b.cfg.Engine
-	st := r.state
-	started := r.started
 	b.mu.Unlock()
 	if err := r.startEngine(cfg); err != nil {
 		b.mu.Lock()
@@ -1886,6 +1942,10 @@ func (b *Bot) Play(id string) error {
 		r.setMessage("Could not start the engine: " + err.Error())
 		return err
 	}
+	// The game as it is now: moves may have come while the engine started.
+	b.mu.Lock()
+	st, started := r.state, r.started
+	b.mu.Unlock()
 	if started {
 		r.onState(st) // move now if it is the engine's turn
 	} else {

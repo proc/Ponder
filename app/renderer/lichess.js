@@ -39,6 +39,8 @@ function lxSetNote(text) {
 // a notification: the Lichess tab may not be the one open.
 function challengeFailed(err, args, who) {
   const to = args?.username ? ` to ${args.username}` : '';
+  // In the challenges window too, with the error.
+  if (args?.username) window.challengeNotSent?.(who, { user: args.username, limit: args.limit, increment: args.increment, rated: args.rated, color: args.color, error: errorText(err) });
   notify(errorText(err), { title: `${who === 'you' ? 'Your challenge' : 'Your engine’s challenge'}${to} was not sent` });
 }
 const challengeNews = (msg) => /declined the challenge|did not answer|could not (accept|challenge)/i.test(msg ?? '');

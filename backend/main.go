@@ -989,6 +989,15 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			return nil, err
 		}
 		return nil, bot.Draw(a.ID, a.Yes)
+	case "lichessReloadEngine":
+		var a struct {
+			ID     string
+			Engine *lichess.EngineConfig
+		}
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		return nil, bot.ReloadEngine(a.ID, a.Engine)
 	case "lichessPlay":
 		var a struct{ ID string }
 		if err := decode(&a); err != nil {

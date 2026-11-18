@@ -2,6 +2,7 @@ package lichess
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -243,4 +244,39 @@ func TestSeekPassesOverBotsAtTheirDailyLimit(t *testing.T) {
 		t.Fatal("the challenger was held for another bot's limit")
 	}
 	h.bot.StopSeek()
+}
+
+// A challenge Lichess will not send is reported, with its error, for the
+// challenges window.
+func TestSeekReportsAChallengeNotSent(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 300*time.Millisecond, 20*time.Millisecond, 200*time.Millisecond, 20*time.Millisecond
+	h := newHarness(t, Policy{})
+	h.fake.Online = []fake.OnlineBot{{Name: "maia1", Rating: 1500}}
+	h.fake.BotsDone = map[string]float64{"maia1": 3600}
+	h.connect()
+	if err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2, Color: "random"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitFor("the challenge not sent", func(s Status) bool { return s.Seek != nil && s.Seek.Failed != nil })
+	f := s.Seek.Failed
+	if !strings.EqualFold(f.User, "maia1") || f.Limit != 180 || f.Increment != 2 || f.Error == "" || f.At == 0 {
+		t.Fatalf("failed: %+v", f)
+	}
+	h.bot.StopSeek()
+}
+
+// Challenges the bot already has out when it connects (sent on the
+// website, say) are listed as waiting.
+func TestBotListsTheChallengesAlreadyOut(t *testing.T) {
+	h := newHarness(t, Policy{})
+	resp, err := http.Get(h.srv.URL + "/_fake/sent?to=grumpy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	h.connect()
+	s := h.waitFor("the challenge out", func(s Status) bool { return len(s.Outgoing) == 1 })
+	if !strings.EqualFold(s.Outgoing[0].User, "grumpy") {
+		t.Fatalf("outgoing: %+v", s.Outgoing)
+	}
 }
