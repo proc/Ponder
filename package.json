@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@electron/packager": "^20.0.0",
+    "country-flag-emoji-polyfill": "^0.1.10",
     "electron": "^45.3.2",
     "three": "^0.187.0"
   },

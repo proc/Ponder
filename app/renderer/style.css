@@ -873,6 +873,68 @@ aside:has(> #watch-strip:not([hidden])) { grid-template-rows: auto auto auto min
 }
 .ws-game.over .ws-state { color: inherit; font-weight: 600; }
 .ws-tag { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; color: var(--accent); }
+.ws-tiles {
+  flex: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.2rem;
+  padding: 0.4rem 0.7rem; border: 0; border-radius: var(--r-m); background: var(--fill); color: inherit; font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer;
+}
+.ws-tiles:hover { background: var(--fill-2); }
+.ws-tiles .ico { width: 1.3rem; height: 1.3rem; }
+
+/* Tiles: every game at once, over the window. Each tile is a board with
+   the players above and below it, as on the main board, sized so all of
+   them fit. */
+#watch-tiles {
+  position: fixed; inset: var(--chrome-top) 0 0 0; z-index: 40; display: flex; flex-direction: column;
+  background: var(--bg); padding: 0.8rem 1rem 1rem;
+}
+#watch-tiles[hidden] { display: none; }
+.wt-top { display: flex; align-items: center; gap: 0.8rem; flex: none; margin-bottom: 0.7rem; }
+.wt-top h2 { margin: 0; font-size: 1.05rem; font-weight: 650; }
+.wt-hint { color: var(--muted); font-size: 0.85rem; margin-right: auto; }
+#wt-grid {
+  flex: 1; min-height: 0; overflow: auto; display: grid; gap: 12px; align-content: center; justify-content: center;
+  grid-template-columns: repeat(var(--wt-cols, 2), calc(var(--wt-board, 300px) + 16px));
+}
+.wt-tile {
+  display: flex; flex-direction: column; gap: 0.3rem; padding: 8px; border: 0; border-radius: var(--r-m);
+  background: var(--panel); box-shadow: var(--card-shadow); color: inherit; font: inherit; text-align: left; cursor: pointer;
+  transition: box-shadow .15s var(--ease);
+}
+.wt-tile:hover { box-shadow: var(--card-shadow), 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.wt-tile.on { box-shadow: var(--card-shadow), 0 0 0 2px var(--accent); }
+.wt-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.wt-board { position: relative; width: var(--wt-board, 300px); }
+.wt-board .ws-board { width: 100%; border-radius: 0.4rem; }
+.wt-tile.over .wt-board .ws-board { opacity: .55; }
+.wt-result {
+  position: absolute; inset: 0; margin: auto; width: max-content; height: max-content; padding: 0.3rem 0.8rem; border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent); font-weight: 700; font-size: 1.2rem; font-variant-numeric: tabular-nums;
+}
+.wt-bar { display: flex; align-items: center; gap: 0.35rem; min-width: 0; height: 1.75rem; }
+.wt-bar .dot { width: 0.7rem; height: 0.7rem; border-radius: 50%; border: 1px solid var(--line); flex: none; }
+.wt-bar .dot.white { background: #f2f2f2; } .wt-bar .dot.black { background: #222; }
+.wt-bar .cflag { margin-right: 0; }
+.wt-title { flex: none; font-size: 0.75rem; font-weight: 700; color: var(--accent); }
+.wt-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-rating { flex: none; color: var(--muted); font-size: 0.85rem; font-variant-numeric: tabular-nums; }
+.wt-pt { flex: none; font-weight: 700; margin-left: 0.15rem; }
+.wt-clock {
+  margin-left: auto; flex: none; font: 600 0.95rem/1 var(--font); font-variant-numeric: tabular-nums;
+  padding: 0.25rem 0.45rem; border-radius: var(--r-s); background: var(--fill); color: var(--muted); min-width: 3.6rem; text-align: right;
+}
+.wt-clock:empty { visibility: hidden; }
+.wt-clock.running { background: var(--text); color: var(--bg); }
+.wt-clock.running.low { background: var(--danger); color: #fff; }
+.wt-foot { display: flex; gap: 0.5rem; font-size: 0.8rem; color: var(--muted); min-width: 0; }
+.wt-state { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wt-state.live::before {
+  content: ''; display: inline-block; width: 0.42rem; height: 0.42rem; margin-right: 0.35rem; border-radius: 50%;
+  background: var(--highlight); vertical-align: 0.06em;
+}
+.wt-tile.over .wt-state { color: var(--text); font-weight: 600; }
+.wt-kind { margin-left: auto; flex: none; white-space: nowrap; }
+.wt-tile.on .wt-kind { color: var(--accent); font-weight: 600; }
+
 
 /* The workspace is the tabbed panel (moves, games, …) and the info column
    (engine windows, game details), with a handle between them. Side by side
@@ -1676,6 +1738,20 @@ body.zen .fw.floating { display: none; }
 .fw.floating .float-toggle:hover { background: var(--fill-2); color: var(--text); }
 /* The chat floating: the column's handle under it has nothing to size. */
 body:has(> #chat.floating) #info > .splitter.h { display: none; }
+
+/* Country flags on Windows, whose emoji font (Segoe UI Emoji) has none and
+   shows the two letters instead: Twemoji's flags, in a font of flags only
+   (from country-flag-emoji-polyfill), used for the flag characters alone. */
+@font-face {
+  font-family: "Twemoji Country Flags";
+  src: url("vendor/flags/TwemojiCountryFlags.woff2") format("woff2");
+  unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E007F;
+  font-display: swap;
+}
+html.win { --font: "Twemoji Country Flags", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, sans-serif; }
+html.win .cflag, html.win .pflag, html.win .ko-flag, html.win .vs-flag, html.win .pl-flag, html.win .lx-bot .flag {
+  font-family: "Twemoji Country Flags", "Segoe UI Emoji", sans-serif;
+}
 
 /* A Lichess player's country flag, beside the name. */
 .cflag, .pflag, .ko-flag {

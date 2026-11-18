@@ -137,6 +137,12 @@ type GameView struct {
 	// game when the engine plays several at once.
 	Fen      string `json:"fen,omitempty"`
 	LastMove string `json:"lastMove,omitempty"`
+	// The clocks as they stood at ClockAt (Unix ms), the side to move's
+	// running when Running: for the tiles of every game.
+	WhiteMs int64 `json:"whiteMs,omitempty"`
+	BlackMs int64 `json:"blackMs,omitempty"`
+	ClockAt int64 `json:"clockAt,omitempty"`
+	Running bool  `json:"running,omitempty"`
 }
 
 // Status is sent to the UI as the "lichess" event.
@@ -1755,6 +1761,10 @@ func (r *runner) gameViewLocked() GameView {
 		v.Fen = r.pos.FEN()
 		if n := len(r.moves); n > 0 {
 			v.LastMove = r.moves[n-1]
+		}
+		if r.state.WTime > 0 || r.state.BTime > 0 {
+			v.WhiteMs, v.BlackMs, v.ClockAt = r.state.WTime, r.state.BTime, r.stateAt.UnixMilli()
+			v.Running = !r.finished && len(r.moves) >= 2
 		}
 	}
 	return v

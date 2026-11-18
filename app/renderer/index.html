@@ -1455,6 +1455,11 @@
   <script src="timecontrol.js"></script>
   <!-- A Lichess player's information, shown while hovering their name. -->
   <div id="player-pop" class="player-pop" role="tooltip" hidden></div>
+  <!-- Tiles: every game being watched at once, each on a board of its own. -->
+  <section id="watch-tiles" aria-label="All the games" hidden>
+    <header class="wt-top"><h2 id="wt-head"></h2><span class="wt-hint">Click a game to put it on the main board</span><button type="button" id="wt-close" title="Back to one game on the board (Esc)">Close</button></header>
+    <div id="wt-grid"></div>
+  </section>
   <div id="engine-menu" class="tab-menu engine-menu" role="menu" hidden></div>
   <!-- An opening's history, strengths and weaknesses, shown while hovering its name. -->
   <div id="opening-pop" class="opening-pop" role="tooltip" hidden></div>
@@ -1465,6 +1470,7 @@
   <script src="puzzles.js"></script>
   <script src="flags.js"></script>
   <script src="lichess.js"></script>
+  <script src="watch-tiles.js"></script>
   <script src="challenge-float.js"></script>
   <script src="float-window.js"></script>
   <script src="chat.js"></script>

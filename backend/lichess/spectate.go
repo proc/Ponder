@@ -237,6 +237,12 @@ type SpectateGame struct {
 	WhiteTitle  string `json:"whiteTitle,omitempty"`
 	BlackTitle  string `json:"blackTitle,omitempty"`
 	Shown       bool   `json:"shown"` // the one on the board
+	// The clocks as they stood at ClockAt (Unix ms), the side to move's
+	// running when Running.
+	WhiteMs int64 `json:"whiteMs,omitempty"`
+	BlackMs int64 `json:"blackMs,omitempty"`
+	ClockAt int64 `json:"clockAt,omitempty"`
+	Running bool  `json:"running,omitempty"`
 }
 
 // SpectateStatus is sent to the UI as the "lichessWatch" event.
@@ -282,6 +288,9 @@ type Spectator struct {
 	// When the game on the board ends while the player has others going,
 	// one of them takes the board after this long (the result shows first).
 	SwitchHold time.Duration
+	// RatingWait is how long the switch waits, at most, for a finished
+	// rated game's rating changes, so they are seen before the board moves.
+	RatingWait time.Duration
 }
 
 // watched is a game being followed.
@@ -317,7 +326,7 @@ type watched struct {
 
 func NewSpectator(emit func(string, any), show func(game.ExternalView)) *Spectator {
 	return &Spectator{emit: emit, show: show, Poll: 5 * time.Second, status: SpectateStatus{State: "idle"},
-		wake: make(chan struct{}, 1), TVHold: 3 * time.Second, TVWait: 8 * time.Second, SwitchHold: 3 * time.Second}
+		wake: make(chan struct{}, 1), TVHold: 3 * time.Second, TVWait: 8 * time.Second, SwitchHold: 3 * time.Second, RatingWait: 12 * time.Second}
 }
 
 // Active reports whether a player is being followed.
@@ -340,6 +349,10 @@ func (s *Spectator) Status() SpectateStatus {
 			WhiteTitle: w.white.Title(), BlackTitle: w.black.Title(), Shown: id == s.shown}
 		if n := len(w.moves); n > 0 {
 			g.LastMove = w.moves[n-1]
+		}
+		if w.clocked {
+			g.WhiteMs, g.BlackMs, g.ClockAt = w.wms, w.bms, w.at.UnixMilli()
+			g.Running = !w.finished && len(w.moves) >= 2
 		}
 		st.Games = append(st.Games, g)
 	}
@@ -798,7 +811,7 @@ func (s *Spectator) finish(gen int, id, status, winner string) {
 			w.startFEN, w.moves, w.result, w.reason, time.Now())
 	}
 	onBoard := s.shown == id
-	hold, picks := s.SwitchHold, s.picks
+	hold, picks, ratingWait := s.SwitchHold, s.picks, s.RatingWait
 	s.refreshLocked()
 	s.mu.Unlock()
 	s.push(gen, id)
@@ -806,7 +819,7 @@ func (s *Spectator) finish(gen int, id, status, winner string) {
 		go s.Save(save)
 	}
 	if onBoard {
-		go s.switchFrom(gen, id, picks, hold)
+		go s.switchFrom(gen, id, picks, hold, ratingWait)
 	}
 	select {
 	case s.wake <- struct{}{}:
@@ -819,9 +832,29 @@ func (s *Spectator) finish(gen int, id, status, winner string) {
 // (not when a game was picked by hand meanwhile, even that one again, or
 // nothing else is going). The
 // newest such game goes on.
-func (s *Spectator) switchFrom(gen int, id string, picks int, hold time.Duration) {
-	if hold > 0 {
-		time.Sleep(hold)
+func (s *Spectator) switchFrom(gen int, id string, picks int, hold, ratingWait time.Duration) {
+	// A rated game's rating changes come from Lichess a moment after it
+	// ends: the board stays on it until they do (at most ratingWait), and
+	// then for the hold again, so they can be read.
+	ended := time.Now()
+	var ratedAt time.Time
+	for {
+		s.mu.Lock()
+		if gen != s.gen || s.shown != id || s.picks != picks {
+			s.mu.Unlock()
+			return
+		}
+		w := s.games[id]
+		now := time.Now()
+		if ratedAt.IsZero() && w != nil && w.ratingDiff != nil {
+			ratedAt = now
+		}
+		waiting := w != nil && w.rated && w.ratingDiff == nil && now.Before(ended.Add(ratingWait))
+		s.mu.Unlock()
+		if !waiting && !now.Before(ended.Add(hold)) && (ratedAt.IsZero() || !now.Before(ratedAt.Add(hold))) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	s.mu.Lock()
 	next := ""

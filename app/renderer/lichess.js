@@ -80,6 +80,7 @@ function switchToNewBotGame(prev, next) {
 // board, unless a game was picked by hand meanwhile.
 let lxPicks = 0; // games put on the board by hand, counted
 const SWITCH_HOLD = 3000;
+const RATING_WAIT = 12000; // at most, for a rated game's rating changes
 function switchFromEndedBotGame(prev, next) {
   const id = next.watching;
   if (!id || !(state?.external?.kind === 'bot' && state.external.id === id)) return;
@@ -87,17 +88,28 @@ function switchFromEndedBotGame(prev, next) {
   const now = (next.games ?? []).find((g) => g.id === id);
   if (!before || before.finished || !now?.finished) return;
   const picks = lxPicks;
-  setTimeout(() => {
-    const s = lx.status;
-    if (lxPicks !== picks || s.watching !== id || state?.external?.id !== id) return;
-    const live = (s.games ?? []).filter((g) => !g.finished && g.id !== id).reverse(); // newest first
+  const still = () => lxPicks === picks && lx.status.watching === id && state?.external?.id === id;
+  // A rated game's rating changes come from Lichess a moment after it
+  // ends: the board stays on it until they do (at most RATING_WAIT), and
+  // then for the hold again, so they can be read on the result card.
+  const endedAt = Date.now();
+  let ratedAt = null;
+  const tick = () => {
+    if (!still()) return;
+    const now = Date.now();
+    if (ratedAt == null && state.external?.ratingDiff) ratedAt = now;
+    const waiting = awaitingRating(state) && now < endedAt + RATING_WAIT;
+    if (waiting || now < endedAt + SWITCH_HOLD || (ratedAt != null && now < ratedAt + SWITCH_HOLD)) { setTimeout(tick, 250); return; }
+    const live = (lx.status.games ?? []).filter((g) => !g.finished && g.id !== id).reverse(); // newest first
     const pick = live.find((g) => g.playing) ?? live[0];
     if (pick) lichessCommand('lichessWatch', { id: pick.id });
-  }, SWITCH_HOLD);
+  };
+  tick();
 }
 
 // A game of your engine's that ends while another is on the board.
 function koForBackgroundGames(prev, next) {
+  if (window.tilesShown?.()) return; // the tiles show it ended
   if (next.state !== 'connected' && next.state !== 'reconnecting') return;
   const was = new Map((prev.games ?? []).map((g) => [g.id, g]));
   for (const g of next.games ?? []) {
@@ -556,6 +568,7 @@ renderLichessTV();
 // The screens for games of the watched player that are not on the board:
 // the versus screen for one that starts, the result screen for one that ends.
 function screensForWatchedGames(prev, next) {
+  if (window.tilesShown?.()) return; // the tiles show every game's start and end
   if (!prev?.active || !next.active || prev.user !== next.user) return;
   const was = new Map((prev.games ?? []).map((g) => [g.id, g]));
   // Before the first game is known, every game found is one joined.
@@ -631,17 +644,19 @@ function watchPick(id, bot) {
 
 // Your engine's games in progress (and the one on the board, if it is
 // over), in the shape of a watched player's games: the oldest first.
-function botStripGames() {
+function botStripGames(keep = null) {
   const s = lx.status;
   if (s.state !== 'connected' && s.state !== 'reconnecting') return [];
   const onBoard = state?.external?.kind === 'bot' ? state.external.id : '';
   const me = s.account?.username ?? 'Your engine';
-  return (s.games ?? []).filter((g) => g.fen && (!g.finished || (g.id === onBoard && g.id === s.watching))).reverse().map((g) => {
+  return (s.games ?? []).filter((g) => g.fen && (!g.finished || (g.id === onBoard && g.id === s.watching) || keep?.has(g.id))).reverse().map((g) => {
     const white = g.color === 'white';
     return {
       id: g.id, bot: true, side: g.color, fen: g.fen, lastMove: g.lastMove ?? '', moves: g.moves, live: !g.finished, result: g.result,
       white: white ? me : g.opponent, black: white ? g.opponent : me,
       whiteRating: white ? 0 : g.opponentRating, blackRating: white ? g.opponentRating : 0,
+      whiteTitle: white ? '' : g.opponentTitle, blackTitle: white ? g.opponentTitle : '',
+      whiteMs: g.whiteMs, blackMs: g.blackMs, clockAt: g.clockAt, running: g.running,
       label: [g.rated ? 'Rated' : 'Casual', g.speed, g.tc].filter(Boolean).join(' '),
       shown: g.id === onBoard && g.id === s.watching,
       note: !g.finished && g.myTurn ? 'your engine to move' : '',
@@ -655,9 +670,14 @@ function renderWatchStrip() {
   const games = w?.active ? w.games ?? [] : botStripGames();
   const strip = $('#watch-strip');
   strip.hidden = games.length < 2;
+  window.renderWatchTiles?.();
   if (strip.hidden) { strip.replaceChildren(); return; }
   const left = strip.scrollLeft;
-  strip.replaceChildren(...games.map((g) => {
+  // Tiles: all the games at once, each on a board of its own.
+  const tiles = el('button', { type: 'button', className: 'ws-tiles', title: 'Watch all the games at once, each on a board of its own' });
+  tiles.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></g></svg><span>Tiles</span>';
+  tiles.onclick = () => window.setWatchTiles?.(true);
+  strip.replaceChildren(tiles, ...games.map((g) => {
     const other = g.side === 'black' ? 'white' : 'black';
     const rating = g[other + 'Rating'];
     const result = { '1-0': '1–0', '0-1': '0–1', '1/2-1/2': '½–½' }[g.result] ?? 'Ended';

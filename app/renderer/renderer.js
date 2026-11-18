@@ -16,6 +16,9 @@ const DEFAULT_THEME = 'minimalist';
 // On macOS the window has no title bar: the page leaves a strip for the
 // window's buttons (see html.mac-chrome in style.css).
 if (/Electron/.test(navigator.userAgent) && /Mac/.test(navigator.platform)) document.documentElement.classList.add('mac-chrome');
+// Windows' emoji font has no country flags: they come from a font of
+// flags only (style.css), used there.
+if (/^Win/.test(navigator.platform)) document.documentElement.classList.add('win');
 
 const themes = {};    // name -> { pieces: { "white-king": { url, h, pad } }, maxH }
 let theme = DEFAULT_THEME;

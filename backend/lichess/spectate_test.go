@@ -322,3 +322,39 @@ func TestSpectateKeepsTheGamePickedAfterOneEnds(t *testing.T) {
 		t.Fatalf("switched to %s although %s was picked (games %s %s)", st.GameID, shown, a, b)
 	}
 }
+
+// A rated game's rating changes come a moment after its end: the board
+// stays on it until they are there, then moves to the game still going.
+func TestSpectateWaitsForTheRatingChangesBeforeSwitching(t *testing.T) {
+	h := newSpect(t)
+	h.fake.MaxPlies = 400
+	h.fake.Delay = 40 * time.Millisecond
+	h.sp.SwitchHold = 200 * time.Millisecond
+	first := h.fake.AutoGame("maia1", "SlowBot", 600, 0)
+	second := h.fake.AutoGame("SlowBot", "grumpy", 600, 0)
+	h.fake.SetRated(first, true)
+	h.fake.SetRated(second, true)
+	if err := h.sp.Start(h.srv.URL, "SlowBot"); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("both games followed", func(_ game.ExternalView, st SpectateStatus) bool { return len(st.Games) == 2 })
+	_, st, _ := h.last()
+	shown, other := st.GameID, first
+	if shown == first {
+		other = second
+	}
+	h.fake.Resign(shown, "white")
+	var diffAt time.Time
+	h.waitFor("the other game on the board", func(v game.ExternalView, st SpectateStatus) bool {
+		if v.ID == shown && v.RatingDiff != nil && diffAt.IsZero() {
+			diffAt = time.Now()
+		}
+		return v.ID == other && st.GameID == other
+	})
+	if diffAt.IsZero() {
+		t.Fatal("switched before the rating changes were shown")
+	}
+	if d := time.Since(diffAt); d < 190*time.Millisecond {
+		t.Fatalf("switched %v after the rating changes came, too soon to read them", d)
+	}
+}

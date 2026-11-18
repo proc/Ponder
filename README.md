@@ -1057,11 +1057,25 @@ another to put that one there. A game that starts while another is being
 played joins the row (it is found within about a quarter of a minute) and
 does not take the board. When the game on the board ends while another is
 still being played, the newest game still going takes the board after
-three seconds, once the result has shown. If nothing else is going, the
+three seconds, once the result has shown. After a rated game, the board
+waits for Lichess's rating changes, for up to 12 seconds, and then three
+seconds more so you can read them. If nothing else is going, the
 next new game takes the board when it starts. Clicking a game in the row
 during those three seconds, even the finished one, keeps the board on that
 game. Finished games leave the row when a new one starts. Every game
 followed to its end is saved to the database, if watched games are kept.
+
+**Tiles** – with several games going, the **Tiles** button at the start
+of the row of small boards shows all of them at once, each on a board of
+its own. Each tile has both players with their flags, titles, ratings and
+running clocks, and how the game stands. A tile is marked when its game is
+on the main board, and a finished game shows its result until a new game
+starts. The boards are as large as lets every game fit in the window.
+Click a tile to put that game on the main board and go back to it; Close
+or Esc does the same without changing the game. Tiles stays on, and comes
+back whenever several games are going, until you close it. While it is
+showing, the versus and K.O. screens of the other games are left out. The
+same works when your own engine plays several games at once.
 
 **Several engine games at once** – when your engine plays more than one
 game at a time (Games at once in its rules), the same row of small boards
@@ -1074,8 +1088,10 @@ screen, and the earlier one stays in the row; turn **Switch the board to
 your engine's new game when it starts another** off in Settings → General
 to have the new game only join the row. When the game on the board ends
 while another is still being played, that one takes the board three
-seconds later, once the result has shown; if you click a game in the row
-first, the board stays on your choice. A finished game stays in the row
+seconds later, once the result has shown. After a rated game, the board
+first waits for the rating change to appear on the result card, for up to
+12 seconds, and leaves it there for three seconds. If you click a game in
+the row first, the board stays on your choice. A finished game stays in the row
 only while it is the one on the board.
 
 **Country flags** – Lichess players and bots show the flag from their
@@ -1085,8 +1101,11 @@ challenge window and the lists in the Lichess tab (challenges, games, bots
 online). Hover a flag for the country's name. Ponder asks Lichess for the
 flags of the names it shows, many at once, and keeps them for the session;
 a player who has not set a flag has none. Players of local games (you, an
-engine) have no country to show. The flags are emoji: macOS and Linux draw
-them, Windows shows the two letters of the country instead.
+engine) have no country to show. The flags are emoji. macOS and Linux draw
+them with their own emoji font. Windows' emoji font has no country flags,
+so on Windows Ponder uses Twemoji's flags instead, from a font of flags only
+(`app/renderer/vendor/flags`, from country-flag-emoji-polyfill; the art is
+CC BY 4.0).
 
 **Match history** – while your engine plays on Lichess (one of its games
 on the board, or one in progress), a floating **Match history** window
