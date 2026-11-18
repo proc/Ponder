@@ -52,6 +52,7 @@
             <g id="shapes"></g>
           </svg>
           <div id="promotion" hidden></div>
+          <div id="board-wdl" class="wdl-bar" role="img" hidden><i class="w"></i><i class="d"></i><i class="l"></i></div>
         </div>
       </div>
       <div class="player" id="player-bottom">
@@ -170,6 +171,7 @@
             <div class="games-tools" id="games-tools" hidden>
               <button type="button" class="small" id="games-import" title="Add every game of another PGN file to this one">Import…</button>
               <button type="button" class="small" id="games-export" title="Write the games listed (all of them, or those matching the filter) to a new PGN file">Export…</button>
+              <button type="button" class="small" id="games-binpack" title="Turn this file's games into training positions for an NNUE network (a Stockfish .binpack)">Binpack…</button>
               <span class="games-tools-gap"></span>
               <button type="button" class="small" id="games-edit" title="Change the players, result, event, date and other details of the game on the board">Edit info…</button>
               <button type="button" class="small danger" id="games-delete" title="Delete the game on the board from the file">Delete</button>
@@ -1368,6 +1370,54 @@
     </form>
   </dialog>
 
+  <!-- A PGN file's games as NNUE training positions (Stockfish's .binpack). -->
+  <dialog id="dlg-binpack" aria-labelledby="bp-title">
+    <form method="dialog" id="form-binpack" autocomplete="off">
+      <h2 id="bp-title">Convert PGN to binpack</h2>
+      <p class="hint">Every position of each finished game, with the move played, its score and the game's result, written as a Stockfish <code>.binpack</code> for training NNUE networks (nnue-pytorch).</p>
+      <div class="bp-file">
+        <span class="set-label">PGN file</span>
+        <input type="text" id="bp-from" readonly spellcheck="false" placeholder="No file chosen">
+        <button type="button" class="small" id="bp-choose">Choose…</button>
+      </div>
+      <fieldset class="bp-scores">
+        <legend>Scores</legend>
+        <label class="check"><input type="radio" name="bp-scores" value="pgn" checked> From the games' evaluations</label>
+        <div class="bp-sub" id="bp-pgn-opts">
+          <label>Positions without one <select id="bp-missing">
+            <option value="skip">Leave out</option>
+            <option value="zero">Score 0</option>
+          </select></label>
+          <span class="hint">[%eval 0.25] as Lichess writes them, or +0.25/18 as engines do</span>
+        </div>
+        <label class="check"><input type="radio" name="bp-scores" value="engine"> Searched by an engine</label>
+        <div class="bp-sub" id="bp-engine-opts">
+          <label>Engine <select id="bp-engine"></select></label>
+          <label><select id="bp-limit" title="How far the engine searches each position">
+            <option value="depth">Depth</option>
+            <option value="nodes">Nodes</option>
+          </select> <input type="number" id="bp-limit-value" min="1" step="1" value="8"></label>
+          <label title="Positions searched at the same time, each by its own copy of the engine">At once <input type="number" id="bp-conc" min="1" max="64" step="1" value="1"></label>
+        </div>
+      </fieldset>
+      <div class="bp-more">
+        <label title="Stockfish's internal unit is 208 a pawn, which nnue-pytorch expects; 100 keeps centipawns">Score of a pawn <input type="number" id="bp-pawn" min="1" max="1000" step="1" value="208"></label>
+        <label title="The opening, usually from a book, teaches little">Leave out the first <input type="number" id="bp-skip" min="0" max="400" step="1" value="0"> plies of each game</label>
+        <label class="check"><input type="checkbox" id="bp-noisy"> Leave out positions in check and before a capture</label>
+      </div>
+      <div class="bp-progress" id="bp-progress" hidden>
+        <div class="tp-progress-bar"><span id="bp-progress-fill"></span></div>
+        <span id="bp-progress-text"></span>
+      </div>
+      <p class="error" id="bp-error" hidden></p>
+      <div class="actions">
+        <button type="button" id="bp-close">Close</button>
+        <button type="button" id="bp-stop" hidden>Stop</button>
+        <button type="button" class="primary" id="bp-convert">Convert…</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="dlg-game-info">
     <form method="dialog" id="form-game-info" autocomplete="off">
       <h2>Game info</h2>
@@ -1492,6 +1542,7 @@
   <script src="players.js"></script>
   <script src="wac.js"></script>
   <script src="positions.js"></script>
+  <script src="binpack.js"></script>
   <script src="tournament.js"></script>
   <script src="tournament-table.js"></script>
   <script src="versus.js"></script>

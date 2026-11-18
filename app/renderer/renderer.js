@@ -2850,7 +2850,7 @@ api.onEvent((event, data) => {
     }
     if (data.hasEval && data.ply != null) {
       const name = state?.players?.[data.side]?.name ?? '';
-      engineScores[data.ply + 1] = { cp: data.cp, mate: data.mate, isMate: data.isMate, depth: data.depth, name };
+      engineScores[data.ply + 1] = { cp: data.cp, mate: data.mate, isMate: data.isMate, depth: data.depth, wdl: data.wdl ?? null, name };
     }
     if (data.depth) logEngineInfo(data);
     else if (data.ponderHit) {
@@ -2881,6 +2881,8 @@ api.onEvent((event, data) => {
     }
   } else if (event === 'epdtest') {
     window.epdTestEvent?.(data);
+  } else if (event === 'binpack') {
+    window.binpackEvent?.(data);
   } else if (event === 'review') {
     onReviewEvent(data);
   } else if (event === 'tournament') {
@@ -4707,7 +4709,9 @@ function renderEvalBar() {
   if (own && analysisSettings().evalBar) { line = own; show = true; }
   bar.title = own ? `${own.name ? own.name + "'s" : "Your engine's"} own evaluation, depth ${own.depth} (White's view)` : "Evaluation (White's view)";
   bar.hidden = !show;
-  if (!show) return;
+  const wdlBox = $('#board-wdl');
+  document.documentElement.classList.toggle('wdl-room', show);
+  if (!show) { wdlBox.hidden = true; return; }
   let white = 0.5;
   let label = '';
   if (line) {
@@ -4731,6 +4735,21 @@ function renderEvalBar() {
   labelEl.className = 'label ' + (white >= 0.5 ? 'at-white' : 'at-black') + ([...label].length > 4 ? ' tight' : '');
   // A face at each end: White's and Black's, smiling as the score favours
   // its side, flat when it is level, frowning as it goes against it.
+  // The engine's win/draw/loss chances, when it gives them: a thin bar
+  // under the board, White's wins from the left, the draw in grey, Black's
+  // wins on the right.
+  if (line?.wdl) {
+    const p = wdlPercents(line.wdl);
+    ['w', 'd', 'l'].forEach((k, i) => {
+      const part = $(`#board-wdl .${k}`);
+      part.style.flexGrow = p[i];
+      // A sliver too narrow for its figure goes without (the tooltip has it).
+      part.textContent = p[i] >= 4 ? `${p[i]}%` : '';
+    });
+    wdlBox.title = wdlBox.ariaLabel = `The engine's chances: ${wdlText(line.wdl)}`;
+    bar.title += ` · ${wdlText(line.wdl)}`;
+  }
+  wdlBox.hidden = !line?.wdl;
   const lead = Math.max(-1, Math.min(1, (white - 0.5) * 2.6)); // +1 White happy … −1 Black happy
   setEvalFace($('#face-white'), lead, 'White');
   setEvalFace($('#face-black'), -lead, 'Black');

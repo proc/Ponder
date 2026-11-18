@@ -23,7 +23,7 @@ Options are sent each time the engine loads, and an engine that fails over one i
 **Analysis** (toolbar) runs an engine on the board position as you play, step through moves or browse a file. You get:
 
 - The best lines with evaluations.
-- An evaluation bar: a middle line for a level score, the score (from White's side) on a plate above it, and a face at each end that smiles, goes flat or frowns with its side's chances.
+- An evaluation bar: a middle line for a level score, the score (from White's side) on a plate above it, and a face at each end that smiles, goes flat or frowns with its side's chances. When the engine gives its win/draw/loss chances (UCI_ShowWDL, which Ponder turns on), a bar under the board shows them with their percentages: White's wins from the left, the draw in grey, Black's wins on the right. While the evaluation bar shows, the board is a little smaller to leave room for it. Your bot's own scores show them too while it plays.
 - An arrow for the best move with a depth tag, a dashed arrow for the expected reply, and thinner coloured arrows for the other lines (turn these off in **Settings → Analysis**).
 
 Set the engine and number of lines (1–5) in **Settings → Analysis**. Analysis runs separately from playing engines and pauses while one is playing.

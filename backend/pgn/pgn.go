@@ -37,10 +37,11 @@ func (g *Game) Tag(name string) string {
 
 // visitor receives what scan finds. end is called after each game.
 type visitor struct {
-	tag    func(Tag)
-	move   func(string)
-	result func(string)
-	end    func()
+	tag     func(Tag)
+	move    func(string)
+	result  func(string)
+	end     func()
+	comment func(string) // a { } comment in the main line; may be nil
 }
 
 // Characters that end a movetext token.
@@ -93,6 +94,9 @@ func scan(text string, v visitor) error {
 			if e < 0 {
 				end()
 				return errors.New("unclosed { comment")
+			}
+			if v.comment != nil {
+				v.comment(text[i+1 : i+e])
 			}
 			i += e + 1
 		case c == '(':

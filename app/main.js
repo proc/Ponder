@@ -361,6 +361,23 @@ ipcMain.handle('pgn:exportPath', async (_e, name) => {
   return file;
 });
 
+// Where to write a binpack made from a PGN file: beside it, by default.
+// Returns the path, or null. The Go backend writes the file.
+ipcMain.handle('binpack:savePath', async (_e, from) => {
+  const src = String(from || '');
+  const dir = src ? path.dirname(src) : (lastPgnDir ?? app.getPath('documents'));
+  const base = (src ? path.basename(src).replace(/\.pgn$/i, '') : 'Games') || 'Games';
+  const result = await dialog.showSaveDialog(win, {
+    title: 'Save the binpack',
+    defaultPath: path.join(dir, base + '.binpack'),
+    filters: [{ name: 'Stockfish binpack', extensions: ['binpack'] }, { name: 'All files', extensions: ['*'] }],
+  });
+  if (result.canceled || !result.filePath) return null;
+  let file = result.filePath;
+  if (!path.extname(file)) file += '.binpack';
+  return file;
+});
+
 // Test positions: an EPD file, read whole (suites are small).
 ipcMain.handle('epd:open', async () => {
   const result = await dialog.showOpenDialog(win, {
@@ -1390,6 +1407,7 @@ function buildMenu() {
         item('Open PGN…', 'open', { accel: 'CmdOrCtrl+O' }),
         item('Open Game Database', 'database', { accel: 'CmdOrCtrl+Shift+O' }),
         item('Test Positions…', 'positions'),
+        item('Convert PGN to Binpack…', 'binpack'),
         sep,
         item('Save Game…', 'save', { accel: 'CmdOrCtrl+S' }),
         item('Copy Game as PGN', 'copyPgn', { accel: 'CmdOrCtrl+Shift+C' }),

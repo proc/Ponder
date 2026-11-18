@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"board/backend/analysis"
+	"board/backend/binpack"
 	"board/backend/chess"
 	"board/backend/epdtest"
 	"board/backend/game"
@@ -124,6 +125,8 @@ func main() {
 	})
 	reviewer = review.New(emit)
 	epdRunner = epdtest.NewRunner(emit)
+	binpackRunner = binpack.NewRunner(emit)
+	defer binpackRunner.Stop()
 	defer reviewer.Stop()
 	defer epdRunner.Stop()
 	defer tourney.Wait(5 * time.Second)
@@ -404,6 +407,7 @@ var reviewer *review.Reviewer
 
 // epdRunner tests an engine on a set of positions (Win at Chess, an EPD file).
 var epdRunner *epdtest.Runner
+var binpackRunner *binpack.Runner
 
 // tourney plays engine tournaments.
 var tourney *tournament.Tournament
@@ -1126,6 +1130,17 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		return nil, epdRunner.Start(r)
 	case "epdTestStop":
 		epdRunner.Stop()
+		return nil, nil
+	case "binpackStart":
+		// Convert a PGN file into a Stockfish .binpack in the background;
+		// "binpack" events report the progress.
+		var r binpack.Request
+		if err := decode(&r); err != nil {
+			return nil, err
+		}
+		return nil, binpackRunner.Start(r)
+	case "binpackStop":
+		binpackRunner.Stop()
 		return nil, nil
 	case "tournamentStart":
 		var c tournament.Config

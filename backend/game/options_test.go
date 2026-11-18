@@ -139,15 +139,21 @@ func TestUpdateEngineOptions(t *testing.T) {
 	if err := m.Move("d2d4"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the second search", func() bool { return index(readLog(t, logFile), "position startpos moves e2e4 e7e5 d2d4") >= 0 })
-	lines := readLog(t, logFile)
-	set := index(lines, "setoption name Hash value 128")
+	// Wait for the second search's "go", not only its "position": the
+	// log may be read between the two.
+	var lines []string
 	var gos []int
-	for i, l := range lines {
-		if strings.HasPrefix(l, "go ") {
-			gos = append(gos, i)
+	waitFor(t, "the second search", func() bool {
+		lines = readLog(t, logFile)
+		gos = gos[:0]
+		for i, l := range lines {
+			if strings.HasPrefix(l, "go ") {
+				gos = append(gos, i)
+			}
 		}
-	}
+		return index(lines, "position startpos moves e2e4 e7e5 d2d4") >= 0 && len(gos) >= 2
+	})
+	set := index(lines, "setoption name Hash value 128")
 	if len(gos) < 2 || set < gos[0] || set > gos[1] {
 		t.Fatalf("setoption at %d, searches at %v:\n%s", set, gos, strings.Join(lines, "\n"))
 	}

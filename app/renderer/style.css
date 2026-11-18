@@ -207,7 +207,7 @@ html { font-size: clamp(11.5px, min(calc(0.38vw + 6.5px), calc(1.05vh + 3px)), 1
   /* The board fills the window's height, leaving room for the side panel. */
   --evalbar: 2.8rem;       /* evaluation bar beside the board, wide enough to read its score */
   --board: max(18rem, min(
-    calc(100vh - var(--chrome-top) - 2 * var(--gap) - 2 * var(--bar) - 1rem),
+    calc(100vh - var(--chrome-top) - 2 * var(--gap) - 2 * var(--bar) - 1rem - var(--wdl-room, 0px)),
     calc(100vw - 3 * var(--gap) - var(--aside-min) - var(--evalbar) - 0.5rem)));
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -335,6 +335,27 @@ html.mac-chrome :is(button, input, select, a, .player, .statusbar, .tabs) { -web
 #evalbar .face.white .eye { fill: var(--eval-black); }
 #evalbar .face.black .mouth, #evalbar .face.black .brow { stroke: var(--eval-white); }
 #evalbar .face.black .eye { fill: var(--eval-white); }
+/* The engine's win/draw/loss chances, when it gives them: a bar under the
+   board with the three figures in it, White's wins from the left, the draw
+   in grey, Black's wins on the right. While the evaluation bar shows, the
+   board leaves room for it, so it doesn't jump when the chances come. */
+html.wdl-room { --wdl-room: 1.25rem; }
+html.wdl-room .board-row { margin-bottom: var(--wdl-room); }
+#board-wdl {
+  position: absolute; left: 0; right: 0; top: calc(100% + 0.3rem); height: 1.1rem; z-index: 1;
+  border-radius: 0.3rem; box-shadow: none;
+  font: 700 0.72rem/1.1rem var(--font); font-variant-numeric: tabular-nums;
+}
+#board-wdl[hidden] { display: none; }
+#board-wdl i {
+  font-style: normal; text-align: center; overflow: hidden; white-space: nowrap;
+  transition: flex-grow .45s var(--ease);
+}
+#board-wdl .w { border-radius: 0.3rem 0 0 0.3rem; color: #1d1d1f; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent); }
+#board-wdl .d { background: #6e6e73; color: #fff; }
+#board-wdl .l { border-radius: 0 0.3rem 0.3rem 0; color: var(--wdl-on-black, #fff); }
+[data-theme="cyberpunk"], [data-theme="dusk"] { --wdl-on-black: #1d1d1f; }
+@media (prefers-reduced-motion: reduce) { #board-wdl i { transition: none; } }
 @media (prefers-reduced-motion: reduce) { #evalbar .face .mouth, #evalbar .face .brow, #evalbar .face .eye { transition: none; } }
 
 /* Best-move arrow over the board, in square units. */
@@ -3865,3 +3886,16 @@ body.zen.board-3d #ann-caption { position: fixed; bottom: calc(var(--bar) + 1.6r
 
 /* AI turned off in Settings → AI: nothing of it shows. */
 body.ai-off #btn-ai, body.ai-off #ai-handle, body.ai-off #ai-panel, body.ai-off #an-ai, body.ai-off #commentary, body.ai-off .ai-only { display: none !important; }
+
+/* Convert PGN to binpack */
+#dlg-binpack { width: min(38rem, 94vw); }
+.bp-file { display: flex; align-items: center; gap: 0.5rem; margin: 0.7rem 0; }
+.bp-file input { flex: 1; min-width: 0; }
+.bp-scores { display: flex; flex-direction: column; gap: 0.35rem; }
+.bp-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 1rem; margin: 0 0 0.3rem 1.6rem; font-size: 0.9rem; }
+.bp-sub.off { opacity: 0.45; }
+.bp-more { display: flex; flex-direction: column; gap: 0.45rem; margin: 0.8rem 0; font-size: 0.9rem; }
+.bp-sub input[type="number"], .bp-more input[type="number"] { width: 5.5rem; }
+#bp-engine { max-width: 14rem; }
+.bp-progress { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.88rem; margin: 0.4rem 0; }
+.bp-progress .tp-progress-bar { flex: none; }

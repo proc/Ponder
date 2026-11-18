@@ -49,6 +49,7 @@ Packaging for other systems, signing and the code layout are in
 **Tournaments and games** – [Tournaments](docs/tournaments.md) and [Game database](docs/database.md)
 - Engine tournaments.
 - A database of the games you play and watch.
+- PGN files to NNUE training data (Stockfish binpack).
 
 **Looks** – [Appearance](docs/appearance.md)
 - Themes, a glass look, and a 3D board.

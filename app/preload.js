@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('board', {
   openEpd: () => ipcRenderer.invoke('epd:open'),
   savePgn: (pgn) => ipcRenderer.invoke('pgn:save', pgn),
   exportPgnPath: (name) => ipcRenderer.invoke('pgn:exportPath', name),
+  binpackPath: (from) => ipcRenderer.invoke('binpack:savePath', from),
   copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   tournament: {

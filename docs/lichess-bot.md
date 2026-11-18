@@ -6,14 +6,13 @@ Your engine can play on [Lichess](https://lichess.org) through the [Bot API](htt
 
 1. Create a new Lichess account that has never played a game. Signed in to it, create a token with `bot:play`, `challenge:read` and `challenge:write` (**Settings → Lichess → Create a token on Lichess** ticks these).
 2. Paste it in **Settings → Lichess**, choose the engine and press **Connect**. The token is encrypted with the system keychain when available and never shown again.
-
-### Several accounts
-
-You can save tokens for several bot accounts and switch between them. Paste another account's token under **Add a token** (Settings → Lichess) to add it; a token for an account already saved replaces its old one. Choose the account under **Account**, or in the Lichess tab's **Bot** part, where the account menu shows once two are saved. Switching while connected disconnects (asking first, and resigning games your engine is playing) and connects again as the other account. **Forget** removes the chosen account's token.
 3. If needed, press **Upgrade to Bot account** and confirm. This cannot be undone.
 
 Connecting only lists challenges and games. Your engine plays only games you start here (**Accept**, or a challenge you send). Games started elsewhere are listed as *Not played* with **Play** to hand them to the engine. Disconnecting mid-game resigns those games, after asking.
 
+### Several accounts
+
+You can save tokens for several bot accounts and switch between them. Paste another account's token under **Add a token** (Settings → Lichess) to add it; a token for an account already saved replaces its old one. Choose the account under **Account**, or in the Lichess tab's **Bot** part, where the account menu shows once two are saved. Switching while connected disconnects (asking first, and resigning games your engine is playing) and connects again as the other account. **Forget** removes the chosen account's token.
 ## Engine and account
 
 - The **Engine** menu under **Your engine on Lichess** picks the bot's engine (same as Settings → Lichess); **Options…** opens its UCI options. A different engine plays from the next game; games in progress keep theirs. Saved options reach games in progress too, before the engine's next search. To restart the engine of a game in progress (a stuck engine, say), use **⇄ Engine** → **↻ Reload** on your engine's bar beside the board.

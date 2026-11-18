@@ -8,6 +8,7 @@ const MENU_COMMANDS = {
   open: () => openPgn(),
   database: () => openDatabase(),
   positions: () => openPositions(),
+  binpack: () => openBinpack(),
   save: () => exportPgn(),
   copyPgn: () => $('#btn-pgn').click(),
   copyFen: async () => {
