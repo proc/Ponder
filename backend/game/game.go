@@ -160,6 +160,10 @@ type EngineInfo struct {
 	NPS   int64    `json:"nps"`
 	PV    []string `json:"pv"`
 	Ply   int      `json:"ply"`
+	// Hashfull: how full the engine's hash table is, in thousandths, when
+	// it says; HashMB: the table's size.
+	Hashfull *int `json:"hashfull,omitempty"`
+	HashMB   int  `json:"hashMB,omitempty"`
 	// The move the engine means to play and the reply it expects (UCI), for
 	// arrows on the board; Played once it has chosen the move.
 	Best   string `json:"best,omitempty"`
@@ -779,6 +783,7 @@ func (m *Manager) onInfo(gen int, side chess.Color, seat int, in uci.Info) {
 		Side: colorNames[side], Depth: in.Depth, HasEval: in.HasScore, CP: in.ScoreCP,
 		IsMate: in.IsMate, Mate: in.Mate, Nodes: in.Nodes, NPS: in.NPS, Ply: len(g.moves),
 	}
+	out.SetHash(in)
 	if side == chess.Black {
 		out.CP, out.Mate = -out.CP, -out.Mate
 	}
@@ -1451,4 +1456,13 @@ func (m *Manager) Takeback() error {
 	}
 	m.startTurnLocked()
 	return nil
+}
+
+// SetHash takes the hash table's size and fullness from in.
+func (o *EngineInfo) SetHash(in uci.Info) {
+	o.HashMB = in.HashMB
+	if in.HasHashfull {
+		n := in.Hashfull
+		o.Hashfull = &n
+	}
 }

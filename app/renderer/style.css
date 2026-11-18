@@ -2197,7 +2197,8 @@ a:hover { text-decoration: underline; }
 
 /* Settings → Lichess */
 .settings-pane[data-pane="lichess"] .row > .ls-token { flex: 0 1 60%; display: flex; gap: 0.4rem; }
-.ls-token input { flex: 1; min-width: 0; }
+.ls-token input, .ls-token select { flex: 1; min-width: 0; }
+#lx-switch { max-width: 12rem; min-width: 0; }
 .ls-status { padding: 0.5rem 0.7rem; background: var(--group); border-radius: var(--r-s); }
 .ls-upgrade { background: color-mix(in srgb, var(--danger) 9%, transparent); border-radius: var(--r-m); padding: 0.7rem 0.9rem; }
 .ls-upgrade p { margin: 0 0 0.4rem; }
@@ -2215,6 +2216,9 @@ button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--danger
 .ls-greet-grid { display: grid; grid-template-columns: max-content minmax(0, 1fr) minmax(0, 1fr); gap: 0.35rem 0.6rem; align-items: center; margin: 0.4rem 0; }
 .ls-greet-grid input { min-width: 0; width: 100%; }
 .ls-greet-head { font-size: 0.8rem; color: var(--muted); }
+.ls-greet-for { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; margin: 0.4rem 0; }
+.ls-greet-for select { min-width: 0; max-width: 100%; }
+.ls-greet-for .hint { margin: 0; }
 .ls-greet-foot { display: flex; align-items: center; gap: 0.4rem; }
 .ls-greet-foot span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ls-server input { flex: 0 1 60%; }

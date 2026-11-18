@@ -285,7 +285,7 @@ func (r *runner) sayHello() {
 	if r.started && !r.greeted {
 		r.greeted = true
 		if r.play && !r.finished && len(r.moves) < 2 {
-			lines = b.cfg.Greeting.lines(true, b.meLocked(), r.opponent().DisplayName())
+			lines = r.greeting.lines(true, b.meLocked(), r.opponent().DisplayName())
 		}
 	}
 	b.mu.Unlock()

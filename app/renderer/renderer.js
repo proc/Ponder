@@ -1725,7 +1725,26 @@ function engineSummary(side) {
       `The opponent played the reply it was thinking about ${hits} time${hits === 1 ? '' : 's'} out of ${tries}`));
   }
   out.push(stat('Moves', String(moves.length), 'Moves it searched'));
+  const hash = hashStat(engineInfo[side]);
+  if (hash) out.push(hash);
   return out;
+}
+
+// The hash table's size and how full it is, among the statistics; kept up
+// to date by renderEngineHead.
+function hashStat(info) {
+  const value = hashText(info).replace(/^Hash /, '');
+  if (!value) return null;
+  return el('span', { className: 'engine-stat engine-hash', title: hashTitle(info) }, [el('span', { textContent: 'Hash' }), el('b', { textContent: value })]);
+}
+function renderHashStat(side) {
+  const sum = $(`#engine-${side} .engine-sum`);
+  if (!sum || sum.hidden) return;
+  const fresh = hashStat(engineInfo[side]);
+  const old = $('.engine-hash', sum);
+  if (fresh && old) { $('b', old).textContent = $('b', fresh).textContent; old.title = fresh.title; }
+  else if (fresh) sum.append(fresh);
+  else old?.remove();
 }
 const ENGINE_LOG_MAX = 60;
 
@@ -1763,6 +1782,20 @@ function logEngineInfo(info) {
   if (log.length > ENGINE_LOG_MAX) log.length = ENGINE_LOG_MAX;
 }
 
+// The hash table: its size and how full it is ("Hash 64 MB (37%)"), from
+// an engine's info lines; '' when the engine says neither.
+function hashText(info) {
+  const mb = info?.hashMB > 0 ? (info.hashMB >= 1024 && info.hashMB % 1024 === 0 ? `${info.hashMB / 1024} GB` : `${info.hashMB} MB`) : '';
+  const full = info?.hashfull != null ? `${Math.round(info.hashfull / 10)}%` : '';
+  if (mb && full) return `Hash ${mb} (${full})`;
+  if (full) return `Hash ${full} full`;
+  return mb ? `Hash ${mb}` : '';
+}
+function hashTitle(info) {
+  if (info?.hashfull == null) return info?.hashMB ? `The engine's hash table is ${info.hashMB} MB; the engine does not say how full it is` : '';
+  return `The engine's hash table${info.hashMB ? ` (${info.hashMB} MB)` : ''} is ${(info.hashfull / 10).toFixed(1)}% full`;
+}
+
 // The header's numbers: how deep the search is and how fast it goes. They
 // change many times a second, so they are drawn on their own.
 function renderEngineHead(side) {
@@ -1790,6 +1823,7 @@ function renderEngineHead(side) {
       info.nps ? `${formatCount(info.nps)} n/s` : ''].filter(Boolean).join(' · ')
     : '';
   stats.title = !info ? '' : info.pondering ? "Thinking on its opponent's time" : 'Its search for its move';
+  renderHashStat(side);
   if (badge && stopped && info?.depth) badge.title = `Its last search reached depth ${info.depth}`;
 }
 
@@ -2799,13 +2833,14 @@ api.onEvent((event, data) => {
       // goes. Only the window's header changes.
       const same = prev && prev.ply === data.ply && Boolean(prev.pondering) === Boolean(data.pondering);
       engineInfo[data.side] = same
-        ? { ...prev, depth: data.depth || prev.depth, nodes: data.nodes || prev.nodes, nps: data.nps || prev.nps }
-        : { side: data.side, ply: data.ply, depth: data.depth, nodes: data.nodes, nps: data.nps, pondering: data.pondering, pv: [] };
+        ? { ...prev, depth: data.depth || prev.depth, nodes: data.nodes || prev.nodes, nps: data.nps || prev.nps, hashMB: data.hashMB || prev.hashMB, hashfull: data.hashfull ?? prev.hashfull }
+        : { side: data.side, ply: data.ply, depth: data.depth, nodes: data.nodes, nps: data.nps, hashMB: data.hashMB, hashfull: data.hashfull ?? prev?.hashfull, pondering: data.pondering, pv: [] };
       renderEngineHead(data.side);
       return;
     }
     engineInfo[data.side] = data.played && !data.depth && prev
-      ? { ...prev, ply: data.ply, best: data.best, ponder: data.ponder, played: true, pondering: false } : data;
+      ? { ...prev, ply: data.ply, best: data.best, ponder: data.ponder, played: true, pondering: false }
+      : { ...data, hashfull: data.hashfull ?? prev?.hashfull, hashMB: data.hashMB || prev?.hashMB };
     if (data.pondering) {
       // Thinking on the opponent's time: a row of its own, no score for the game.
       logEngineInfo(data);
@@ -4587,8 +4622,9 @@ function renderAnalysis() {
     stats.push(`d${data.depth}`);
     if (data.nodes) stats.push(`${formatCount(data.nodes)} nodes`);
     if (data.nps && !analysis.held) stats.push(`${formatCount(data.nps)} n/s`);
+    if (hashText(data)) stats.push(hashText(data));
   }
-  $('#analysis-stats').title = data?.depth ? `Depth ${data.depth}` : '';
+  $('#analysis-stats').title = data?.depth ? [`Depth ${data.depth}`, hashTitle(data)].filter(Boolean).join('. ') : '';
   $('#analysis-stats').textContent = stats.join(' · ');
   let rows = [];
   if (analysis.error) {

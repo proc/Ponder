@@ -6,6 +6,10 @@ Your engine can play on [Lichess](https://lichess.org) through the [Bot API](htt
 
 1. Create a new Lichess account that has never played a game. Signed in to it, create a token with `bot:play`, `challenge:read` and `challenge:write` (**Settings → Lichess → Create a token on Lichess** ticks these).
 2. Paste it in **Settings → Lichess**, choose the engine and press **Connect**. The token is encrypted with the system keychain when available and never shown again.
+
+### Several accounts
+
+You can save tokens for several bot accounts and switch between them. Paste another account's token under **Add a token** (Settings → Lichess) to add it; a token for an account already saved replaces its old one. Choose the account under **Account**, or in the Lichess tab's **Bot** part, where the account menu shows once two are saved. Switching while connected disconnects (asking first, and resigning games your engine is playing) and connects again as the other account. **Forget** removes the chosen account's token.
 3. If needed, press **Upgrade to Bot account** and confirm. This cannot be undone.
 
 Connecting only lists challenges and games. Your engine plays only games you start here (**Accept**, or a challenge you send). Games started elsewhere are listed as *Not played* with **Play** to hand them to the engine. Disconnecting mid-game resigns those games, after asking.
@@ -86,7 +90,7 @@ A floating **Match history** window lists finished games, newest first, with a w
 While your engine's game is on the board, its window floats: drag, resize, fold or hide it (a button with the engine's name and depth brings it back). Its place and size are remembered, and each new game shows it again. It shows:
 
 - **Depth** – a large badge beside the engine's name.
-- **Statistics** – average depth, nodes a move, speed, **Ponder hits** and moves searched.
+- **Statistics** – average depth, nodes a move, speed, **Ponder hits**, moves searched, and **Hash**: the hash table's size and how full it is, when the engine says.
 - **Win/draw/loss chances** – for engines with `UCI_ShowWDL`, a bar for the best line and one beside each line.
 - **Live search** – up to 25 updates a second; a **ponder** row while pondering, and a **hit** mark on moves that began as ponder hits.
 - **Scores** – on the evaluation bar, in the moves list and on each row, kept for the whole game.
@@ -110,3 +114,5 @@ The same rules accept the opponent's offers. Defaults: on, 0, 10 moves, 10 piece
 ## Hello and goodbye
 
 Your engine greets its opponent and spectators when a game starts and says goodbye when it ends. **Settings → Lichess → Chat messages** sets the four messages (`{me}` and `{opponent}` are replaced); an empty message is not sent, and **Say nothing** turns them all off. There is no hello in a game already under way and no goodbye after an abort.
+
+Each engine can have its own messages: pick it under **Messages of** (it starts on the bot's engine) and change one. An engine without its own says those of **Every engine**; **Use the messages for every engine** takes an engine's own away. A game keeps the messages of the engine playing it, even after you choose another engine for the bot.

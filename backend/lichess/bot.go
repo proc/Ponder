@@ -283,10 +283,17 @@ func (b *Bot) UpgradeToBot() (Status, error) {
 
 // Configure changes the engine, challenge policy and chat messages without
 // reconnecting.
-// A new engine is used from the next game.
+// A new engine is used from the next game. The chat messages are the
+// engine's own: games in progress played by that engine take them too,
+// while games of another engine keep that engine's.
 func (b *Bot) Configure(engine EngineConfig, policy Policy, greeting Greeting, ponder bool, draw DrawOffer) {
 	b.mu.Lock()
 	b.cfg.Engine, b.cfg.Policy, b.cfg.Greeting, b.cfg.Ponder, b.cfg.Draw = engine, policy, greeting, ponder, draw
+	for _, r := range b.games {
+		if r.eng != nil && game.SameEngine(engine.Path, engine.Args, r.engPath, r.engArgs) {
+			r.greeting = greeting
+		}
+	}
 	b.mu.Unlock()
 	b.emit()
 }
@@ -1047,6 +1054,7 @@ type runner struct {
 	eng                *uci.Engine
 	engPath            string   // what the engine was started from,
 	engArgs            []string // to find it when its options change
+	greeting           Greeting // what this game's engine says in the chat
 	pendingOpts        []string // option changes for before its next search
 	greeted            bool     // hello was said (or it was too late to)
 	thinking           int      // ply the engine is searching for, or -1
@@ -1209,6 +1217,7 @@ func (r *runner) startEngine(cfg EngineConfig) error {
 	r.b.mu.Lock()
 	r.eng = eng
 	r.engPath, r.engArgs, r.pendingOpts = cfg.Path, cfg.Args, nil
+	r.greeting = r.b.cfg.Greeting
 	r.canPonder = canPonder
 	r.pondering, r.nextPonder, r.discard = "", "", 0
 	r.b.mu.Unlock()
@@ -1371,7 +1380,7 @@ func (r *runner) onState(st GameState) {
 			go r.ratingDiffs(b.client)
 		}
 		if r.play && r.result != "*" {
-			bye = b.cfg.Greeting.lines(false, b.meLocked(), r.opponent().DisplayName())
+			bye = r.greeting.lines(false, b.meLocked(), r.opponent().DisplayName())
 		}
 	} else if !ended && eng != nil {
 		cmds = r.engineCommandsLocked(st)
@@ -1646,6 +1655,7 @@ func (r *runner) onInfo(in uci.Info) {
 		}
 		r.lastStats = now
 		out = game.EngineInfo{Side: r.side(), Depth: in.Depth, Nodes: in.Nodes, NPS: in.NPS, Ply: n, Stats: true, Pondering: pondering}
+		out.SetHash(in)
 	}
 	b.mu.Unlock()
 	if b.hooks.Emit != nil {
@@ -1700,6 +1710,7 @@ func (r *runner) lineLocked(in uci.Info, pos chess.Position) game.EngineInfo {
 		Depth: in.Depth, HasEval: in.HasScore, CP: in.ScoreCP, IsMate: in.IsMate, Mate: in.Mate,
 		Nodes: in.Nodes, NPS: in.NPS, Ply: len(r.moves),
 	}
+	out.SetHash(in)
 	if r.color == chess.Black {
 		out.CP, out.Mate = -out.CP, -out.Mate
 	}

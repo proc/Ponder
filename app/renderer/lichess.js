@@ -215,6 +215,7 @@ function renderLichess() {
   const connect = $('#lx-connect');
   connect.textContent = s.state === 'off' || s.state === 'error' ? 'Connect' : 'Disconnect';
   connect.disabled = s.state === 'connecting';
+  renderAccountSwitch();
   const message = [lx.note, s.message].filter(Boolean).join(' · ');
   $('#lx-message').textContent = message;
   $('#lx-message').hidden = !message;
@@ -1019,12 +1020,61 @@ function renderLichessSettingsStatus() {
 function lxTokenNote() {
   const st = lx.settings;
   let text = '';
-  if (st?.hasToken) text = st.encrypted ? 'A token is saved, encrypted with your system keychain. Type a new one to replace it.' : 'A token is saved. The system keychain is not available, so it is stored unencrypted in the app settings.';
-  else text = 'No token saved.';
+  const n = st?.tokens?.length ?? 0;
+  if (st?.hasToken) {
+    text = (st.encrypted ? 'Tokens are encrypted with your system keychain.' : 'The system keychain is not available, so tokens are stored unencrypted in the app settings.')
+      + ' Paste another account\'s token below to add it; one for a saved account replaces its token.';
+  } else text = 'No token saved.';
   $('#ls-token-note').textContent = text;
-  $('#ls-token').placeholder = st?.hasToken ? '•••••••• saved' : 'lip_…';
-  $('#ls-token-clear').hidden = !st?.hasToken;
+  $('#ls-token').placeholder = n ? 'lip_… (another account)' : 'lip_…';
+  $('#ls-token-label').textContent = n ? 'Add a token' : 'API token';
+  $('#ls-account-row').hidden = !n;
+  fillAccountSelect($('#ls-account'));
+  renderAccountSwitch();
 }
+
+// The bot's saved accounts, one per token.
+const accountName = (t, i) => (t.username ? `${t.title ? `${t.title} ` : ''}${t.username}` : `Account ${i + 1} (name not known yet)`);
+function fillAccountSelect(select) {
+  const st = lx.settings;
+  select.replaceChildren(...(st?.tokens ?? []).map((t, i) => el('option', { value: t.id, textContent: accountName(t, i) })));
+  select.value = st?.activeToken ?? '';
+}
+
+// In the Lichess tab, beside the account: a switch once two are saved.
+function renderAccountSwitch() {
+  const sel = $('#lx-switch');
+  const many = (lx.settings?.tokens?.length ?? 0) > 1;
+  sel.hidden = !many;
+  if (many && document.activeElement !== sel) fillAccountSelect(sel);
+  // Connected, the switch says who the bot is.
+  $('#lx-account').hidden = many && lxOnline() && lx.status.state !== 'reconnecting';
+}
+
+// Plays as another saved account: disconnects (resigning games in
+// progress, after asking) and connects again as that one.
+async function lxUseAccount(id, select) {
+  const before = lx.settings?.activeToken;
+  if (!id || id === before) return;
+  const wasOn = !(lx.status.state === 'off' || lx.status.state === 'error');
+  if (wasOn) {
+    await lxDisconnect();
+    if (!(lx.status.state === 'off' || lx.status.state === 'error')) { // kept
+      if (select) select.value = before;
+      return;
+    }
+  }
+  lx.settings = await api.lichess.save({ activeToken: id });
+  lxTokenNote();
+  if (wasOn) {
+    lxSetNote('');
+    try { await api.lichess.connect(); } catch (err) { lxSetNote(errorText(err)); lsError(err); }
+  }
+  renderLichess();
+}
+
+$('#ls-account').onchange = (e) => lxUseAccount(e.target.value, e.target);
+$('#lx-switch').onchange = (e) => lxUseAccount(e.target.value, e.target);
 
 async function fillLichessSettings() {
   lx.settings = await api.lichess.settings();
@@ -1036,7 +1086,7 @@ async function fillLichessSettings() {
   $('#ls-autoconnect').checked = st.autoConnect;
   $('#ls-ponder').checked = st.ponder !== false;
   $('#ls-challenge-timeout').value = st.challengeTimeout ?? 30;
-  fillGreeting(st.greeting);
+  loadGreetings(st, $('#ls-engine').value);
   fillDraw(st.draw);
   $('#ls-server').value = st.baseUrl;
   $('#ls-error').hidden = true;
@@ -1083,12 +1133,76 @@ function renderDraw() {
 $('#ls-draw').addEventListener('input', renderDraw);
 $('#ls-draw-reset').onclick = () => fillDraw(lx.settings?.drawDefaults);
 
-// Chat messages: what the engine says when its games start and end.
+// Chat messages: what the engine says when its games start and end. Each
+// engine can have its own; one without says those for every engine (key '').
 const greetingInputs = () => [...$('#ls-greeting').querySelectorAll('input[data-greeting]')];
+const greet = { edit: { '': {} }, key: '' };
+const greetValues = () => Object.fromEntries(greetingInputs().map((i) => [i.dataset.greeting, i.value]));
 
 function fillGreeting(g) {
   for (const input of greetingInputs()) input.value = g?.[input.dataset.greeting] ?? '';
   renderGreetingPreview();
+}
+
+// Loads every engine's messages, showing those of the engine given.
+function loadGreetings(st, engineId) {
+  greet.edit = { '': { ...st.greeting } };
+  for (const e of engines) if (st.greetings?.[e.id]) greet.edit[e.id] = { ...st.greetings[e.id] };
+  showGreetingFor(engines.some((e) => e.id === engineId) ? engineId : '');
+}
+
+function renderGreetingEngines() {
+  const sel = $('#ls-greet-engine');
+  sel.replaceChildren(
+    el('option', { value: '', textContent: 'Every engine' }),
+    ...engines.map((e) => el('option', { value: e.id, textContent: greet.edit[e.id] ? `${e.name} (own messages)` : e.name })),
+  );
+  sel.value = greet.key;
+}
+
+function showGreetingFor(key) {
+  greet.key = key;
+  renderGreetingEngines();
+  fillGreeting(greet.edit[key] ?? greet.edit['']);
+  renderGreetingOwn();
+}
+
+function renderGreetingOwn() {
+  const own = greet.key !== '' && Boolean(greet.edit[greet.key]);
+  $('#ls-greet-shared').hidden = !own;
+  $('#ls-greet-own').textContent = greet.key === ''
+    ? 'Said by every engine without its own.'
+    : own ? '' : 'Says the messages for every engine. Change one to give it its own.';
+}
+
+$('#ls-greet-engine').onchange = (e) => showGreetingFor(e.target.value);
+$('#ls-greet-shared').onclick = () => {
+  delete greet.edit[greet.key];
+  showGreetingFor(greet.key);
+};
+// Typing in an engine's messages gives it its own.
+$('#ls-greeting').addEventListener('input', (e) => {
+  if (!e.target.matches('input[data-greeting]')) return;
+  const had = greet.edit[greet.key];
+  greet.edit[greet.key] = greetValues();
+  if (!had) { renderGreetingEngines(); renderGreetingOwn(); }
+});
+// Choosing the bot's engine shows its messages.
+$('#ls-engine').addEventListener('change', (e) => showGreetingFor(e.target.value));
+
+// The messages of the engine shown as typed, for the buttons that set them.
+function setGreeting(g) {
+  fillGreeting(g);
+  greet.edit[greet.key] = greetValues();
+  renderGreetingEngines();
+  renderGreetingOwn();
+}
+
+function greetingPatch() {
+  return {
+    greeting: greet.edit[''],
+    greetings: Object.fromEntries(engines.map((e) => [e.id, greet.edit[e.id] ?? null])),
+  };
 }
 
 // The message being written, with the names filled in.
@@ -1101,8 +1215,8 @@ function renderGreetingPreview() {
 
 $('#ls-greeting').addEventListener('input', renderGreetingPreview);
 $('#ls-greeting').addEventListener('focusin', renderGreetingPreview);
-$('#ls-greet-reset').onclick = () => fillGreeting(lx.settings?.greetingDefaults);
-$('#ls-greet-clear').onclick = () => fillGreeting({});
+$('#ls-greet-reset').onclick = () => setGreeting(lx.settings?.greetingDefaults);
+$('#ls-greet-clear').onclick = () => setGreeting({});
 
 function lichessPatch() {
   const patch = {
@@ -1111,7 +1225,7 @@ function lichessPatch() {
     ponder: $('#ls-ponder').checked,
     challengeTimeout: +$('#ls-challenge-timeout').value || 0,
     baseUrl: $('#ls-server').value,
-    greeting: Object.fromEntries(greetingInputs().map((i) => [i.dataset.greeting, i.value])),
+    ...greetingPatch(),
     draw: drawPatch(),
   };
   const token = $('#ls-token').value.trim();
@@ -1140,7 +1254,13 @@ async function saveLichessSettings() {
   }
   if (lxOnline() || meOnline()) { // the time a sent challenge waits is your own account's too
     try { await api.lichess.configure(); } catch (err) { lxSetNote(errorText(err)); }
-    if (patch.token || lx.settings.baseUrl !== before.baseUrl) lxSetNote('Disconnect and connect again to use the new token or server.');
+    if (lx.settings.baseUrl !== before.baseUrl) lxSetNote('Disconnect and connect again to use the new server.');
+  }
+  // A token added while connected: play as its account from now on.
+  if (patch.token && lx.settings.activeToken !== before.activeToken && lxOnline()) {
+    const added = lx.settings.activeToken;
+    lx.settings = await api.lichess.save({ activeToken: before.activeToken });
+    await lxUseAccount(added);
   }
   renderLichess();
   return true;
@@ -1162,8 +1282,14 @@ $('#ls-connect').onclick = async () => {
 };
 
 $('#ls-token-clear').onclick = async () => {
-  if (lxOnline() && !(await confirmDialog('Forget the saved token? You stay connected until you disconnect.', 'Forget token'))) return;
-  lx.settings = await api.lichess.save({ token: '' });
+  const st = lx.settings;
+  const i = st.tokens.findIndex((t) => t.id === $('#ls-account').value);
+  if (i < 0) return;
+  const name = accountName(st.tokens[i], i);
+  const using = st.tokens[i].id === st.activeToken && lxOnline();
+  if (!(await confirmDialog(`Forget the token of ${name}?${using ? ' You stay connected until you disconnect.' : ''}`, 'Forget token'))) return;
+  lx.settings = await api.lichess.save({ forgetToken: st.tokens[i].id });
+  lsError(null);
   lxTokenNote();
 };
 

@@ -628,9 +628,25 @@ function loadLichess() {
     ...LICHESS_DEFAULTS, ...saved,
     policy: { ...LICHESS_DEFAULTS.policy, ...saved.policy },
     greeting: { ...LICHESS_DEFAULTS.greeting, ...saved.greeting },
+    greetings: saved.greetings && typeof saved.greetings === 'object' ? saved.greetings : {},
     draw: { ...LICHESS_DEFAULTS.draw, ...saved.draw },
+    ...savedTokens(saved),
   };
 }
+
+// The bot's tokens, one per Lichess account: [{ id, username, title, token
+// (encrypted) | plainToken }], with activeToken the id of the one used. A
+// single token saved before there could be several becomes the first.
+function savedTokens(saved) {
+  let tokens = Array.isArray(saved.tokens) ? saved.tokens.filter((t) => t && t.id && (t.token || t.plainToken)) : [];
+  if (!tokens.length && (saved.token || saved.plainToken)) {
+    tokens = [{ id: 'tok1', username: '', ...(saved.token ? { token: saved.token } : { plainToken: saved.plainToken }) }];
+  }
+  const activeToken = tokens.some((t) => t.id === saved.activeToken) ? saved.activeToken : tokens[0]?.id ?? '';
+  return { tokens, activeToken, token: undefined, plainToken: undefined };
+}
+
+const activeTokenEntry = (settings) => settings.tokens?.find((t) => t.id === settings.activeToken);
 
 function saveLichess(settings) {
   fs.mkdirSync(path.dirname(lichessFile()), { recursive: true });
@@ -655,26 +671,89 @@ async function encryptSecret(text) {
 // Reads the secret kept encrypted in settings[key] ('' if it cannot be
 // read). When the system's key has changed, it is stored again under the
 // new one.
-async function decryptSecret(settings, key) {
+// holder is settings, or else one of settings.tokens (the bot's tokens).
+async function decryptSecret(settings, key, holder = settings) {
   try {
-    const buf = Buffer.from(settings[key], 'base64');
+    const buf = Buffer.from(holder[key], 'base64');
     if (!safeStorage.decryptStringAsync) return safeStorage.decryptString(buf);
     const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(buf);
     if (shouldReEncrypt && result) {
       try {
         const again = await encryptSecret(result);
         const now = loadLichess();
-        if (now[key] === settings[key]) { now[key] = again; saveLichess(now); }
-        settings[key] = again;
+        const there = holder === settings ? now : now.tokens.find((t) => t.id === holder.id);
+        if (there && there[key] === holder[key]) { there[key] = again; saveLichess(now); }
+        holder[key] = again;
       } catch { /* keep the old one */ }
     }
     return result;
   } catch { return ''; }
 }
 
-async function lichessToken(settings) {
-  if (settings.token) return decryptSecret(settings, 'token');
-  return settings.plainToken ?? '';
+async function tokenOf(settings, entry) {
+  if (!entry) return '';
+  if (entry.token) return decryptSecret(settings, 'token', entry);
+  return entry.plainToken ?? '';
+}
+
+// The bot's token in use.
+const lichessToken = (settings) => tokenOf(settings, activeTokenEntry(settings));
+
+// Who a token belongs to, asked of Lichess; null if it cannot say.
+async function tokenAccount(settings, token) {
+  const base = (settings.baseUrl || LICHESS_DEFAULTS.baseUrl).replace(/\/+$/, '');
+  try {
+    const res = await fetch(`${base}/api/account`, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }, signal: AbortSignal.timeout(10000) });
+    if (res.status === 401) throw new Error('Lichess did not accept that token.');
+    if (!res.ok) return null;
+    const a = await res.json();
+    return { username: a.username ?? '', title: a.title ?? '' };
+  } catch (err) {
+    if (err.message.startsWith('Lichess did not accept')) throw err;
+    return null;
+  }
+}
+
+// Adds a token (or replaces the one saved for the same account) and makes
+// it the one in use.
+async function addToken(settings, token) {
+  const who = await tokenAccount(settings, token);
+  const secret = await canEncrypt() ? { token: await encryptSecret(token) } : { plainToken: token };
+  const tokens = settings.tokens ?? [];
+  let entry = null;
+  for (const t of tokens) {
+    if ((who?.username && t.username.toLowerCase() === who.username.toLowerCase()) || (await tokenOf(settings, t)) === token) entry = t;
+  }
+  if (!entry) {
+    let n = tokens.length + 1;
+    while (tokens.some((t) => t.id === `tok${n}`)) n++;
+    entry = { id: `tok${n}`, username: '' };
+    tokens.push(entry);
+  }
+  delete entry.token;
+  delete entry.plainToken;
+  Object.assign(entry, secret);
+  if (who) { entry.username = who.username; entry.title = who.title; }
+  settings.tokens = tokens;
+  settings.activeToken = entry.id;
+}
+
+// Fills in the account names of tokens saved without one.
+async function nameTokens(settings) {
+  let changed = false;
+  for (const t of settings.tokens ?? []) {
+    if (t.username) continue;
+    const who = await tokenAccount(settings, await tokenOf(settings, t)).catch(() => null);
+    if (who?.username) { t.username = who.username; t.title = who.title; changed = true; }
+  }
+  if (changed) {
+    const now = loadLichess();
+    for (const t of now.tokens) {
+      const named = settings.tokens.find((x) => x.id === t.id);
+      if (named?.username && !t.username) { t.username = named.username; t.title = named.title; }
+    }
+    saveLichess(now);
+  }
 }
 
 // The person's own account (Board API), signed in with Lichess (OAuth) or
@@ -697,14 +776,15 @@ async function setAccountToken(settings, token) {
 
 // What the window may see: everything but the tokens.
 async function publicLichess(settings) {
-  const { token, plainToken, accountToken: _a, plainAccountToken: _p, ...rest } = settings;
+  const { token, plainToken, tokens, accountToken: _a, plainAccountToken: _p, ...rest } = settings;
   return {
     ...rest,
+    tokens: (tokens ?? []).map((t) => ({ id: t.id, username: t.username, title: t.title ?? '', encrypted: !t.plainToken })),
     greetingDefaults: LICHESS_DEFAULTS.greeting,
     drawDefaults: LICHESS_DEFAULTS.draw,
     hasToken: Boolean(await lichessToken(settings)),
     hasAccount: Boolean(await accountToken(settings)),
-    encrypted: !plainToken,
+    encrypted: !activeTokenEntry(settings)?.plainToken,
     canEncrypt: await canEncrypt(),
   };
 }
@@ -717,7 +797,21 @@ function lichessEngine(settings) {
   return { name: e.name, path: e.path, args: e.args ?? [], options: e.options ?? {} };
 }
 
-ipcMain.handle('lichess:settings', () => publicLichess(loadLichess()));
+// The chat messages of the bot's engine: its own, or else those for every
+// engine.
+function lichessGreeting(settings) {
+  const list = loadEngines();
+  const e = list.find((x) => x.id === settings.engineId) ?? list[0];
+  const own = e && settings.greetings?.[e.id];
+  return own ? { ...LICHESS_DEFAULTS.greeting, ...own } : settings.greeting;
+}
+
+ipcMain.handle('lichess:settings', async () => {
+  const settings = loadLichess();
+  // Names come later for tokens saved without one: never a wait here.
+  if (settings.tokens.some((t) => !t.username)) nameTokens(settings).catch(() => {});
+  return publicLichess(settings);
+});
 // Your engine's game in progress gets its engine started again, with the
 // options as now saved (Settings → Engines).
 ipcMain.handle('lichess:reloadEngine', (_e, id) => backend.request('lichessReloadEngine', { id: String(id ?? ''), engine: lichessEngine(loadLichess()) }));
@@ -999,20 +1093,33 @@ ipcMain.handle('lichess:save', async (_e, patch) => {
     if ('pieces' in patch.draw) d.pieces = whole(patch.draw.pieces, 2, 32, d.pieces);
     settings.draw = d;
   }
-  if (patch.greeting && typeof patch.greeting === 'object') {
-    const g = { ...settings.greeting };
+  const cleanGreeting = (from, base) => {
+    const g = { ...base };
     for (const k of Object.keys(LICHESS_DEFAULTS.greeting)) {
-      if (typeof patch.greeting[k] === 'string') g[k] = [...patch.greeting[k].replace(/\s+/g, ' ').trim()].slice(0, GREETING_MAX).join('');
+      if (typeof from[k] === 'string') g[k] = [...from[k].replace(/\s+/g, ' ').trim()].slice(0, GREETING_MAX).join('');
     }
-    settings.greeting = g;
+    return g;
+  };
+  if (patch.greeting && typeof patch.greeting === 'object') settings.greeting = cleanGreeting(patch.greeting, settings.greeting);
+  // Engines' own messages, by engine id; null: back to those for every engine.
+  if (patch.greetings && typeof patch.greetings === 'object') {
+    const all = { ...settings.greetings };
+    const ids = new Set(loadEngines().map((e) => e.id));
+    for (const [id, g] of Object.entries(patch.greetings)) {
+      if (g && typeof g === 'object') all[id] = cleanGreeting(g, settings.greeting);
+      else delete all[id];
+    }
+    for (const id of Object.keys(all)) if (!ids.has(id)) delete all[id];
+    settings.greetings = all;
   }
-  if (typeof patch.token === 'string') {
-    const token = patch.token.trim();
-    delete settings.token;
-    delete settings.plainToken;
-    if (token && await canEncrypt()) settings.token = await encryptSecret(token);
-    else if (token) settings.plainToken = token;
+  // A token typed in: added to the bot's tokens and used from now on.
+  if (typeof patch.token === 'string' && patch.token.trim()) await addToken(settings, patch.token.trim());
+  // Forgetting one; the next saved one is used instead.
+  if (typeof patch.forgetToken === 'string') {
+    settings.tokens = settings.tokens.filter((t) => t.id !== patch.forgetToken);
+    if (settings.activeToken === patch.forgetToken) settings.activeToken = settings.tokens[0]?.id ?? '';
   }
+  if (typeof patch.activeToken === 'string' && settings.tokens.some((t) => t.id === patch.activeToken)) settings.activeToken = patch.activeToken;
   if (typeof patch.accountToken === 'string') await setAccountToken(settings, patch.accountToken);
   saveLichess(settings);
   return publicLichess(settings);
@@ -1104,7 +1211,7 @@ ipcMain.handle('lichess:connect', async () => {
   const settings = loadLichess();
   return backend.request('lichessConnect', {
     baseUrl: settings.baseUrl, token: await lichessToken(settings),
-    engine: lichessEngine(settings), policy: settings.policy, greeting: settings.greeting, ponder: settings.ponder !== false, draw: settings.draw, challengeTimeout: challengeTimeout(settings),
+    engine: lichessEngine(settings), policy: settings.policy, greeting: lichessGreeting(settings), ponder: settings.ponder !== false, draw: settings.draw, challengeTimeout: challengeTimeout(settings),
   });
 });
 
@@ -1194,7 +1301,7 @@ ipcMain.handle('puzzles:chooseFile', async () => {
 
 ipcMain.handle('lichess:configure', () => {
   const settings = loadLichess();
-  return backend.request('lichessConfigure', { engine: lichessEngine(settings), policy: settings.policy, greeting: settings.greeting, ponder: settings.ponder !== false, draw: settings.draw, challengeTimeout: challengeTimeout(settings) });
+  return backend.request('lichessConfigure', { engine: lichessEngine(settings), policy: settings.policy, greeting: lichessGreeting(settings), ponder: settings.ponder !== false, draw: settings.draw, challengeTimeout: challengeTimeout(settings) });
 });
 
 // ---------------------------------------------------------------------------

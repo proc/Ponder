@@ -34,7 +34,7 @@ Set the engine and number of lines (1–5) in **Settings → Analysis**. Analysi
 
 ## Engine windows
 
-The Analysis window and a window per playing engine sit beside the move list. Analysis lines take one row each: hover to see a whole line, click to wrap it. An engine window shows name, depth, nodes and speed, then one row per search, newest first (move number, score, line); after eight rows it scrolls, with messages below. Drag the handle to resize (remembered); double-click it to reset.
+The Analysis window and a window per playing engine sit beside the move list. Analysis lines take one row each: hover to see a whole line, click to wrap it. An engine window shows name, depth, nodes and speed, and among its statistics the hash table's size and how full it is (**Hash 64 MB (30%)**, for engines that report it; the Analysis window shows it too), then one row per search, newest first (move number, score, line); after eight rows it scrolls, with messages below. Drag the handle to resize (remembered); double-click it to reset.
 
 ## Computer analysis
 

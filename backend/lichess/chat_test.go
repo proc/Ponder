@@ -164,3 +164,43 @@ func TestGreetingText(t *testing.T) {
 		t.Fatalf("empty greeting says %v", lines)
 	}
 }
+
+// Each engine has its own messages: a game keeps those of the engine that
+// plays it when another engine is chosen, and takes its own engine's new
+// ones.
+func TestGreetingFollowsEngine(t *testing.T) {
+	h := newHarness(t, Policy{Casual: true, Humans: true, MaxGames: 1})
+	h.cfg.Greeting = Greeting{Goodbye: "Good game!"}
+	h.connect()
+	if err := h.bot.SetAutoAccept(true); err != nil {
+		t.Fatal(err)
+	}
+	id := h.fake.Challenge("Alice", false, false, 120, 1, "white", "standard")
+	h.waitFor("game start", func(s Status) bool { return len(s.Games) == 1 })
+	greeting := func() string {
+		h.bot.mu.Lock()
+		defer h.bot.mu.Unlock()
+		r := h.bot.games[id]
+		if r == nil || r.eng == nil {
+			return ""
+		}
+		return r.greeting.Goodbye
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for greeting() != "Good game!" {
+		if time.Now().After(deadline) {
+			t.Fatalf("goodbye %q before any change", greeting())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	other := h.cfg.Engine
+	other.Path += "-other"
+	h.bot.Configure(other, h.cfg.Policy, Greeting{Goodbye: "Other engine"}, false, h.cfg.Draw)
+	if g := greeting(); g != "Good game!" {
+		t.Fatalf("another engine's messages reached the game: %q", g)
+	}
+	h.bot.Configure(h.cfg.Engine, h.cfg.Policy, Greeting{Goodbye: "See you"}, false, h.cfg.Draw)
+	if g := greeting(); g != "See you" {
+		t.Fatalf("the game's own engine's new messages did not reach it: %q", g)
+	}
+}

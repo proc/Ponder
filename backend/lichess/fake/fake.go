@@ -85,8 +85,11 @@ type Game struct {
 type Server struct {
 	Token    string // required bearer token
 	Username string
-	Bot      bool          // the account is a Bot account
-	Delay    time.Duration // opponent "thinking" time
+	// Others: more tokens it takes, each for an account of that name. The
+	// fake has one account: a request with one of these renames it.
+	Others map[string]string
+	Bot    bool          // the account is a Bot account
+	Delay  time.Duration // opponent "thinking" time
 	// Opponents that never accept outgoing challenges.
 	Decliners map[string]string // username → decline reason
 	MaxPlies  int               // games longer than this are drawn (default 300)
@@ -120,17 +123,18 @@ type Server struct {
 	// OAuth: the code challenges of sign-ins in progress, by code.
 	oauth map[string]string
 
-	mu      sync.Mutex
-	next    int
-	events  []chan string
-	pending map[string]*challenge
-	games   map[string]*Game
-	rng     *rand.Rand
-	Log     []string // API calls made, for tests
+	mu        sync.Mutex
+	firstName string // the account's name for Token, when Others are set
+	next      int
+	events    []chan string
+	pending   map[string]*challenge
+	games     map[string]*Game
+	rng       *rand.Rand
+	Log       []string // API calls made, for tests
 }
 
 func New(token, username string) *Server {
-	return &Server{Token: token, Username: username, Bot: true, Delay: 100 * time.Millisecond,
+	return &Server{Token: token, Username: username, firstName: username, Bot: true, Delay: 100 * time.Millisecond,
 		Decliners: map[string]string{"grumpy": "later", "picky": "tooFast"},
 		Silent:    map[string]bool{"sleepy": true},
 		Online: []OnlineBot{{"maia1", 1500}, {"SlowBot", 1900}, {"grumpy", 1700}, {"picky", 1750},
@@ -176,10 +180,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.public(w, r) {
 		return
 	}
-	if r.Header.Get("Authorization") != "Bearer "+s.Token {
-		w.WriteHeader(401)
-		fmt.Fprint(w, `{"error":"No such token"}`)
-		return
+	if bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "); bearer != s.Token {
+		name, other := s.Others[bearer]
+		if !other {
+			w.WriteHeader(401)
+			fmt.Fprint(w, `{"error":"No such token"}`)
+			return
+		}
+		s.mu.Lock()
+		s.Username = name
+		s.mu.Unlock()
+	} else if s.Others != nil {
+		s.mu.Lock()
+		s.Username = s.firstName
+		s.mu.Unlock()
 	}
 	s.mu.Lock()
 	s.Log = append(s.Log, r.Method+" "+path)

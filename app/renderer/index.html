@@ -504,6 +504,7 @@
                 <div class="lx-card-row lx-head">
                   <span class="lx-dot" id="lx-dot"></span>
                   <span class="lx-account" id="lx-account">Not connected</span>
+                  <select id="lx-switch" class="small" hidden title="Play as another of your saved Lichess accounts" aria-label="Lichess account"></select>
                   <span class="lx-spacer"></span>
                   <button type="button" class="small" id="lx-connect">Connect</button>
                   <button type="button" class="small icon-btn" id="lx-settings" title="Lichess settings: token, engine, server" aria-label="Lichess settings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></g></svg></button>
@@ -1236,8 +1237,11 @@
       <div class="settings-pane" data-pane="lichess" hidden>
         <p class="hint">Your engine plays on Lichess through a <b>Bot account</b>. Create an API token with the <i>bot:play</i>, <i>challenge:read</i> and <i>challenge:write</i> permissions while signed in to that account. <a href="#" id="ls-token-link">Create a token on Lichess</a></p>
         <div class="set-card">
-        <label class="row">API token
-          <span class="ls-token"><input type="password" id="ls-token" spellcheck="false" autocomplete="off" placeholder="lip_…"> <button type="button" class="small" id="ls-token-clear">Forget</button></span>
+        <label class="row" id="ls-account-row" hidden title="The Lichess account your engine plays as. Each saved token is one account; switching while connected connects again as the other.">Account
+          <span class="ls-token"><select id="ls-account"></select> <button type="button" class="small" id="ls-token-clear" title="Forget this account's token">Forget</button></span>
+        </label>
+        <label class="row"><span id="ls-token-label">API token</span>
+          <span class="ls-token"><input type="password" id="ls-token" spellcheck="false" autocomplete="off" placeholder="lip_…"></span>
         </label>
         <p class="hint" id="ls-token-note"></p>
         <label class="row">Engine <select id="ls-engine"></select></label>
@@ -1270,6 +1274,12 @@
         <fieldset class="ls-greeting" id="ls-greeting">
           <legend>Chat messages</legend>
           <p class="hint">What your engine says in the chat of the games it plays: when a game starts and when it ends, to its opponent and to the people watching. <code>{me}</code> and <code>{opponent}</code> become the two names. Leave a message empty to say nothing.</p>
+          <div class="ls-greet-for">
+            <label for="ls-greet-engine">Messages of</label>
+            <select id="ls-greet-engine" title="Each engine can say its own messages. An engine without its own says the ones for every engine."></select>
+            <span class="hint" id="ls-greet-own"></span>
+            <button type="button" class="small" id="ls-greet-shared" hidden title="This engine says the messages for every engine again.">Use the messages for every engine</button>
+          </div>
           <div class="ls-greet-grid">
             <span></span><span class="ls-greet-head">To the opponent</span><span class="ls-greet-head">To the spectators</span>
             <label for="ls-hello">Hello</label>

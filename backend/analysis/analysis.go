@@ -57,7 +57,11 @@ type Update struct {
 	Nodes   int64  `json:"nodes"`
 	NPS     int64  `json:"nps"`
 	TimeMs  int64  `json:"timeMs"`
-	Lines   []Line `json:"lines"`
+	// Hashfull: how full the hash table is, in thousandths, when the
+	// engine says; HashMB: its size.
+	Hashfull *int   `json:"hashfull,omitempty"`
+	HashMB   int    `json:"hashMB,omitempty"`
+	Lines    []Line `json:"lines"`
 }
 
 const (
@@ -354,6 +358,11 @@ func (a *Analyzer) onInfo(gen int, in uci.Info) {
 	if in.TimeMs > 0 {
 		a.upd.TimeMs = in.TimeMs
 	}
+	if in.HasHashfull {
+		n := in.Hashfull
+		a.upd.Hashfull = &n
+	}
+	a.upd.HashMB = in.HashMB
 	a.emitLines()
 }
 

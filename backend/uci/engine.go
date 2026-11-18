@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -42,6 +43,12 @@ type Info struct {
 	NPS    int64
 	TimeMs int64
 	PV     []string
+	// HasHashfull: the engine said how full its hash table is (Hashfull,
+	// in thousandths). HashMB is the table's size as last set (or the
+	// engine's default), 0 when the engine has no Hash option.
+	HasHashfull bool
+	Hashfull    int
+	HashMB      int
 }
 
 // Handlers receive asynchronous engine output. They are called from the
@@ -64,6 +71,7 @@ type Engine struct {
 	// confirmed it took them.
 	Applied []OptionSetting
 
+	hashMB   atomic.Int64 // the Hash option's value, read by the info reader
 	cmd      *exec.Cmd
 	stdin    io.WriteCloser
 	h        Handlers
@@ -178,6 +186,7 @@ func (e *Engine) read(r io.Reader) {
 				e.Options = append(e.Options, o)
 			}
 		case "uciok":
+			e.noteHash(nil)
 			signal(e.uciok)
 		case "readyok":
 			signal(e.readyok)
@@ -195,6 +204,7 @@ func (e *Engine) read(r io.Reader) {
 			}
 			if e.h.OnInfo != nil {
 				if info, ok := parseInfo(rest); ok {
+					info.HashMB = int(e.hashMB.Load())
 					e.h.OnInfo(info)
 				}
 			}
@@ -376,6 +386,7 @@ func (e *Engine) ApplyOptions(opts map[string]string, skip ...string) error {
 		return fmt.Errorf("the engine did not take its options: %w", err)
 	}
 	e.Applied = plan
+	e.noteHash(plan)
 	return nil
 }
 
@@ -410,8 +421,31 @@ func (e *Engine) OptionChanges(opts map[string]string, skip ...string) []OptionS
 		}
 	}
 	e.Applied = plan
+	e.noteHash(plan)
 	return out
 }
+
+// noteHash records the hash table's size: the Hash value in applied, or
+// else the engine's default.
+func (e *Engine) noteHash(applied []OptionSetting) {
+	for _, o := range e.Options {
+		if !strings.EqualFold(o.Name, "Hash") || o.Type != "spin" {
+			continue
+		}
+		v := o.Default
+		for _, s := range applied {
+			if strings.EqualFold(s.Name, "Hash") {
+				v = s.Value
+			}
+		}
+		n, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		e.hashMB.Store(n)
+		return
+	}
+}
+
+// HashMB is the hash table's size in megabytes, 0 if unknown.
+func (e *Engine) HashMB() int { return int(e.hashMB.Load()) }
 
 // OptionCommands are the setoption lines for settings.
 func OptionCommands(settings []OptionSetting) []string {
@@ -566,6 +600,10 @@ func parseInfo(f []string) (Info, bool) {
 			in.NPS = next()
 		case "time":
 			in.TimeMs = next()
+		case "hashfull":
+			if n := next(); n >= 0 && n <= 1000 {
+				in.HasHashfull, in.Hashfull = true, int(n)
+			}
 		case "score":
 			if i+2 < len(f) {
 				n, _ := strconv.Atoi(f[i+2])

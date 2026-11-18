@@ -68,7 +68,8 @@ cd backend && go run ./lichess/testdata/fakelichess -addr 127.0.0.1:8765
 ```
 
 Set **Server** (Settings → Lichess) to `http://127.0.0.1:8765` and the token
-to `test`. Add `-notbot` to sign in as a person instead: **Sign in with
+to `test`. To try switching accounts, add `-others other=SecondBot`: the
+token `other` then signs in as SecondBot. Add `-notbot` to sign in as a person instead: **Sign in with
 Lichess** then works against it, and its lobby pairs you with a
 random-moving player. Then, for example:
 
