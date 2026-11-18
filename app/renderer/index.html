@@ -513,6 +513,11 @@
                   <select id="lx-engine" title="The engine that plays your bot's games"></select>
                   <button type="button" class="small" id="lx-engine-options" title="This engine's UCI options: threads, hash size and more">Options…</button>
                 </div>
+                <div class="lx-card-row lx-engine-row" title="How many games your engine plays at the same time. Accept automatically and the random-bot challenger both keep within it; a challenge you accept or send by hand is not held back.">
+                  <label for="lx-games">Games at once</label>
+                  <input type="number" id="lx-games" min="1" max="8" step="1">
+                  <span class="lx-meta">for auto-accept and the random-bot challenger</span>
+                </div>
               </div>
               <p class="lx-foot lx-engine-note" id="lx-engine-note" hidden></p>
               <p class="lx-message" id="lx-message" hidden></p>
@@ -560,8 +565,6 @@
                     <span class="lx-rules-opts"><input type="number" id="lr-inc-min" min="0" max="180" step="1" aria-label="Increment in seconds, at least"> to <input type="number" id="lr-inc-max" min="0" max="180" step="1" aria-label="Increment in seconds, at most"> s</span>
                     <label class="lx-rules-label" for="lr-rating-min">Their rating</label>
                     <span class="lx-rules-opts"><input type="number" id="lr-rating-min" min="0" max="4000" step="50" aria-label="Challenger's rating, at least"> to <input type="number" id="lr-rating-max" min="0" max="4000" step="50" aria-label="Challenger's rating, at most"></span>
-                    <label class="lx-rules-label" for="lr-games">Games at once</label>
-                    <span class="lx-rules-opts"><input type="number" id="lr-games" min="1" max="8" step="1"></span>
                   </form>
                   <p class="hint">An empty or 0 limit means any. Challenges that do not match are declined with the reason; variants and correspondence games are always declined. The rules only act while <b>Accept automatically</b> is on.</p>
                   <p class="error" id="lx-rules-error" hidden></p>
@@ -832,7 +835,7 @@
     <div class="chf-list" id="ch-float-list" aria-live="polite"></div>
     <p class="chf-next" id="ch-float-next" hidden></p>
     <div class="chf-auto" id="ch-float-auto" hidden>
-      <label for="ch-float-auto-on" id="ch-float-auto-label" title="Your engine challenges random bots by itself, without end, each time it connects. Turn it off to stop"><b>Auto challenge</b> <span class="lx-meta" id="ch-float-auto-sub">without end</span></label>
+      <label for="ch-float-auto-on" id="ch-float-auto-label" title="Your engine challenges random bots by itself, without end, each time it connects. Turn it off to stop"><b>Auto challenge</b> <span class="lx-meta" id="ch-float-auto-sub">without end</span><span class="chf-games" id="ch-float-games"></span></label>
       <input type="checkbox" class="lx-switch" id="ch-float-auto-on" role="switch">
       <button type="button" class="small" id="ch-float-auto-stop" title="Stop challenging random bots" hidden>Stop</button>
     </div>

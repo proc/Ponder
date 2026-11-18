@@ -190,6 +190,26 @@ type SeekStatus struct {
 	// Failed is the last challenge that could not be sent, and why: for the
 	// challenges window.
 	Failed *SeekFailure `json:"failed,omitempty"`
+	// Challenge is the challenge the run sent last, and how it stands now:
+	// waiting, accepted, declined (and why), expired (no answer), failed
+	// (not sent) or gone (withdrawn when the run stopped). It stays until
+	// the next one goes out, so the challenges window can always show it.
+	Challenge *SeekChallenge `json:"challenge,omitempty"`
+}
+
+// SeekChallenge is the random-bot run's latest challenge.
+type SeekChallenge struct {
+	ID        string `json:"id,omitempty"` // "" when it was not sent
+	At        int64  `json:"at"`           // when it went out (Unix ms)
+	User      string `json:"user"`
+	Title     string `json:"title,omitempty"`
+	Rating    int    `json:"rating,omitempty"`
+	Limit     int    `json:"limit"`
+	Increment int    `json:"increment"`
+	Rated     bool   `json:"rated"`
+	Speed     string `json:"speed,omitempty"`
+	State     string `json:"state"`
+	Reason    string `json:"reason,omitempty"` // why it was declined, or the error
 }
 
 // SeekFailure is a challenge Lichess refused to send.
@@ -693,9 +713,15 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		p.Username = u.Username
 	}
 	ch, err := b.challenge(p)
+	sent := time.Now().UnixMilli()
+	current := func(st *SeekStatus, id, state, reason string) {
+		st.Challenge = &SeekChallenge{ID: id, At: sent, User: name, Title: u.Title, Rating: rating,
+			Limit: p.Limit, Increment: p.Increment, Rated: p.Rated, Speed: speed, State: state, Reason: reason}
+	}
 	failed := func(st *SeekStatus, why string) {
-		st.Failed = &SeekFailure{At: time.Now().UnixMilli(), User: name, Title: u.Title, Rating: rating,
+		st.Failed = &SeekFailure{At: sent, User: name, Title: u.Title, Rating: rating,
 			Limit: p.Limit, Increment: p.Increment, Rated: p.Rated, Speed: speed, Error: why}
+		current(st, "", "failed", why)
 	}
 	if self, opponent, wait := ChallengeLimit(err); self {
 		// Your bot is rate limited: the loop holds every challenge until
@@ -730,6 +756,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 	b.mu.Lock()
 	b.holdBackoff = 0 // a challenge went through: the next refusal starts at a minute again
 	b.mu.Unlock()
+	b.seekUpdate(sk, func(st *SeekStatus) { current(st, ch.ID, "waiting", "") })
 	answer := make(chan string, 1)
 	b.mu.Lock()
 	if a, ok := b.answered[ch.ID]; ok {
@@ -755,6 +782,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		got = "stopped"
 	}
 	if got == "accepted" {
+		b.seekUpdate(sk, func(st *SeekStatus) { current(st, ch.ID, "accepted", "") })
 		return true, ch.ID, 0
 	}
 	if got == "timeout" || got == "stopped" {
@@ -767,14 +795,18 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		b.emit()
 	}
 	if got == "stopped" {
+		b.seekUpdate(sk, func(st *SeekStatus) { current(st, ch.ID, "gone", "") })
 		return false, "", 0
 	}
 	why := "did not answer"
+	state, reason := "expired", ""
 	if got != "timeout" {
 		why = "declined" + reasonText(got)
+		state, reason = "declined", strings.TrimPrefix(reasonText(got), ": ")
 	}
 	b.seekUpdate(sk, func(st *SeekStatus) {
 		st.Message = fmt.Sprintf("%s %s.", name, why)
+		current(st, ch.ID, state, reason)
 	})
 	return false, "", seekPause
 }

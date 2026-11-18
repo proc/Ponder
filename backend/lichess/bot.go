@@ -149,15 +149,17 @@ type GameView struct {
 type Status struct {
 	State string `json:"state"` // off, connecting, connected, reconnecting, notBot, error
 	// Accepting challenges automatically: off until turned on after connecting.
-	AutoAccept bool            `json:"autoAccept"`
-	Message    string          `json:"message"`
-	Account    *Account        `json:"account"`
-	BaseURL    string          `json:"baseUrl"`
-	Incoming   []ChallengeView `json:"incoming"`
-	Outgoing   []ChallengeView `json:"outgoing"`
-	Games      []GameView      `json:"games"`
-	Watching   string          `json:"watching"`
-	Seek       *SeekStatus     `json:"seek"`
+	AutoAccept bool     `json:"autoAccept"`
+	Message    string   `json:"message"`
+	Account    *Account `json:"account"`
+	BaseURL    string   `json:"baseUrl"`
+	// MaxGames is how many games the engine may play at once.
+	MaxGames int             `json:"maxGames"`
+	Incoming []ChallengeView `json:"incoming"`
+	Outgoing []ChallengeView `json:"outgoing"`
+	Games    []GameView      `json:"games"`
+	Watching string          `json:"watching"`
+	Seek     *SeekStatus     `json:"seek"`
 }
 
 // Hooks connect the bot to the rest of the app.
@@ -956,7 +958,8 @@ func (b *Bot) Status() Status {
 
 func (b *Bot) statusLocked() Status {
 	s := Status{State: b.state, AutoAccept: b.autoAccept, Message: b.message, Seek: b.seekStatusLocked(), Account: b.account, BaseURL: b.cfg.BaseURL,
-		Incoming: []ChallengeView{}, Outgoing: []ChallengeView{}, Games: []GameView{}, Watching: b.watching}
+		Incoming: []ChallengeView{}, Outgoing: []ChallengeView{}, Games: []GameView{}, Watching: b.watching,
+		MaxGames: max(1, b.cfg.Policy.MaxGames)}
 	if s.BaseURL == "" {
 		s.BaseURL = DefaultBaseURL
 	}

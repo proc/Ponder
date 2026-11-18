@@ -39,6 +39,24 @@ function chfFailed(who, f) {
 }
 window.challengeNotSent = chfFailed;
 
+function chfSeekChallenge(sc) {
+  const key = sc.id ? `engine:${sc.id}` : `engine:failed:${sc.at}`;
+  let it = chf.items.get(key);
+  if (!it) {
+    for (const [k, old] of chf.items) if (old.who === 'engine' && old.held) { clearTimeout(old.timer); chf.items.delete(k); }
+    const c = { id: sc.id || key, user: sc.user, title: sc.title ?? '', rating: sc.rating ?? 0, tc: chfClock(sc.limit, sc.increment ?? 0),
+      rated: Boolean(sc.rated), speed: sc.speed ?? '', color: 'random' };
+    it = { who: 'engine', c, state: 'waiting', text: '' };
+    chf.items.set(key, it);
+  }
+  if (sc.state === 'waiting') return;
+  // Its end, unless already known: a row the outgoing list took to be
+  // withdrawn learns here that it was declined, or had no answer.
+  if (it.state === 'waiting' || (it.state === 'gone' && sc.state !== 'gone') || (it.state === sc.state && (it.text ?? '') !== (sc.reason ?? ''))) {
+    chfEnd(key, sc.state, sc.reason ?? '');
+  }
+}
+
 function chfSave() {
   try { localStorage.setItem('challengeFloat', JSON.stringify({ folded: Boolean(chf.pos.folded), hidden: Boolean(chf.pos.hidden) })); } catch { /* not kept */ }
 }
@@ -67,8 +85,9 @@ function chfEnd(key, state, text) {
   it.text = text ?? '';
   it.endedAt = Date.now();
   clearTimeout(it.timer);
-  // Challenging random bots: one not accepted stays until the next goes out.
-  it.held = it.who === 'engine' && state !== 'accepted' && Boolean(lx.status.seek?.active);
+  // Challenging random bots: the latest challenge stays, however it ended,
+  // until the next goes out (or the run stops).
+  it.held = it.who === 'engine' && Boolean(lx.status.seek?.active);
   if (!it.held) chfExpire(key, it);
 }
 
@@ -133,11 +152,12 @@ function trackChallenges(who, prev, next) {
     const why = kind === 'declined' ? (msg.split(/declined(?: (?:the|your) challenge)?[:,.]?\s*/i)[1] ?? '').replace(/\.$/, '') : '';
     chfEnd(recent[0], kind, why);
   }
-  // The random-bot challenger could not send one.
-  const failed = next.seek?.failed;
-  if (who === 'engine' && failed && failed.at !== prev.seek?.failed?.at) chfFailed('engine', failed);
+  // The random-bot challenger's latest challenge, as it says it stands: it
+  // is always shown, even one declined before a status listed it as out.
+  const sc = next.seek?.challenge;
+  if (who === 'engine' && sc && JSON.stringify(sc) !== JSON.stringify(prev.seek?.challenge)) chfSeekChallenge(sc);
   // No longer challenging random bots: those kept for the next one go.
-  if (who === 'engine' && (!next.seek?.active || next.seek.playing)) {
+  if (who === 'engine' && !next.seek?.active) {
     for (const [key, it] of chf.items) if (it.held) chfExpire(key, it);
   }
   renderChallengeFloat();
@@ -147,6 +167,13 @@ window.renderChallengeFloat = renderChallengeFloat;
 $('#ch-float-auto-on').onchange = (e) => switchAutoChallenge(e.target.checked);
 $('#ch-float-auto-stop').onclick = () => lichessCommand('lichessSeekStop');
 
+// An accepted challenge's game: starting, being played, or over.
+function chfGameText(id, who) {
+  const g = (who === 'engine' ? lx.status.games : me.status?.games)?.find?.((x) => x.id === id);
+  if (!g) return 'The game is starting';
+  return g.finished ? `Game over${g.result && g.result !== '*' ? ` · ${g.result.replace('1/2-1/2', '½–½').replace('-', '–')}` : ''}` : 'Playing now';
+}
+
 function renderChallengeFloat() {
   const win = $('#ch-float');
   const items = [...chf.items];
@@ -155,7 +182,9 @@ function renderChallengeFloat() {
   // Auto challenge (or a run of random-bot challenges) can be stopped here.
   const seeking = Boolean(lx.status.seek?.active);
   const auto = typeof autoChallenge !== 'undefined' && autoChallenge;
-  const wanted = !(items.length === 0 && !upcoming?.at && !(auto && seeking));
+  // Up while your engine is challenging random bots, so its bottom row says
+  // how the run stands (and why nothing goes out while it plays its games).
+  const wanted = !(items.length === 0 && !upcoming?.at && !seeking);
   win.hidden = !wanted || Boolean(chf.pos.hidden);
   // Hidden with ✕: a button in the tray says how it stands, and brings it back.
   const pill = chfPill();
@@ -173,6 +202,12 @@ function renderChallengeFloat() {
   $('#ch-float-auto-label').firstElementChild.textContent = auto ? 'Auto challenge' : 'Random bots';
   const { games = 0, played = 0 } = lx.status.seek ?? {};
   $('#ch-float-auto-sub').textContent = auto || games <= 0 ? 'without end' : `game ${Math.min(games, played + 1)} of ${games}`;
+  // How many games your engine may play at once, and how many it is in.
+  const most = lx.status.maxGames || 1;
+  const going = (lx.status.games ?? []).filter((g) => !g.finished && g.playing).length;
+  const gamesLine = $('#ch-float-games');
+  gamesLine.textContent = `${going} of ${most} game${most === 1 ? '' : 's'} at once` + (going >= most ? ': the next challenge waits for one to end' : '');
+  gamesLine.classList.toggle('full', going >= most);
   // Each time it opens: at the bottom right.
   if (was) { delete chf.pos.x; delete chf.pos.y; }
   const next = $('#ch-float-next');
@@ -196,7 +231,7 @@ function renderChallengeFloat() {
       : lxButton('✕', () => { clearTimeout(it.timer); chf.items.delete(key); renderChallengeFloat(); }, 'small chf-x');
     if (state !== 'waiting') { action.title = 'Dismiss'; action.setAttribute('aria-label', 'Dismiss'); }
     const detail = state === 'waiting' ? expiryNote(c)
-      : el('span', { className: 'lx-meta chf-detail', textContent: state === 'accepted' ? 'The game is starting' : it.text, title: it.text });
+      : el('span', { className: 'lx-meta chf-detail', textContent: state === 'accepted' ? chfGameText(c.id, who) : it.text, title: it.text });
     return el('div', { className: 'chf-row ' + state }, [
       el('div', { className: 'chf-line' }, [
         el('span', { className: 'lx-meta', textContent: who === 'engine' ? 'Your engine →' : 'You →' }),

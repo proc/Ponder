@@ -1065,7 +1065,8 @@ function renderPlayers() {
       || (state.external.kind === 'play' && side === state.external.side));
     const play = ours && state.external.kind === 'play';
     const offers = play ? window.playGameOnBoard?.() : null;
-    $('.resign', box).hidden = !((state.active && player?.type === 'human') || ours);
+    // Your engine's Lichess games have no Resign: the engine plays them out.
+    $('.resign', box).hidden = !((state.active && player?.type === 'human') || play);
     $('.resign', box).dataset.side = side;
     $('.draw', box).hidden = !((state.active && nearest && humans === 2) || (play && !offers?.draw));
     $('.draw', box).title = play ? 'Offer a draw' : 'Agree a draw';

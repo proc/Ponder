@@ -1914,6 +1914,8 @@ body.zen .float-win { display: none; }
 .chf-auto[hidden] { display: none; }
 .chf-auto label { flex: 1; min-width: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chf-auto label b { font-weight: 600; }
+.chf-auto .chf-games { display: block; white-space: normal; font-size: 0.8rem; color: var(--muted); }
+.chf-auto .chf-games.full { color: var(--text); }
 #ch-float-auto [hidden] { display: none; }
 .float-win.folded > .chf-auto:not([hidden]) { display: flex; }
 .chf-list:empty + .chf-next[hidden] + .chf-auto { border-top: 0; }

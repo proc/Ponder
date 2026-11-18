@@ -1,0 +1,112 @@
+# Your engine on Lichess
+
+Your engine can play on [Lichess](https://lichess.org) through the [Bot API](https://lichess.org/api#tag/Bot), from the **Bot** part of the Lichess tab. For playing and watching yourself, see [Lichess](lichess.md).
+
+## Connecting
+
+1. Create a new Lichess account that has never played a game. Signed in to it, create a token with `bot:play`, `challenge:read` and `challenge:write` (**Settings → Lichess → Create a token on Lichess** ticks these).
+2. Paste it in **Settings → Lichess**, choose the engine and press **Connect**. The token is encrypted with the system keychain when available and never shown again.
+3. If needed, press **Upgrade to Bot account** and confirm. This cannot be undone.
+
+Connecting only lists challenges and games. Your engine plays only games you start here (**Accept**, or a challenge you send). Games started elsewhere are listed as *Not played* with **Play** to hand them to the engine. Disconnecting mid-game resigns those games, after asking.
+
+## Engine and account
+
+- The **Engine** menu under **Your engine on Lichess** picks the bot's engine (same as Settings → Lichess); **Options…** opens its UCI options. A different engine plays from the next game; games in progress keep theirs. Saved options reach games in progress too, before the engine's next search. To restart the engine of a game in progress (a stuck engine, say), use **⇄ Engine** → **↻ Reload** on your engine's bar beside the board.
+- **Games at once**, under the Engine menu, is how many games your engine plays at the same time (1–8). It counts games being played, accepted challenges not yet started, and your engine's own waiting challenge. **Accept automatically** and the random-bot challenger both keep within it; a challenge you accept or send by hand isn't held back. Changes apply at once.
+- **Engine and bot account** shows the engine's name, program, command line and UCI options, and the bot's ratings per speed, record, peak and lowest, and rating history, refreshed after each game.
+
+## Accepting challenges
+
+Challenges to your bot (or your own account) are listed in the tab and float up in a window at the bottom right, each with **Accept**, **Decline**, the challenger's ratings, games, record and bio (**More…** for full record and rating history), and **Decline with** to pick Lichess's reason (too fast, rated only, no bots, …). **Hide** (or ✕) shrinks it to a corner button with the count; the next challenge brings it back.
+
+**Accept automatically** (off after every connect) accepts challenges matching the **Auto-accept rules** and declines the rest with the matching reason. The rules set:
+
+- speeds (UltraBullet to Classical), rated and casual, people and bots, set-up positions;
+- minutes and increment, and challenger rating (from – to; unrated challengers pass).
+
+A challenge that would go over **Games at once** is declined with "later".
+
+An empty limit means any; changes apply at once, and rules that would decline everything are flagged. Variants and correspondence are always declined.
+
+## Challenging
+
+You can challenge any player or online bot (time, increment, colour, rated). One challenge waits at a time; Challenge buttons are off until it is answered or cancelled. An unanswered challenge is withdrawn after 30 seconds (change it, or 0 for never, in **Settings → Lichess**). A failed, declined or unanswered challenge raises a notification at the top right saying why; hover to keep it, ✕ to dismiss it.
+
+### Online bots
+
+**Online bots**, at the bottom of **Bot**, lists up to 300 bots online now, no connection needed: title, flag, rating at the chosen speed (**?** for provisional), games, other ratings, and free or playing (refreshed every 20 seconds). Search by name, bio or country, filter by rating or free only, and sort by rating, games, time played, name or newest. Hover a name for the player card; click a bot for its details. Each row has **Challenge** (your engine, with *Challenge a player*'s settings), **Play** (you, with *Challenge a friend*'s settings), **TV** (watch it on the board) and **Profile**.
+
+### Random bot
+
+**Challenge random bot** challenges a random online bot matching these settings, kept between runs:
+
+- **Clock** – time and increment; ratings are read at its speed.
+- **Your engine plays** – either color, White or Black.
+- **Random clock** – a random pairing per challenge from chosen minutes and increments (default 1 and 3 minutes, 1 or 2 seconds), like lichess-bot's `challenge_initial_time` and `challenge_increment`.
+- **Rated** – *Casual*, *Rated* or *Random*.
+- **Their rating** – *Between* two values (empty: any), or *Around yours* by that many points, re-read every few minutes.
+- **Skip provisional ratings** and **At least … games** at the speed.
+- **Never challenge** – comma-separated bot names.
+
+A bot that declines or does not answer in 30 seconds is replaced by another, at most one challenge a minute, until one accepts; it starts over after a short wait when all have been asked. **Stop** ends it. **Games** keeps it going until that many games have started (0: until **Stop**), holding back only while **Games at once** is full; it can start while your engine plays.
+
+### Auto challenge
+
+The **Auto challenge** switch runs the random-bot challenger without end. It starts when turned on and each time the engine connects, and ends when turned off or with **Stop**. It is off by default. Settings changed while it runs apply from its next look at the bots.
+
+### Rate limits
+
+When Lichess refuses a challenge for too many requests (including the daily bot-games limit, which can last hours), nothing goes out until the wait ends: Lichess's time, or 1, 2, 4, 8, up to 10 minutes, reset on success. Restarting does not shorten it. Bots that have used up their daily bot games are skipped.
+
+## The challenge window
+
+Every challenge you send, including ones made on the Lichess website, shows in a small floating window: waiting (with countdown and **Cancel**), accepted, declined with reason, no answer, withdrawn, or **Not sent** with the error. Answered challenges go after a few seconds.
+
+While the random-bot challenger runs, the window stays up with its latest challenge, "Next challenge in 42 s", an **Auto challenge** switch or the game count with **Stop**, and "1 of 2 games at once". Drag, fold or hide it (✕); a **Challenges** button at the bottom right brings it back. It is hidden in zen mode.
+
+## Watching your engine play
+
+Each game uses its own copy of the engine, on the Lichess clock; Analysis pauses meanwhile.
+
+- **Watch** shows a game live from your engine's side, with **✕ Abort** before the second move. There's no Resign for a game your engine plays: it plays it out (a *Not played* game can still be resigned from its row). The first game takes the board by itself.
+- The side panels show the engine's window, the Game card, the chat and an **Opponent** card.
+- A solid arrow shows the move the engine intends, a dashed one the reply it expects; that piece wears a thought bubble. Arrows show only on the live position.
+
+### Several engine games at once
+
+With **Games at once** above one, a row of small boards appears, as when [watching several games](lichess.md#several-games-at-once), and **Tiles** works too. Click a game to switch the board; a new game takes the board unless you turn off **Switch the board to your engine's new game when it starts another** (Settings → General). When the game on the board ends, another takes over three seconds later (after up to 12 seconds for a rating change).
+
+### Match history
+
+A floating **Match history** window lists finished games, newest first, with a win/draw/loss tally: final position, **Won** / **Lost** / **Draw** and how, opponent, moves, colour, clock and date. Click one to view it. The last 60 are kept; **Clear history** empties it. It moves, folds and hides like the chat.
+
+## The engine window
+
+While your engine's game is on the board, its window floats: drag, resize, fold or hide it (a button with the engine's name and depth brings it back). Its place and size are remembered, and each new game shows it again. It shows:
+
+- **Depth** – a large badge beside the engine's name.
+- **Statistics** – average depth, nodes a move, speed, **Ponder hits** and moves searched.
+- **Win/draw/loss chances** – for engines with `UCI_ShowWDL`, a bar for the best line and one beside each line.
+- **Live search** – up to 25 updates a second; a **ponder** row while pondering, and a **hit** mark on moves that began as ponder hits.
+- **Scores** – on the evaluation bar, in the moves list and on each row, kept for the whole game.
+
+See [Engines and analysis](engines-and-analysis.md) for engines in general.
+
+## Pondering
+
+Your engine thinks on its opponent's time when it supports the `Ponder` option. A ponder hit is called out over the moved piece with **PONDER HIT!** and a short sound (it follows the Sounds setting, also in zen mode). **Settings → Lichess → Think on the opponent's time** turns this off.
+
+## Draws
+
+Under **Settings → Lichess → Draws** (lichess-bot's `offer_draw_*` options):
+
+- *Offer and accept draws* turns it on or off.
+- *Score within … centipawns of zero*, *for … moves in a row*, *with at most … pieces on the board* set when a draw is offered.
+- *Also when the Lichess tablebase says the position is a draw* offers one in drawn positions of seven pieces or fewer, looked up at `tablebase.lichess.ovh` (only the position is sent).
+
+The same rules accept the opponent's offers. Defaults: on, 0, 10 moves, 10 pieces, tablebase on; changes apply at once, also to games under way. When the rules do not accept an offer, a small window at the top asks you to **Accept draw** or **Decline**; the offer lapses at your engine's next move.
+
+## Hello and goodbye
+
+Your engine greets its opponent and spectators when a game starts and says goodbye when it ends. **Settings → Lichess → Chat messages** sets the four messages (`{me}` and `{opponent}` are replaced); an empty message is not sent, and **Say nothing** turns them all off. There is no hello in a game already under way and no goodbye after an abort.

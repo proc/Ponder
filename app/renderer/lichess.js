@@ -274,9 +274,13 @@ function renderLichess() {
       actions.push(lxButton('Play', () => lxPlay(g), 'small primary'));
     }
     if (!g.finished) {
-      actions.push(lxButton('Resign', async () => {
-        if (await confirmDialog(`Resign the game against ${g.opponent}?`, 'Resign')) lichessCommand('lichessResign', { id: g.id });
-      }));
+      // A game your engine plays has no Resign: the engine plays it out. One
+      // it does not play (started elsewhere) can still be resigned.
+      if (!g.playing) {
+        actions.push(lxButton('Resign', async () => {
+          if (await confirmDialog(`Resign the game against ${g.opponent}?`, 'Resign')) lichessCommand('lichessResign', { id: g.id });
+        }));
+      }
       if (g.moves < 2) actions.push(lxButton('Abort', () => lichessCommand('lichessAbort', { id: g.id })));
     }
     actions.push(lxLink(g.url, 'Lichess ↗', 'Open the game on Lichess'));
@@ -325,7 +329,6 @@ function rulesSummary(p) {
   const rating = rangeText(p.minRating, p.maxRating);
   if (rating) parts.push(`rated ${rating}`);
   if (p.noFromPosition) parts.push('usual start only');
-  parts.push(`${p.maxGames} game${p.maxGames === 1 ? '' : 's'} at once`);
   return parts.join(' · ');
 }
 
@@ -356,8 +359,8 @@ function renderLichessRules(error) {
     num('#lr-min', p.minMinutes); num('#lr-max', p.maxMinutes);
     num('#lr-inc-min', p.minIncrement); num('#lr-inc-max', p.maxIncrement);
     num('#lr-rating-min', p.minRating); num('#lr-rating-max', p.maxRating);
-    $('#lr-games').value = p.maxGames;
   }
+  if (document.activeElement !== $('#lx-games')) $('#lx-games').value = p.maxGames || 1;
   $('#lx-rules-summary').textContent = rulesSummary(p);
   const problem = error || rulesProblem(p);
   $('#lx-rules-error').textContent = problem;
@@ -377,7 +380,6 @@ $('#lx-rules-form').onchange = async () => {
     minMinutes: +$('#lr-min').value || 0, maxMinutes: +$('#lr-max').value || 0,
     minIncrement: +$('#lr-inc-min').value || 0, maxIncrement: +$('#lr-inc-max').value || 0,
     minRating: +$('#lr-rating-min').value || 0, maxRating: +$('#lr-rating-max').value || 0,
-    maxGames: +$('#lr-games').value || 1,
   };
   let error = '';
   try {
@@ -389,6 +391,21 @@ $('#lx-rules-form').onchange = async () => {
   renderLichessRules(error);
 };
 $('#lx-rules-form').onsubmit = (e) => e.preventDefault();
+// Games at once: how many games your engine plays at the same time, kept by
+// Accept automatically and by the random-bot challenger (a challenge
+// accepted or sent by hand is not held back). Kept with the rules; applies
+// at once.
+$('#lx-games').onchange = async (e) => {
+  const n = Math.min(8, Math.max(1, Math.round(+e.target.value || 1)));
+  e.target.value = n;
+  try {
+    lx.settings = await api.lichess.save({ policy: { maxGames: n } });
+    if (lxOnline()) await api.lichess.configure();
+  } catch (err) {
+    lxSetNote(errorText(err));
+  }
+  renderLichessRules();
+};
 try { $('#lx-rules').open = localStorage.getItem('lichessRulesOpen') === '1'; } catch { /* closed */ }
 $('#lx-rules').ontoggle = () => { try { localStorage.setItem('lichessRulesOpen', $('#lx-rules').open ? '1' : '0'); } catch { /* ignore */ } };
 

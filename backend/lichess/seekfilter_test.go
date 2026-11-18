@@ -280,3 +280,30 @@ func TestBotListsTheChallengesAlreadyOut(t *testing.T) {
 		t.Fatalf("outgoing: %+v", s.Outgoing)
 	}
 }
+
+// The run's latest challenge is in its status however it ended: one
+// declined at once still shows, declined, with the reason.
+func TestSeekReportsItsChallengeDeclinedAtOnce(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 2*time.Second, 300*time.Millisecond, 200*time.Millisecond, 20*time.Millisecond
+	h := newHarness(t, Policy{})
+	h.fake.Delay = time.Millisecond
+	h.fake.Online = []fake.OnlineBot{{Name: "maia1", Rating: 1500}}
+	h.fake.Decliners = map[string]string{"maia1": "tooFast"}
+	h.connect()
+	if err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2, Color: "random"}}); err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitFor("the challenge declined", func(s Status) bool {
+		return s.Seek != nil && s.Seek.Challenge != nil && s.Seek.Challenge.State == "declined"
+	})
+	c := s.Seek.Challenge
+	if !strings.EqualFold(c.User, "maia1") || c.ID == "" || c.Reason != "too fast" || c.Limit != 180 || c.Increment != 2 {
+		t.Fatalf("challenge: %+v", c)
+	}
+	// It stays in the status while the run waits to send the next.
+	time.Sleep(100 * time.Millisecond)
+	if st := h.bot.Status(); st.Seek == nil || st.Seek.Challenge == nil || st.Seek.Challenge.ID != c.ID {
+		t.Fatalf("gone from the status: %+v", st.Seek)
+	}
+	h.bot.StopSeek()
+}
