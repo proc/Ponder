@@ -75,6 +75,27 @@ function switchToNewBotGame(prev, next) {
   if (fresh) lichessCommand('lichessWatch', { id: fresh.id });
 }
 
+// The game of your engine's on the board ends while it has others going:
+// after a moment (the result shows first), the newest of them takes the
+// board, unless a game was picked by hand meanwhile.
+let lxPicks = 0; // games put on the board by hand, counted
+const SWITCH_HOLD = 3000;
+function switchFromEndedBotGame(prev, next) {
+  const id = next.watching;
+  if (!id || !(state?.external?.kind === 'bot' && state.external.id === id)) return;
+  const before = (prev.games ?? []).find((g) => g.id === id);
+  const now = (next.games ?? []).find((g) => g.id === id);
+  if (!before || before.finished || !now?.finished) return;
+  const picks = lxPicks;
+  setTimeout(() => {
+    const s = lx.status;
+    if (lxPicks !== picks || s.watching !== id || state?.external?.id !== id) return;
+    const live = (s.games ?? []).filter((g) => !g.finished && g.id !== id).reverse(); // newest first
+    const pick = live.find((g) => g.playing) ?? live[0];
+    if (pick) lichessCommand('lichessWatch', { id: pick.id });
+  }, SWITCH_HOLD);
+}
+
 // A game of your engine's that ends while another is on the board.
 function koForBackgroundGames(prev, next) {
   if (next.state !== 'connected' && next.state !== 'reconnecting') return;
@@ -91,6 +112,7 @@ function lichessStatus(next) {
   const prev = lx.status;
   lx.status = next;
   switchToNewBotGame(prev, next);
+  switchFromEndedBotGame(prev, next);
   koForBackgroundGames(prev, next);
   window.trackMatchHistory?.(next);
   // A new challenge waiting for an answer.
@@ -374,6 +396,7 @@ async function lxWatch(id) {
     const ok = await confirmDialog('Show the Lichess game on the board? The game you are playing here will be abandoned.', 'Show Lichess game');
     if (!ok) return;
   }
+  lxPicks++;
   await lichessCommand('lichessWatch', { id });
 }
 
@@ -699,19 +722,49 @@ function lxSpeed() {
 // kept between runs.
 const SEEK_FIELDS = { time: '#lx-seek-time', inc: '#lx-seek-inc', color: '#lx-seek-color', rated: '#lx-seek-rated',
   mode: '#lx-seek-mode', min: '#lx-seek-min', max: '#lx-seek-max', around: '#lx-seek-around',
-  noProv: '#lx-seek-noprov', minGames: '#lx-seek-mingames', exclude: '#lx-seek-exclude', games: '#lx-seek-games' };
-const seekSpeed = () => {
-  const t = +$('#lx-seek-time').value + 40 * +$('#lx-seek-inc').value;
+  noProv: '#lx-seek-noprov', minGames: '#lx-seek-mingames', exclude: '#lx-seek-exclude', games: '#lx-seek-games',
+  randClock: '#lx-seek-randclock' };
+const speedOf = (limit, inc) => {
+  const t = limit + 40 * inc;
   return t < 30 ? 'ultraBullet' : t < 180 ? 'bullet' : t < 480 ? 'blitz' : t < 1500 ? 'rapid' : 'classical';
+};
+// Random challenge types, as lichess-bot's matchmaking does them: with the
+// random clock on, each challenge draws its initial time and increment from
+// the chips that are on (every pairing of them); Rated can be random too.
+const SEEK_CHIPS = { times: '#lx-seek-times', incs: '#lx-seek-incs' };
+const SEEK_CHIP_DEFAULTS = { times: [60, 180], incs: [1, 2] }; // lichess-bot's own defaults
+const seekChips = (key) => [...$(SEEK_CHIPS[key]).querySelectorAll('.chip.on')].map((b) => +b.dataset.v);
+function setSeekChips(key, values) {
+  for (const b of $(SEEK_CHIPS[key]).querySelectorAll('.chip')) {
+    const on = values.includes(+b.dataset.v);
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+  }
+}
+const randomClock = () => $('#lx-seek-randclock').checked;
+// The time controls the challenger plays: the one picked, or every pairing.
+function seekClocks() {
+  if (!randomClock()) return [[+$('#lx-seek-time').value, +$('#lx-seek-inc').value]];
+  return seekChips('times').flatMap((t) => seekChips('incs').map((i) => [t, i]));
+}
+const SPEED_ORDER = ['ultraBullet', 'bullet', 'blitz', 'rapid', 'classical'];
+const seekSpeed = () => {
+  const speeds = new Set(seekClocks().map(([t, i]) => speedOf(t, i)));
+  return SPEED_ORDER.filter((s) => speeds.has(s)).join('/') || 'none';
 };
 function saveSeekForm() {
   const out = {};
   for (const [k, id] of Object.entries(SEEK_FIELDS)) out[k] = $(id).type === 'checkbox' ? $(id).checked : $(id).value;
+  for (const k of Object.keys(SEEK_CHIPS)) out[k] = seekChips(k);
   try { localStorage.setItem('lichessSeek', JSON.stringify(out)); } catch { /* ignore */ }
 }
 function loadSeekForm() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('lichessSeek') ?? '{}') ?? {}; } catch { /* ignore */ }
+  if (typeof saved.rated === 'boolean') saved.rated = saved.rated ? 'rated' : 'casual'; // was a switch
+  for (const k of Object.keys(SEEK_CHIPS)) {
+    setSeekChips(k, Array.isArray(saved[k]) && saved[k].length ? saved[k].map(Number) : SEEK_CHIP_DEFAULTS[k]);
+  }
   for (const [k, id] of Object.entries(SEEK_FIELDS)) {
     const v = saved[k];
     if (v == null || v === '') continue;
@@ -724,8 +777,24 @@ function renderSeekForm() {
   const around = $('#lx-seek-mode').value === 'around';
   $('#lx-seek-range').hidden = around;
   $('#lx-seek-around-box').hidden = !around;
-  $('#lx-seek-speed').textContent = seekSpeed();
+  const random = randomClock();
+  $('#lx-seek').classList.toggle('randclock', random);
+  $('#lx-seek-pick').hidden = !random;
+  $('#lx-seek-speed').textContent = random ? `random: ${seekSpeed()}` : seekSpeed();
+  $('#lx-seek-rated-sub').textContent = $('#lx-seek-rated').value === 'random' ? 'each challenge at random' : '';
   renderSeekGames();
+}
+for (const box of Object.values(SEEK_CHIPS)) {
+  $(box).addEventListener('click', (e) => {
+    const b = e.target.closest('.chip');
+    if (!b) return;
+    const on = !b.classList.contains('on');
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+    renderSeekForm();
+    saveSeekForm();
+    updateRunningSeek();
+  });
 }
 for (const id of Object.values(SEEK_FIELDS)) {
   $(id).addEventListener(id === '#lx-seek-exclude' || $(id).type === 'number' ? 'input' : 'change', () => {
@@ -748,9 +817,14 @@ function seekParams() {
   const max = around ? 0 : +$('#lx-seek-max').value || 0;
   if (min && max && min > max) return { error: 'The lowest rating is above the highest.' };
   if ($('#lx-seek-mode').value === 'around' && !around) return { error: 'Give how many points either side of your bot\'s rating.' };
+  const random = randomClock();
+  if (random && !seekChips('times').length) return { error: 'Pick at least one initial time for the random clock.' };
+  if (random && !seekChips('incs').length) return { error: 'Pick at least one increment for the random clock.' };
+  const ratedMode = $('#lx-seek-rated').value;
   return {
-    rated: $('#lx-seek-rated').checked, color: $('#lx-seek-color').value,
+    rated: ratedMode === 'rated', ratedMode, color: $('#lx-seek-color').value,
     limit: +$('#lx-seek-time').value, increment: +$('#lx-seek-inc').value, minRating: min, maxRating: max, around,
+    times: random ? seekChips('times') : [], increments: random ? seekChips('incs') : [],
     noProvisional: $('#lx-seek-noprov').checked, minGames: Math.max(0, Math.round(+$('#lx-seek-mingames').value || 0)),
     exclude: $('#lx-seek-exclude').value.split(/[,\s]+/).map((n) => n.trim()).filter(Boolean),
   };
@@ -855,7 +929,10 @@ function renderSeek() {
       : `any ${seek.speed} rating`;
     const text = () => {
       const left = seek.nextAt ? Math.max(0, Math.ceil((seek.nextAt - Date.now()) / 1000)) : 0;
-      const next = left ? ` Next challenge in ${left} s.` : '';
+      // Seconds, or minutes and hours for a long wait (a rate limit).
+      const inText = left < 90 ? `${left} s` : left < 3600 ? `${Math.round(left / 60)} min`
+        : `${Math.floor(left / 3600)} h${Math.round((left % 3600) / 60) ? ` ${Math.round((left % 3600) / 60)} min` : ''}`;
+      const next = left ? ` Next challenge in ${inText}.` : '';
       // Which game it is on, when more than one was asked for.
       const many = seek.games !== 1;
       const game = !many ? '' : seek.playing ? ` · game ${seek.played}${seek.games ? ` of ${seek.games}` : ''}`

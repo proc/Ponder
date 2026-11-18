@@ -6,7 +6,7 @@
   <title>Ponder</title>
   <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="ai-off">
   <main class="app">
     <section class="table">
       <div class="player" id="player-top">
@@ -16,6 +16,7 @@
           <button type="button" class="act draw" title="Agree a draw" hidden>½ Draw</button>
           <button type="button" class="act abort" title="Abort the game: it ends without a result" hidden>✕ Abort</button>
           <button type="button" class="act takeback" title="Take back your last move" hidden>↶ Takeback</button>
+          <button type="button" class="act engine" title="Swap this engine for another, or reload it, without stopping the game" aria-haspopup="menu" hidden>⇄ Engine</button>
           <span class="offer" hidden></span>
         </span>
         <span class="clock"></span>
@@ -60,6 +61,7 @@
           <button type="button" class="act draw" title="Agree a draw" hidden>½ Draw</button>
           <button type="button" class="act abort" title="Abort the game: it ends without a result" hidden>✕ Abort</button>
           <button type="button" class="act takeback" title="Take back your last move" hidden>↶ Takeback</button>
+          <button type="button" class="act engine" title="Swap this engine for another, or reload it, without stopping the game" aria-haspopup="menu" hidden>⇄ Engine</button>
           <span class="offer" hidden></span>
         </span>
         <span class="clock"></span>
@@ -614,6 +616,16 @@
                       </span>
                     </div>
                     <div class="lx-card-row lx-set">
+                      <label class="lx-set-label" for="lx-seek-randclock" title="Each challenge takes its initial time and increment at random from the ones picked below, as lichess-bot's matchmaking does with challenge_initial_time and challenge_increment. When no bot in range is rated at the clock drawn, another is tried">Random clock <span class="lx-set-sub">a different one each challenge</span></label>
+                      <span class="lx-set-ctl"><input type="checkbox" class="lx-switch" id="lx-seek-randclock" role="switch"></span>
+                    </div>
+                    <div class="lx-card-row lx-set lx-seek-pick" id="lx-seek-pick" hidden>
+                      <span class="lx-set-label">Minutes</span>
+                      <span class="lx-chips" id="lx-seek-times" role="group" aria-label="Initial times to choose from"><button type="button" class="chip" data-v="15" aria-pressed="false">¼</button><button type="button" class="chip" data-v="30" aria-pressed="false">½</button><button type="button" class="chip" data-v="60" aria-pressed="false">1</button><button type="button" class="chip" data-v="120" aria-pressed="false">2</button><button type="button" class="chip" data-v="180" aria-pressed="false">3</button><button type="button" class="chip" data-v="300" aria-pressed="false">5</button><button type="button" class="chip" data-v="600" aria-pressed="false">10</button><button type="button" class="chip" data-v="900" aria-pressed="false">15</button><button type="button" class="chip" data-v="1800" aria-pressed="false">30</button><button type="button" class="chip" data-v="3600" aria-pressed="false">60</button></span>
+                      <span class="lx-set-label">Increment <span class="lx-set-sub">seconds</span></span>
+                      <span class="lx-chips" id="lx-seek-incs" role="group" aria-label="Increments to choose from"><button type="button" class="chip" data-v="0" aria-pressed="false">0</button><button type="button" class="chip" data-v="1" aria-pressed="false">1</button><button type="button" class="chip" data-v="2" aria-pressed="false">2</button><button type="button" class="chip" data-v="3" aria-pressed="false">3</button><button type="button" class="chip" data-v="5" aria-pressed="false">5</button><button type="button" class="chip" data-v="10" aria-pressed="false">10</button><button type="button" class="chip" data-v="20" aria-pressed="false">20</button><button type="button" class="chip" data-v="30" aria-pressed="false">30</button></span>
+                    </div>
+                    <div class="lx-card-row lx-set">
                       <span class="lx-set-label">Your engine plays</span>
                       <span class="lx-set-ctl">
                         <select id="lx-seek-color" aria-label="Your engine's color">
@@ -622,8 +634,12 @@
                       </span>
                     </div>
                     <div class="lx-card-row lx-set">
-                      <label class="lx-set-label" for="lx-seek-rated">Rated</label>
-                      <span class="lx-set-ctl"><input type="checkbox" class="lx-switch" id="lx-seek-rated" role="switch"></span>
+                      <label class="lx-set-label" for="lx-seek-rated">Rated <span class="lx-set-sub" id="lx-seek-rated-sub"></span></label>
+                      <span class="lx-set-ctl">
+                        <select id="lx-seek-rated" aria-label="Rated or casual" title="Random: each challenge rated or casual at random, as lichess-bot's challenge_mode: random does">
+                          <option value="casual">Casual</option><option value="rated">Rated</option><option value="random">Random</option>
+                        </select>
+                      </span>
                     </div>
                     <div class="lx-card-row lx-set">
                       <span class="lx-set-label">Their rating</span>
@@ -1066,7 +1082,7 @@
         <div class="set-card">
           <div class="set-row">
             <label class="set-label" for="glass-transparency">Transparency <span class="set-sub">how much shows through the panels and windows</span></label>
-            <span class="set-ctl"><span class="set-range-end">Solid</span><input type="range" id="glass-transparency" min="0" max="90" step="2"><span class="set-range-end">Clear</span> <output id="glass-transparency-value"></output></span>
+            <span class="set-ctl"><span class="set-range-end">Solid</span><input type="range" id="glass-transparency" min="0" max="100" step="2"><span class="set-range-end">Clear</span> <output id="glass-transparency-value"></output></span>
           </div>
         </div>
         <p class="set-foot">The cards of the side panel, the column beside the board, the floating windows and this window. Dark themes are a little clearer at the same setting.</p>
@@ -1154,6 +1170,10 @@
       <div class="settings-pane ai-settings" data-pane="ai" hidden>
         <p class="hint">The AI model used for <b>AI annotate</b> (under Annotate in the Moves tab), the <b>AI</b> panel's chat and the live commentary: from <b>OpenAI</b>, <b>Claude</b> (Anthropic) or <b>Google AI</b> (Gemini) with your API key, or from any OpenAI-compatible server, such as a local one (oMLX, LM Studio, Ollama, llama.cpp, vLLM).</p>
         <div class="set-card">
+          <label class="set-row" for="ai-enabled"><span class="set-label">Use an AI model <span class="set-sub">for AI annotate, the AI chat and the live commentary</span></span><input type="checkbox" class="lx-switch" id="ai-enabled" role="switch"></label>
+        </div>
+        <div id="ai-fields" hidden>
+        <div class="set-card">
         <label class="row" title="Who runs the model. Each keeps its own model and API key.">Provider <select id="ai-provider"></select></label>
         <label class="row" id="ai-url-row" title="An OpenAI-compatible API. localhost:8000 is enough for a local server.">Endpoint <input type="text" id="ai-url" spellcheck="false" autocomplete="off" placeholder="http://localhost:8000/v1"></label>
         <label class="row" title="The model to ask, from those the endpoint or provider lists (Refresh asks again).">Model
@@ -1164,7 +1184,12 @@
         <label class="row" id="ai-key-row" title="Kept encrypted on this computer, never shown again. Local servers usually need none.">API key <input type="password" id="ai-key" autocomplete="off" placeholder="Not needed for most local servers"></label>
         </div>
         <p class="hint" id="ai-note">Nothing is sent until you press AI annotate or send a message in the AI panel: then the game on the board goes to this endpoint, as PGN, with the position shown. It waits for the answer as long as the model takes; Stop cancels it.</p>
+        </div>
         <h3 class="set-group">Commentary voice</h3>
+        <div class="set-card">
+          <label class="set-row" for="tts-enabled"><span class="set-label">Use a speech server <span class="set-sub">to read the commentary aloud; the computer's own voices need none</span></span><input type="checkbox" class="lx-switch" id="tts-enabled" role="switch"></label>
+        </div>
+        <div id="tts-fields" hidden>
         <div class="set-card">
         <label class="row" title="An OpenAI-compatible text-to-speech API (POST …/v1/audio/speech): OpenAI's, or a server of your own such as Kokoro-FastAPI, openedai-speech or LocalAI. localhost:8880 is enough for a local server.">Endpoint <input type="text" id="tts-url" spellcheck="false" autocomplete="off" placeholder="https://api.openai.com/v1"></label>
         <label class="row" title="The speech model, from those the endpoint lists (its speech models, when it says which). Refresh asks again.">Model
@@ -1177,8 +1202,9 @@
         <label class="row" title="Kept encrypted on this computer, never shown again. OpenAI's endpoint uses the OpenAI key above when this is empty; local servers usually need none.">API key <input type="password" id="tts-key" autocomplete="off" placeholder="Not needed for most local servers"></label>
         </div>
         <p class="hint" id="tts-note">To use it, choose <b>Speech server</b> as the voice in the AI panel's Commentary view, with <b>Read aloud</b> on. Each comment's words are then sent to this endpoint and the sound it answers with is played.</p>
-        <h3 class="set-group">Commentator</h3>
-        <div class="set-card">
+        </div>
+        <h3 class="set-group ai-only">Commentator</h3>
+        <div class="set-card ai-only">
           <label class="set-row" for="cmt-on" title="A little pixel-art chess piece floats over the window and says each live comment in a comic speech bubble, in place of the commentary card beside the board"><span class="set-label">Show a commentator character <span class="set-sub">that says the live commentary</span></span><input type="checkbox" class="lx-switch" id="cmt-on" role="switch"></label>
           <div class="cmt-cast" id="cmt-cast" role="radiogroup" aria-label="Commentator"></div>
         </div>
@@ -1429,6 +1455,7 @@
   <script src="timecontrol.js"></script>
   <!-- A Lichess player's information, shown while hovering their name. -->
   <div id="player-pop" class="player-pop" role="tooltip" hidden></div>
+  <div id="engine-menu" class="tab-menu engine-menu" role="menu" hidden></div>
   <!-- An opening's history, strengths and weaknesses, shown while hovering its name. -->
   <div id="opening-pop" class="opening-pop" role="tooltip" hidden></div>
   <script src="renderer.js"></script>

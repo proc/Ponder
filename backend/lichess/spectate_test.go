@@ -264,3 +264,61 @@ func TestSpectateFollowsSeveralGames(t *testing.T) {
 		return v.ID == third && len(st.Games) == 1 && st.Games[0].ID == third
 	})
 }
+
+// The game on the board ends while the player has another going: after a
+// moment (the result shows first), that one takes the board.
+func TestSpectateSwitchesToALiveGameWhenTheShownOneEnds(t *testing.T) {
+	h := newSpect(t)
+	h.fake.MaxPlies = 400
+	h.fake.Delay = 40 * time.Millisecond
+	h.sp.SwitchHold = 300 * time.Millisecond
+	first := h.fake.AutoGame("maia1", "SlowBot", 600, 0)
+	second := h.fake.AutoGame("SlowBot", "grumpy", 600, 0)
+	if err := h.sp.Start(h.srv.URL, "SlowBot"); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("both games followed", func(_ game.ExternalView, st SpectateStatus) bool { return len(st.Games) == 2 })
+	_, st, _ := h.last()
+	shown, other := st.GameID, first
+	if shown == first {
+		other = second
+	}
+	h.fake.Resign(shown, "white")
+	ended := time.Now()
+	h.waitFor("the result on the board", func(v game.ExternalView, _ SpectateStatus) bool { return v.ID == shown && v.Finished })
+	h.waitFor("the other game on the board", func(v game.ExternalView, st SpectateStatus) bool { return v.ID == other && st.GameID == other })
+	if d := time.Since(ended); d < 250*time.Millisecond {
+		t.Fatalf("switched after %v, before the result had a moment on the board", d)
+	}
+	// With nothing else going, the last game's end stays on the board.
+	h.fake.Resign(other, "black")
+	h.waitFor("the last result", func(v game.ExternalView, _ SpectateStatus) bool { return v.ID == other && v.Finished })
+	time.Sleep(500 * time.Millisecond)
+	if v, st, _ := h.last(); v.ID != other || st.GameID != other {
+		t.Fatalf("moved off the last game to %s / %s", v.ID, st.GameID)
+	}
+}
+
+// A game picked by hand meanwhile is not taken off the board.
+func TestSpectateKeepsTheGamePickedAfterOneEnds(t *testing.T) {
+	h := newSpect(t)
+	h.fake.MaxPlies = 400
+	h.fake.Delay = 40 * time.Millisecond
+	h.sp.SwitchHold = 300 * time.Millisecond
+	a := h.fake.AutoGame("maia1", "SlowBot", 600, 0)
+	b := h.fake.AutoGame("SlowBot", "grumpy", 600, 0)
+	if err := h.sp.Start(h.srv.URL, "SlowBot"); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("both games followed", func(_ game.ExternalView, st SpectateStatus) bool { return len(st.Games) == 2 })
+	_, st, _ := h.last()
+	shown := st.GameID
+	h.fake.Resign(shown, "white")
+	h.waitFor("the result", func(v game.ExternalView, _ SpectateStatus) bool { return v.ID == shown && v.Finished })
+	// Picked again by hand at once: the finished one stays.
+	h.sp.Show(shown)
+	time.Sleep(500 * time.Millisecond)
+	if _, st, _ := h.last(); st.GameID != shown {
+		t.Fatalf("switched to %s although %s was picked (games %s %s)", st.GameID, shown, a, b)
+	}
+}

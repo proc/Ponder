@@ -3249,11 +3249,14 @@ input[type="checkbox"].lx-switch:disabled { opacity: .5; cursor: default; }
    what is behind, with a bright hairline edge and a soft shadow. Settings
    are rows as in the macOS settings. Dark themes get darker glass. */
 body {
-  /* --glass-t is the transparency chosen in Settings → Appearance (0–90%).
-     Windows floating over the board are a little more solid. */
-  --glass-solid: clamp(6%, calc(100% - var(--glass-t, 48%)), 100%);
+  /* --glass-t is the transparency chosen in Settings → Appearance (0–100%).
+     Windows floating over the board are a little more solid. Past the
+     middle of the range, --glass-k (1 → 0) takes away the extra body those
+     windows get and --glass-blur (1 → 0.2) thins the frosting, so at the
+     clear end the glass is nearly clear. */
+  --glass-solid: clamp(calc(6% * var(--glass-k, 1)), calc(100% - var(--glass-t, 48%)), 100%);
   --glass: color-mix(in srgb, var(--panel) var(--glass-solid), transparent);
-  --glass-float: color-mix(in srgb, var(--panel) clamp(20%, calc(var(--glass-solid) + 14%), 100%), transparent);
+  --glass-float: color-mix(in srgb, var(--panel) clamp(calc(20% * var(--glass-k, 1)), calc(var(--glass-solid) + 14% * var(--glass-k, 1)), 100%), transparent);
   --glass-edge: color-mix(in srgb, #fff 55%, transparent);
   --glass-shadow: 0 1px 2px rgb(0 0 0 / .05), 0 8px 24px rgb(0 0 0 / .07);
   --glass-fill: color-mix(in srgb, var(--text) 5%, transparent);
@@ -3269,7 +3272,7 @@ body {
     var(--panel);
 }
 :root:is([data-theme="cyberpunk"], [data-theme="obsidian"], [data-theme="dusk"]) body {
-  --glass-solid: clamp(4%, calc(90% - var(--glass-t, 48%)), 100%);
+  --glass-solid: clamp(calc(4% * var(--glass-k, 1)), calc(90% - var(--glass-t, 48%)), 100%);
   --glass-edge: color-mix(in srgb, #fff 12%, transparent);
   --glass-shadow: 0 1px 2px rgb(0 0 0 / .3), 0 10px 28px rgb(0 0 0 / .3);
   --glass-fill: color-mix(in srgb, var(--text) 7%, transparent);
@@ -3280,7 +3283,7 @@ body {
   .games-search, .games-empty, .ex-body, .annotate, .review, .tp-bar
 ), .moves-panel :is(#games-list, #moves) {
   background: var(--glass); border-radius: var(--r-l);
-  -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(28px * var(--glass-blur, 1))) saturate(180%); backdrop-filter: blur(calc(28px * var(--glass-blur, 1))) saturate(180%);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
 }
 .moves-panel .lx-tv-tile:hover:not(:disabled) { background: color-mix(in srgb, var(--panel) 80%, transparent); }
@@ -3293,7 +3296,7 @@ body {
 
 /* The tabs and the segmented controls: frosted tracks. */
 .moves-panel :is(.tabs, .seg, .segmented, .pz-seg) {
-  background: var(--glass-fill); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  background: var(--glass-fill); -webkit-backdrop-filter: blur(calc(20px * var(--glass-blur, 1))); backdrop-filter: blur(calc(20px * var(--glass-blur, 1)));
   box-shadow: inset 0 0 0 0.5px var(--glass-edge);
 }
 /* Buttons in the tabs: rounded as pills, glassy when not the main one. */
@@ -3366,12 +3369,12 @@ body {
 }
 .info > .panel, .info > .review {
   background: var(--glass); border-radius: var(--r-l);
-  -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(28px * var(--glass-blur, 1))) saturate(180%); backdrop-filter: blur(calc(28px * var(--glass-blur, 1))) saturate(180%);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
 }
 :is(.fw.floating, .engine.floating, .float-win, .mh.floating) {
   background: var(--glass-float); border-radius: var(--r-l);
-  -webkit-backdrop-filter: blur(30px) saturate(180%); backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(30px * var(--glass-blur, 1))) saturate(180%); backdrop-filter: blur(calc(30px * var(--glass-blur, 1))) saturate(180%);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge), 0 14px 40px rgb(0 0 0 / .22);
 }
 :is(.fw.floating, .engine.floating, .float-win).dragging { box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 20px 52px rgb(0 0 0 / .3); }
@@ -3407,15 +3410,15 @@ body {
    under it), with switches for what is on or off. Older rows (.row and
    .check) inside a card take the same look. */
 #dlg-settings {
-  background: color-mix(in srgb, var(--panel) clamp(30%, calc(var(--glass-solid) + 22%), 100%), transparent);
-  -webkit-backdrop-filter: blur(40px) saturate(180%); backdrop-filter: blur(40px) saturate(180%);
+  background: color-mix(in srgb, var(--panel) clamp(calc(30% * var(--glass-k, 1)), calc(var(--glass-solid) + 22% * var(--glass-k, 1)), 100%), transparent);
+  -webkit-backdrop-filter: blur(calc(40px * var(--glass-blur, 1))) saturate(180%); backdrop-filter: blur(calc(40px * var(--glass-blur, 1))) saturate(180%);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 24px 70px rgb(0 0 0 / .3);
   width: min(44rem, calc(100vw - 2.5rem));
 }
 #dlg-settings::backdrop { background: rgb(0 0 0 / .12); backdrop-filter: blur(2px); }
 #dlg-settings .settings-tabs {
   background: var(--glass-fill); box-shadow: inset 0 0 0 0.5px var(--glass-edge);
-  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(calc(20px * var(--glass-blur, 1))); backdrop-filter: blur(calc(20px * var(--glass-blur, 1)));
 }
 #dlg-settings .settings-pane { gap: 0; overflow-y: auto; max-height: calc(100vh - 13rem); padding: 0.1rem 0.15rem 0.4rem; margin: 0 -0.15rem; }
 #dlg-settings .settings-pane > .hint { margin: 0 0.75rem 0.7rem; font-size: 0.8rem; }
@@ -3425,7 +3428,7 @@ body {
 .settings-pane > .set-group:first-child { margin-top: 0.3rem; }
 .set-foot { margin: 0.4rem 0.75rem 0; font-size: 0.78rem; line-height: 1.4; color: var(--muted); }
 #dlg-settings :is(.set-card, fieldset) {
-  background: color-mix(in srgb, var(--panel) clamp(25%, calc(var(--glass-solid) + 10%), 100%), transparent);
+  background: color-mix(in srgb, var(--panel) clamp(calc(25% * var(--glass-k, 1)), calc(var(--glass-solid) + 10% * var(--glass-k, 1)), 100%), transparent);
   border-radius: var(--r-l); padding: 0 0.95rem; margin: 0;
   box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 1px 2px rgb(0 0 0 / .05), 0 6px 18px rgb(0 0 0 / .05);
 }
@@ -3475,7 +3478,7 @@ body {
 /* The theme cards and the engine list sit on glass too. */
 #dlg-settings .theme-option { background: var(--glass-fill); }
 #dlg-settings :is(#engine-list, #engine-detail) {
-  background: color-mix(in srgb, var(--panel) clamp(25%, calc(var(--glass-solid) + 10%), 100%), transparent);
+  background: color-mix(in srgb, var(--panel) clamp(calc(25% * var(--glass-k, 1)), calc(var(--glass-solid) + 10% * var(--glass-k, 1)), 100%), transparent);
   border-radius: var(--r-l); box-shadow: inset 0 0 0 0.5px var(--glass-edge), 0 6px 18px rgb(0 0 0 / .05);
 }
 #dlg-settings input[type="search"] { border-radius: 999px; padding-inline: 0.8rem; }
@@ -3494,7 +3497,7 @@ body {
 @container (max-width: 22rem) { .ms-tiles { grid-template-columns: 1fr; } }
 .ms-tile, .ms-card {
   background: var(--glass, var(--panel)); border-radius: var(--r-l);
-  -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(28px * var(--glass-blur, 1))) saturate(180%); backdrop-filter: blur(calc(28px * var(--glass-blur, 1))) saturate(180%);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge, var(--sep)), inset 0 1px 0 var(--glass-edge, transparent), var(--glass-shadow, none);
 }
 .ms-tile {
@@ -3585,13 +3588,13 @@ body {
     radial-gradient(18rem 14rem at 100% 30%, color-mix(in srgb, #af52de 13%, transparent), transparent 70%),
     radial-gradient(22rem 16rem at 10% 100%, color-mix(in srgb, #ff9f0a 13%, transparent), transparent 70%),
     var(--glass-float);
-  -webkit-backdrop-filter: blur(40px) saturate(180%); backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(40px * var(--glass-blur, 1))) saturate(180%); backdrop-filter: blur(calc(40px * var(--glass-blur, 1))) saturate(180%);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge),
     0 24px 60px rgb(0 0 0 / .22), 0 2px 8px rgb(0 0 0 / .08);
 }
 #ai-handle {
   background: var(--glass-float);
-  -webkit-backdrop-filter: blur(24px) saturate(180%); backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(24px * var(--glass-blur, 1))) saturate(180%); backdrop-filter: blur(calc(24px * var(--glass-blur, 1))) saturate(180%);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge), var(--glass-shadow);
 }
 #ai-handle:hover:not(:disabled) { background: var(--glass-float); }
@@ -3623,12 +3626,12 @@ body {
 /* The suggestions and the composer: glass. */
 #pane-ai .aic-chips button {
   background: var(--glass); box-shadow: inset 0 0 0 0.5px var(--glass-edge), var(--glass-shadow);
-  -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(calc(20px * var(--glass-blur, 1))); backdrop-filter: blur(calc(20px * var(--glass-blur, 1)));
 }
 #pane-ai .aic-chips button:hover { background: color-mix(in srgb, var(--panel) 80%, transparent); }
 #pane-ai .aic-form {
   border-radius: 1.4rem; background: var(--glass);
-  -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(calc(28px * var(--glass-blur, 1))) saturate(180%); backdrop-filter: blur(calc(28px * var(--glass-blur, 1))) saturate(180%);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
 }
 #pane-ai .aic-form:focus-within { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent), 0 0 0 3px var(--ring), var(--glass-shadow); }
@@ -3636,7 +3639,7 @@ body {
 /* Commentary: its settings as a glass card of rows, each comment a card. */
 .cm-settings {
   flex: none; display: flex; flex-direction: column; padding: 0 0.85rem; border-radius: var(--r-l);
-  background: var(--glass); -webkit-backdrop-filter: blur(28px) saturate(180%); backdrop-filter: blur(28px) saturate(180%);
+  background: var(--glass); -webkit-backdrop-filter: blur(calc(28px * var(--glass-blur, 1))) saturate(180%); backdrop-filter: blur(calc(28px * var(--glass-blur, 1))) saturate(180%);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge), inset 0 1px 0 var(--glass-edge), var(--glass-shadow);
 }
 .cm-row { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; min-height: 2.5rem; padding: 0.45rem 0; font-size: 0.88rem; }
@@ -3719,7 +3722,7 @@ body.zen #cam3d-bar { display: none; }
 #cam3d, #view3d-reset {
   display: inline-flex; align-items: center; gap: 0.3rem;
   padding: 0.3rem 0.65rem 0.3rem 0.5rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600; color: var(--muted);
-  background: var(--glass, var(--panel)); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  background: var(--glass, var(--panel)); -webkit-backdrop-filter: blur(calc(20px * var(--glass-blur, 1))) saturate(180%); backdrop-filter: blur(calc(20px * var(--glass-blur, 1))) saturate(180%);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge, var(--sep)), var(--glass-shadow, 0 2px 8px rgb(0 0 0 / .12));
 }
 #cam3d svg, #view3d-reset svg { width: 1rem; height: 1rem; }
@@ -3755,7 +3758,7 @@ body.zen.board-3d #zen-exit { right: auto; left: 50%; transform: translateX(-50%
 #ann-caption {
   position: absolute; left: 50%; bottom: 6%; z-index: 6; transform: translate(-50%, 8px); max-width: 86%;
   padding: 0.4rem 0.9rem; border-radius: 999px; font-size: 0.95rem; font-weight: 600; text-align: center;
-  color: var(--text); background: var(--glass, var(--panel)); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
+  color: var(--text); background: var(--glass, var(--panel)); -webkit-backdrop-filter: blur(calc(20px * var(--glass-blur, 1))) saturate(180%); backdrop-filter: blur(calc(20px * var(--glass-blur, 1))) saturate(180%);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge, var(--sep)), var(--glass-shadow, 0 4px 14px rgb(0 0 0 / .18));
   opacity: 0; pointer-events: none; transition: opacity .25s var(--ease), transform .25s var(--ease);
 }
@@ -3764,3 +3767,19 @@ body.zen.board-3d #ann-caption { position: fixed; bottom: calc(var(--bar) + 1.6r
 #ann-card.off > .set-row:not(:first-child) { opacity: 0.5; }
 #ann-card .set-ctl { display: inline-flex; gap: 0.35rem; align-items: center; }
 #ann-voice { max-width: 13rem; }
+
+/* The menu of a player's "⇄ Engine" button: reload, or swap for another. */
+.engine-menu { position: fixed; right: auto; top: 0; z-index: 60; max-height: min(70vh, 26rem); overflow-y: auto; }
+.engine-menu .menu-head { font-size: 0.78rem; font-weight: 600; color: var(--muted); padding: 0.35rem 0.7rem 0.15rem; }
+.engine-menu .menu-head:not(:first-child) { border-top: 1px solid var(--line, var(--fill)); margin-top: 0.25rem; padding-top: 0.45rem; }
+
+/* The random-bot challenger's random clock: the times and increments to
+   draw from, as chips that are on or off. */
+.lx-seek-pick { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0.4rem 0.8rem; }
+.lx-seek-pick[hidden] { display: none; }
+.lx-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; justify-content: flex-end; }
+.lx-chips .chip { min-width: 2.1rem; font-variant-numeric: tabular-nums; cursor: pointer; }
+.lx-seek.randclock .lx-set:has(#lx-seek-time) .lx-set-ctl { display: none; }
+
+/* AI turned off in Settings → AI: nothing of it shows. */
+body.ai-off #btn-ai, body.ai-off #ai-handle, body.ai-off #ai-panel, body.ai-off #an-ai, body.ai-off #commentary, body.ai-off .ai-only { display: none !important; }

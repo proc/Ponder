@@ -348,7 +348,7 @@ function fillAnnouncerVoices() {
   sel.replaceChildren(
     el('option', { value: 'same', textContent: 'The commentary’s voice' }),
     ...(cmCanSpeak ? [el('option', { value: '', textContent: 'The computer’s voice' })] : []),
-    el('option', { value: CM_SERVER, textContent: 'Speech server (Settings → AI)' }),
+    ...(window.ttsIsOn?.() ? [el('option', { value: CM_SERVER, textContent: 'Speech server (Settings → AI)' })] : []),
     ...sorted.map((v) => el('option', { value: v.name, textContent: `${v.name} (${v.lang})` })),
   );
   sel.value = [...sel.options].some((o) => o.value === ann.voice) ? ann.voice : 'same';

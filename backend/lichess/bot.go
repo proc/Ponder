@@ -166,15 +166,22 @@ type Hooks struct {
 const finishedKept = 20
 
 type Bot struct {
-	mu      sync.Mutex
-	hooks   Hooks
-	cfg     Config
-	client  *Client
-	cancel  context.CancelFunc
-	gen     int
-	state   string
-	message string
-	account *Account
+	mu sync.Mutex
+	// Lichess refused a challenge for too many requests: the random-bot
+	// challenger sends none before holdUntil (for the account holdFor),
+	// however often it is stopped and started. holdBackoff is the next wait
+	// when Lichess does not say how long: 1 min, doubling to 10.
+	holdUntil   time.Time
+	holdFor     string
+	holdBackoff time.Duration
+	hooks       Hooks
+	cfg         Config
+	client      *Client
+	cancel      context.CancelFunc
+	gen         int
+	state       string
+	message     string
+	account     *Account
 
 	incoming map[string]*Challenge
 	outgoing map[string]*Challenge

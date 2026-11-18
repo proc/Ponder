@@ -85,7 +85,10 @@ function setAnnotate(on) {
 const cmCanSpeak = typeof window.speechSynthesis !== 'undefined' && typeof window.SpeechSynthesisUtterance !== 'undefined';
 const cmVoices = () => (cmCanSpeak ? window.speechSynthesis.getVoices() : []);
 const CM_SERVER = 'server:'; // the voice that is the speech server
-const cmUsesServer = () => cm.voice === CM_SERVER;
+// The speech server is off until turned on in Settings → AI: off, it is not
+// offered as a voice, and a voice chosen before says it with the computer's.
+let ttsOn = false;
+const cmUsesServer = () => ttsOn && cm.voice === CM_SERVER;
 const cmCanRead = () => cmCanSpeak || cmUsesServer() || Boolean(window.board?.tts);
 
 // Chess notation as it is said: "Nf3" is "knight f3", "O-O" castles.
@@ -120,7 +123,8 @@ function speakCommentary(text, { force = false } = {}) {
 // Says it now, with this voice (a computer voice by name, '' the
 // computer's own, or the speech server) at this speed.
 function cmSay(text, { voice = '', rate = 1, pitch = 1, comment = false } = {}) {
-  if (voice === CM_SERVER) { speakFromServer(text, { rate, comment }); return; }
+  if (voice === CM_SERVER && ttsOn) { speakFromServer(text, { rate, comment }); return; }
+  if (voice === CM_SERVER) voice = '';
   if (!cmCanSpeak) return;
   const synth = window.speechSynthesis;
   const u = new SpeechSynthesisUtterance(cmSpoken(text));
@@ -219,10 +223,10 @@ function fillCommentaryVoices() {
   const sorted = [...voices].sort((a, b) => (b.lang.toLowerCase().startsWith(lang) - a.lang.toLowerCase().startsWith(lang)) || a.name.localeCompare(b.name));
   const opts = [];
   if (cmCanSpeak) opts.push(el('option', { value: '', textContent: 'The computer’s voice' }));
-  opts.push(el('option', { value: CM_SERVER, textContent: 'Speech server (Settings → AI)', title: 'An OpenAI-compatible text-to-speech endpoint, set in Settings → AI: each comment is sent to it' }));
+  if (ttsOn) opts.push(el('option', { value: CM_SERVER, textContent: 'Speech server (Settings → AI)', title: 'An OpenAI-compatible text-to-speech endpoint, set in Settings → AI: each comment is sent to it' }));
   opts.push(...sorted.map((v) => el('option', { value: v.name, textContent: `${v.name} (${v.lang})` })));
   sel.replaceChildren(...opts);
-  sel.value = cm.voice === CM_SERVER || sorted.some((v) => v.name === cm.voice) ? cm.voice : (cmCanSpeak ? '' : CM_SERVER);
+  sel.value = (cm.voice === CM_SERVER && ttsOn) || sorted.some((v) => v.name === cm.voice) ? cm.voice : (cmCanSpeak || !ttsOn ? '' : CM_SERVER);
 }
 
 // Settings → AI: the speech server.
@@ -231,7 +235,16 @@ const TTS_NOTE = 'To use it, choose <b>Speech server</b> as the voice in the AI 
 // The lists of the speech endpoint's models and voices, as last asked for.
 const tts = { models: [], voices: [], openai: false };
 const TTS_OPENAI_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'];
+function applyTtsOn(on) {
+  const was = ttsOn;
+  ttsOn = Boolean(on);
+  $('#tts-enabled').checked = ttsOn;
+  $('#tts-fields').hidden = !ttsOn;
+  if (was !== ttsOn) { fillCommentaryVoices(); window.refreshAnnouncerSettings?.(); renderCommentary(); }
+}
+window.ttsIsOn = () => ttsOn;
 function showTtsSettings(t) {
+  applyTtsOn(t.enabled);
   $('#tts-url').value = t.baseUrl ?? '';
   tts.openai = /api\.openai\.com/i.test(t.baseUrl ?? '');
   fillChoices($('#tts-model'), tts.models, t.model ?? '', tts.openai ? 'gpt-4o-mini-tts (the default)' : 'The endpoint’s first speech model');
@@ -244,7 +257,7 @@ function showTtsSettings(t) {
 }
 async function fillTtsSettings() {
   try { showTtsSettings(await api.tts.settings()); ttsSay(TTS_NOTE); } catch { return; }
-  refreshTtsModels({ quiet: true });
+  if (ttsOn) refreshTtsModels({ quiet: true });
 }
 window.fillTtsSettings = fillTtsSettings;
 async function saveTts(patch) {
@@ -281,6 +294,8 @@ async function refreshTtsVoices() {
   } catch { /* the list stays as it was */ }
 }
 if (window.board?.tts) {
+  $('#tts-enabled').addEventListener('change', async (e) => { if (await saveTts({ enabled: e.target.checked }) && ttsOn) { ttsSay(TTS_NOTE); refreshTtsModels({ quiet: true }); } });
+  api.tts.settings().then((t) => applyTtsOn(t.enabled), () => {});
   $('#tts-url').addEventListener('change', async (e) => { tts.models = []; tts.voices = []; if (await saveTts({ baseUrl: e.target.value })) refreshTtsModels({ quiet: true }); });
   // Another model: its voices.
   $('#tts-model').addEventListener('change', async (e) => { if (await saveTts({ model: e.target.value })) refreshTtsVoices(); });
@@ -432,7 +447,9 @@ async function askCommentary(kind) {
       // An endpoint that does not answer is not asked again move after move.
       cm.on = false;
       saveCommentary();
-      cm.note = 'Commentary was turned off: the AI endpoint did not answer. Retry asks again and turns it back on; Settings → AI has the endpoint.';
+      cm.note = /^No API key/.test(msg)
+        ? 'Commentary was turned off: there is no API key, so the AI was not asked. Add one in Settings → AI, then Retry.'
+        : 'Commentary was turned off: the AI endpoint did not answer. Retry asks again and turns it back on; Settings → AI has the endpoint.';
       if (typeof notify === 'function') notify(msg, { title: 'Live commentary stopped' });
     }
   } finally {

@@ -95,3 +95,152 @@ func TestSeekUpdateTakesNewRange(t *testing.T) {
 	}
 	h.bot.StopSeek()
 }
+
+// Random challenge types, as lichess-bot's matchmaking does them: every
+// pairing of the times and increments, rated or casual at random.
+func TestSeekRandomTypes(t *testing.T) {
+	p := SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2}, Times: []int{60, 600, 60}, Increments: []int{0, 5}}
+	got := map[string]bool{}
+	for _, c := range p.clocks() {
+		got[clockText(c.limit, c.inc)+" "+c.speed] = true
+	}
+	want := []string{"1+0 bullet", "1+5 blitz", "10+0 rapid", "10+5 rapid"}
+	if len(got) != len(want) {
+		t.Fatalf("clocks %v", got)
+	}
+	for _, w := range want {
+		if !got[w] {
+			t.Fatalf("clocks %v lack %s", got, w)
+		}
+	}
+	if s := p.speeds(); s != "bullet/blitz/rapid" {
+		t.Fatalf("speeds %q", s)
+	}
+	if c := (SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2}}).clocks(); len(c) != 1 || c[0].speed != "blitz" {
+		t.Fatalf("one clock: %+v", c)
+	}
+	rated := map[bool]int{}
+	for i := 0; i < 200; i++ {
+		rated[SeekParams{RatedMode: "random"}.rated()]++
+	}
+	if rated[true] == 0 || rated[false] == 0 {
+		t.Fatalf("random rated mode: %v", rated)
+	}
+	if (SeekParams{ChallengeParams: ChallengeParams{Rated: true}, RatedMode: "casual"}).rated() || !(SeekParams{ChallengeParams: ChallengeParams{Rated: true}}).rated() {
+		t.Fatal("rated mode")
+	}
+	for _, bad := range []SeekParams{{Times: []int{0}}, {Increments: []int{-1}}, {RatedMode: "sometimes"}} {
+		if bad.check() == nil {
+			t.Errorf("accepted %+v", bad)
+		}
+	}
+	if clockText(30, 0) != "½+0" || clockText(90, 1) != "1.5+1" {
+		t.Fatal("clock text")
+	}
+}
+
+// With a random clock, a challenge goes out at a time control some bot in
+// range is rated at: here only the rapid ones.
+func TestSeekRandomClockPicksOneThatFits(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 300*time.Millisecond, 20*time.Millisecond, 200*time.Millisecond, 20*time.Millisecond
+	h := newHarness(t, Policy{})
+	// The fake rates a bot 100 below at bullet, 100 above at rapid.
+	h.fake.Online = []fake.OnlineBot{{Name: "sleepy", Rating: 1700}}
+	h.connect()
+	err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Color: "random"},
+		Times: []int{60, 600}, Increments: []int{0, 5}, RatedMode: "random", MinRating: 1760, MaxRating: 1850, Games: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitFor("a challenge", func(s Status) bool { return s.Seek != nil && strings.Contains(s.Seek.Message, "Challenging") })
+	if !strings.Contains(s.Seek.Message, "to 10+") || !strings.Contains(s.Seek.Message, "rapid") || s.Seek.Speed != "rapid" || s.Seek.Rating != 1800 {
+		t.Fatalf("seek %+v", s.Seek)
+	}
+	h.bot.StopSeek()
+}
+
+// Lichess refuses a challenge for too many requests: the challenger sends
+// none until the time it gave is up, even when stopped and started again
+// (as Auto challenge does on reconnecting).
+func TestSeekHoldsAfterRateLimit(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 300*time.Millisecond, 20*time.Millisecond, 200*time.Millisecond, 20*time.Millisecond
+	h := newHarness(t, Policy{})
+	h.fake.Online = []fake.OnlineBot{{Name: "maia1", Rating: 1500}}
+	h.fake.RateLimited, h.fake.RateLimitSeconds = 1, 1.5
+	h.connect()
+	cp := ChallengeParams{Limit: 180, Increment: 2, Color: "random"}
+	start := time.Now()
+	if err := h.bot.StartSeek(SeekParams{ChallengeParams: cp}); err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitFor("held", func(s Status) bool { return s.Seek != nil && strings.Contains(s.Seek.Message, "too many requests") })
+	if s.Seek.NextAt == 0 || time.Until(time.UnixMilli(s.Seek.NextAt)) < time.Second {
+		t.Fatalf("hold %+v", s.Seek)
+	}
+	// Stopped and started again: still held.
+	h.bot.StopSeek()
+	if err := h.bot.StartSeek(SeekParams{ChallengeParams: cp}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("still held", func(s Status) bool { return s.Seek != nil && strings.Contains(s.Seek.Message, "too many requests") })
+	h.waitFor("a game", func(s Status) bool { return len(s.Games) == 1 })
+	if d := time.Since(start); d < 1400*time.Millisecond {
+		t.Fatalf("challenged again after %v, before the 1.5 s Lichess gave", d)
+	}
+	if n := strings.Count(strings.Join(h.fake.Calls(), "\n"), "POST /api/challenge/maia1"); n != 2 {
+		t.Fatalf("%d challenges sent, want the refused one and one after the wait", n)
+	}
+}
+
+// A bare "too many requests" waits a minute, then two, ... up to ten, as
+// lichess-bot does; a challenge that goes through starts it over.
+func TestSeekBacksOffWithoutRetryTime(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 300*time.Millisecond, 20*time.Millisecond, 200*time.Millisecond, 20*time.Millisecond
+	defer func(d time.Duration) { seekHoldFirst = d }(seekHoldFirst)
+	seekHoldFirst = 150 * time.Millisecond
+	h := newHarness(t, Policy{})
+	h.fake.Online = []fake.OnlineBot{{Name: "maia1", Rating: 1500}}
+	h.fake.RateLimited = 2
+	h.connect()
+	start := time.Now()
+	if err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2, Color: "random"}}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("a game", func(s Status) bool { return len(s.Games) == 1 })
+	if d := time.Since(start); d < 450*time.Millisecond {
+		t.Fatalf("game after %v: the waits were not 150 then 300 ms", d)
+	}
+	h.bot.mu.Lock()
+	backoff := h.bot.holdBackoff
+	h.bot.mu.Unlock()
+	if backoff != 0 {
+		t.Fatalf("backoff %v after a challenge went through", backoff)
+	}
+	if w := waitText(3*time.Hour + 4*time.Minute); w != "3 h 4 min" {
+		t.Fatalf("wait text %q", w)
+	}
+}
+
+// A bot that has played its bot games for the day is passed over, and
+// another asked, without holding back the challenger.
+func TestSeekPassesOverBotsAtTheirDailyLimit(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 300*time.Millisecond, 20*time.Millisecond, 200*time.Millisecond, 20*time.Millisecond
+	h := newHarness(t, Policy{})
+	h.fake.Online = []fake.OnlineBot{{Name: "maia1", Rating: 1500}, {Name: "maia2", Rating: 1500}}
+	h.fake.BotsDone = map[string]float64{"maia1": 3600}
+	h.connect()
+	if err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2, Color: "random"}, Games: 2}); err != nil {
+		t.Fatal(err)
+	}
+	s := h.waitFor("a game", func(s Status) bool { return len(s.Games) >= 1 })
+	if !strings.EqualFold(s.Games[0].Opponent, "maia2") {
+		t.Fatalf("played %q", s.Games[0].Opponent)
+	}
+	if n := strings.Count(strings.Join(h.fake.Calls(), "\n"), "POST /api/challenge/maia1"); n > 1 {
+		t.Fatalf("maia1 challenged %d times", n)
+	}
+	if !h.bot.heldUntil("boardbot").IsZero() {
+		t.Fatal("the challenger was held for another bot's limit")
+	}
+	h.bot.StopSeek()
+}

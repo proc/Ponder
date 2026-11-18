@@ -93,6 +93,14 @@ type Server struct {
 	Silent    map[string]bool   // opponents that never answer a challenge
 	// The bots online, with their blitz ratings (other speeds: +/-100).
 	Online []OnlineBot
+	// Rate limits on challenges sent, as Lichess answers them: the next
+	// RateLimited challenges get a 429 (with the daily bot-game limit and
+	// RateLimitSeconds when above 0; a bare 429 otherwise), and challenges
+	// to the bots in BotsDone get a 400 saying they have played their bot
+	// games for the day (the value: seconds until they may play again).
+	RateLimited      int
+	RateLimitSeconds float64
+	BotsDone         map[string]float64
 	// The opponent accepts draw offers and takeback proposals (Board API).
 	AcceptOffers bool
 	// Like Lichess, the spectator stream (/api/stream/game) starts by
@@ -284,6 +292,29 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ok(nil)
 	case len(parts) == 3 && parts[1] == "challenge" && r.Method == "POST":
 		r.ParseForm()
+		s.mu.Lock()
+		limited, secs := s.RateLimited > 0, s.RateLimitSeconds
+		if limited {
+			s.RateLimited--
+		}
+		done, opponentDone := s.BotsDone[strings.ToLower(parts[2])]
+		s.mu.Unlock()
+		if limited {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusTooManyRequests)
+			if secs > 0 {
+				fmt.Fprintf(w, `{"error":"You have played too many games against bots today","ratelimit":{"key":"bot.vsBot.day","seconds":%g}}`, secs)
+			} else {
+				fmt.Fprint(w, `{"error":"Too many requests. Try again later."}`)
+			}
+			return
+		}
+		if opponentDone {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprintf(w, `{"error":"%s has played too many games against bots today","ratelimit":{"key":"bot.vsBot.day","seconds":%g}}`, parts[2], done)
+			return
+		}
 		ch, err := s.outgoing(parts[2], r)
 		if err != nil {
 			bad(err.Error())
@@ -1016,6 +1047,22 @@ func (s *Server) playLocked(g *Game, mv chess.Move) {
 	s.opponentTurnLocked(g)
 }
 
+// Resign ends a game now, the side given resigning (for tests).
+func (s *Server) Resign(id, side string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g := s.games[id]
+	if g == nil || g.Status != "started" {
+		return
+	}
+	g.Status, g.Winner = "resign", map[string]string{"white": "black", "black": "white"}[side]
+	s.publishLocked(g)
+	s.publishMovesLocked(g)
+	if !g.auto {
+		s.finishLocked(g)
+	}
+}
+
 // SetRated makes a game rated (AutoGame games are casual).
 func (s *Server) SetRated(id string, rated bool) {
 	s.mu.Lock()
@@ -1342,6 +1389,18 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 			s.SetRated(id, true)
 		}
 		fmt.Fprint(w, line(map[string]string{"id": id}))
+	case "/_fake/resign":
+		// side: white, black, or opponent (the side your bot does not play).
+		side := q.Get("side")
+		if side == "opponent" {
+			s.mu.Lock()
+			if g := s.games[q.Get("id")]; g != nil {
+				side = map[bool]string{true: "black", false: "white"}[g.BotWhite]
+			}
+			s.mu.Unlock()
+		}
+		s.Resign(q.Get("id"), side)
+		fmt.Fprint(w, line(map[string]string{"ok": "1"}))
 	case "/_fake/games":
 		s.mu.Lock()
 		out := map[string]any{}

@@ -35,6 +35,122 @@ type SeekParams struct {
 	MinGames      int  `json:"minGames"`
 	// Exclude are bots never to challenge (usernames, any case).
 	Exclude []string `json:"exclude"`
+	// Random challenge types, as lichess-bot's matchmaking does them: with
+	// Times or Increments given, each challenge takes its initial time
+	// (seconds) and increment at random from them, in place of Limit and
+	// Increment. RatedMode "random" makes each challenge rated or casual at
+	// random; "rated" and "casual" set it, and "" leaves it to Rated.
+	Times      []int  `json:"times,omitempty"`
+	Increments []int  `json:"increments,omitempty"`
+	RatedMode  string `json:"ratedMode,omitempty"`
+}
+
+// check reports settings the search cannot use.
+func (p SeekParams) check() error {
+	if p.Around <= 0 && p.MinRating > 0 && p.MaxRating > 0 && p.MinRating > p.MaxRating {
+		return errors.New("the lowest rating is above the highest")
+	}
+	if p.Around < 0 || p.MinGames < 0 {
+		return errors.New("the rating range and number of games cannot be below 0")
+	}
+	for _, t := range p.Times {
+		if t <= 0 || t > 10800 {
+			return fmt.Errorf("an initial time of %d s is not one Lichess allows", t)
+		}
+	}
+	for _, i := range p.Increments {
+		if i < 0 || i > 180 {
+			return fmt.Errorf("an increment of %d s is not one Lichess allows", i)
+		}
+	}
+	switch p.RatedMode {
+	case "", "rated", "casual", "random":
+	default:
+		return fmt.Errorf("unknown rated mode %q", p.RatedMode)
+	}
+	return nil
+}
+
+// seekClock is one time control the search may challenge with.
+type seekClock struct {
+	limit, inc int
+	speed      string
+}
+
+// clocks are the time controls to choose from, in random order: one, or
+// every pairing of Times and Increments.
+func (p SeekParams) clocks() []seekClock {
+	times, incs := p.Times, p.Increments
+	if len(times) == 0 {
+		times = []int{p.Limit}
+	}
+	if len(incs) == 0 {
+		incs = []int{p.Increment}
+	}
+	var out []seekClock
+	seen := map[[2]int]bool{}
+	for _, t := range times {
+		for _, i := range incs {
+			if seen[[2]int{t, i}] {
+				continue
+			}
+			seen[[2]int{t, i}] = true
+			out = append(out, seekClock{t, i, SpeedOf(t, i)})
+		}
+	}
+	rand.Shuffle(len(out), func(a, b int) { out[a], out[b] = out[b], out[a] })
+	return out
+}
+
+// speeds names the speeds the search plays at, for the status: "blitz",
+// or "bullet/blitz" with a random clock.
+func (p SeekParams) speeds() string {
+	order := []string{"ultraBullet", "bullet", "blitz", "rapid", "classical"}
+	has := map[string]bool{}
+	for _, c := range p.clocks() {
+		has[c.speed] = true
+	}
+	var out []string
+	for _, s := range order {
+		if has[s] {
+			out = append(out, s)
+		}
+	}
+	return strings.Join(out, "/")
+}
+
+// rated says whether the next challenge is rated.
+func (p SeekParams) rated() bool {
+	switch p.RatedMode {
+	case "rated":
+		return true
+	case "casual":
+		return false
+	case "random":
+		return rand.Intn(2) == 0
+	}
+	return p.Rated
+}
+
+// clockText is a time control as Lichess writes it: 3+2, ½+0.
+func clockText(limit, inc int) string {
+	m := ""
+	switch limit {
+	case 15:
+		m = "¼"
+	case 30:
+		m = "½"
+	case 45:
+		m = "¾"
+	case 90:
+		m = "1.5"
+	default:
+		m = fmt.Sprint(limit / 60)
+		if limit%60 != 0 {
+			m = fmt.Sprintf("%.1f", float64(limit)/60)
+		}
+	}
+	return fmt.Sprintf("%s+%d", m, inc)
 }
 
 // fits reports whether a bot online matches the search's settings at the
@@ -79,6 +195,60 @@ type seeker struct {
 	cancel  context.CancelFunc
 	status  SeekStatus
 	current string // challenge id waiting for an answer
+	// Bots that have played their bot games for the day (Lichess said so
+	// when challenged): passed over until then. Only runSeek uses it.
+	resting map[string]time.Time
+}
+
+// holdChallenges keeps the challenger from sending another challenge for
+// wait (when Lichess did not say how long: 1 minute, then 2, 4, 8, 10 for
+// each refusal in a row, as lichess-bot does), and says until when.
+func (b *Bot) holdChallenges(wait time.Duration) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if wait <= 0 {
+		if b.holdBackoff == 0 {
+			b.holdBackoff = seekHoldFirst
+		}
+		wait = b.holdBackoff
+		b.holdBackoff = min(2*b.holdBackoff, 10*seekHoldFirst)
+	}
+	b.holdUntil = time.Now().Add(wait)
+	b.holdFor = ""
+	if b.account != nil {
+		b.holdFor = strings.ToLower(b.account.ID)
+	}
+	return b.holdUntil
+}
+
+// heldUntil is when the challenger may challenge again, for the account
+// me (zero: now).
+func (b *Bot) heldUntil(me string) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.holdFor != me || !time.Now().Before(b.holdUntil) {
+		return time.Time{}
+	}
+	return b.holdUntil
+}
+
+// waitText is a wait as people say it: 40 s, 12 min, 3 h 5 min.
+func waitText(d time.Duration) string {
+	switch s := int(d.Round(time.Second) / time.Second); {
+	case s < 90:
+		return fmt.Sprintf("%d s", max(s, 1))
+	case s < 3600:
+		return fmt.Sprintf("%d min", (s+30)/60)
+	default:
+		h, m := s/3600, (s%3600+30)/60
+		if m == 60 {
+			h, m = h+1, 0
+		}
+		if m == 0 {
+			return fmt.Sprintf("%d h", h)
+		}
+		return fmt.Sprintf("%d h %d min", h, m)
+	}
 }
 
 // Seek timings; variables so tests can shorten them.
@@ -88,6 +258,7 @@ var (
 	seekGap           = time.Minute      // at least this long from one challenge to the next
 	seekRetry         = 30 * time.Second // when no bot is left to try
 	seekPoll          = time.Second      // how often a game in progress is looked at
+	seekHoldFirst     = time.Minute      // first wait after a bare "too many requests"
 )
 
 // fullLocked reports whether the engine is in as many games as it may play
@@ -122,11 +293,8 @@ func (b *Bot) StartSeek(p SeekParams) error {
 	if _, err := b.connected(); err != nil {
 		return err
 	}
-	if p.Around <= 0 && p.MinRating > 0 && p.MaxRating > 0 && p.MinRating > p.MaxRating {
-		return errors.New("the lowest rating is above the highest")
-	}
-	if p.Around < 0 || p.MinGames < 0 {
-		return errors.New("the rating range and number of games cannot be below 0")
+	if err := p.check(); err != nil {
+		return err
 	}
 	// Games in progress do not stand in the way: it challenges while there
 	// is room for another, and waits when there is none.
@@ -151,7 +319,7 @@ func (b *Bot) StartSeek(p SeekParams) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	sk := &seeker{params: p, cancel: cancel, status: SeekStatus{
-		Active: true, Speed: SpeedOf(p.Limit, p.Increment), MinRating: p.MinRating, MaxRating: p.MaxRating,
+		Active: true, Speed: p.speeds(), MinRating: p.MinRating, MaxRating: p.MaxRating,
 		Message: "Looking for bots online…", Games: limit,
 	}}
 	b.mu.Lock()
@@ -168,11 +336,8 @@ func (b *Bot) StartSeek(p SeekParams) error {
 // number of games, stay as they are. It reports false when no search is
 // running.
 func (b *Bot) UpdateSeek(p SeekParams) (bool, error) {
-	if p.Around <= 0 && p.MinRating > 0 && p.MaxRating > 0 && p.MinRating > p.MaxRating {
-		return false, errors.New("the lowest rating is above the highest")
-	}
-	if p.Around < 0 || p.MinGames < 0 {
-		return false, errors.New("the rating range and number of games cannot be below 0")
+	if err := p.check(); err != nil {
+		return false, err
 	}
 	b.mu.Lock()
 	sk := b.seek
@@ -183,7 +348,7 @@ func (b *Bot) UpdateSeek(p SeekParams) (bool, error) {
 	p.Games = sk.params.Games
 	sk.params = p
 	sk.rev++
-	sk.status.Speed = SpeedOf(p.Limit, p.Increment)
+	sk.status.Speed = p.speeds()
 	sk.status.MinRating, sk.status.MaxRating = p.MinRating, p.MaxRating
 	if sk.current == "" && !sk.status.Playing {
 		sk.status.Message = "Settings changed: looking for bots online…"
@@ -229,11 +394,10 @@ func inRange(r, lo, hi int) bool {
 func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 	var (
 		params  SeekParams
-		speed   string
-		tried   map[string]bool
+		tried   map[string]bool // bot and speed: one that declined 1+0 may take 10+5
 		exclude map[string]bool
-		lo, hi  int
-		mineAt  time.Time // when your bot's rating was read, for Around
+		mine    User      // your bot's ratings, for Around
+		mineAt  time.Time // when they were read
 	)
 	seen := -1
 	// The settings, taken again when UpdateSeek has changed them. With
@@ -245,7 +409,7 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			b.mu.Unlock()
 			return
 		}
-		seen, params, speed = sk.rev, sk.params, sk.status.Speed
+		seen, params = sk.rev, sk.params
 		b.mu.Unlock()
 		tried = map[string]bool{}
 		exclude = map[string]bool{}
@@ -254,7 +418,6 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 				exclude[n] = true
 			}
 		}
-		lo, hi = params.MinRating, params.MaxRating
 		mineAt = time.Time{}
 	}
 	settings()
@@ -304,6 +467,18 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			me = strings.ToLower(b.account.ID)
 		}
 		b.mu.Unlock()
+		// Lichess said too many challenges: none until it allows them again.
+		if until := b.heldUntil(me); !until.IsZero() {
+			msg := fmt.Sprintf("Lichess refused a challenge for too many requests: none until %s.", until.Format("15:04"))
+			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Current, st.Rating, st.NextAt, st.Message = "", 0, until.UnixMilli(), msg }) {
+				return
+			}
+			if !sleepCtx(ctx, time.Until(until)) {
+				return
+			}
+			b.seekUpdate(sk, func(st *SeekStatus) { st.NextAt, st.Message = 0, "Looking for bots online…" })
+			continue
+		}
 		settings()
 		if params.Around > 0 && time.Since(mineAt) > 5*time.Minute {
 			mctx, mcancel := context.WithTimeout(ctx, 20*time.Second)
@@ -312,23 +487,26 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			if ctx.Err() != nil {
 				return
 			}
-			r := u.RatingFor(speed)
-			if err != nil || r == 0 {
-				msg := fmt.Sprintf("Your bot has no %s rating yet, so there is nothing to take the range around. Set a range instead.", speed)
-				if err != nil {
-					msg = "Could not read your bot's rating: " + err.Error()
-				}
-				b.seekUpdate(sk, func(st *SeekStatus) { st.Message = msg })
+			if err != nil {
+				b.seekUpdate(sk, func(st *SeekStatus) { st.Message = "Could not read your bot's rating: " + err.Error() })
 				if !sleepCtx(ctx, seekRetry) {
 					return
 				}
 				continue
 			}
-			mineAt = time.Now()
-			lo, hi = max(r-params.Around, 1), r+params.Around
-			if !b.seekUpdate(sk, func(st *SeekStatus) { st.MinRating, st.MaxRating = lo, hi }) {
-				return
+			mine, mineAt = u, time.Now()
+		}
+		// The rating range at a speed: fixed, or around your bot's rating
+		// there (none when it has no rating at that speed yet).
+		rangeAt := func(speed string) (lo, hi int, ok bool) {
+			if params.Around <= 0 {
+				return params.MinRating, params.MaxRating, true
 			}
+			r := mine.RatingFor(speed)
+			if r == 0 {
+				return 0, 0, false
+			}
+			return max(r-params.Around, 1), r + params.Around, true
 		}
 		lctx, lcancel := context.WithTimeout(ctx, 20*time.Second)
 		bots, err := client.OnlineBots(lctx, 300)
@@ -347,19 +525,52 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			}
 			continue
 		}
-		var pool []User
-		for _, u := range bots {
-			id := strings.ToLower(u.ID)
-			if id == "" || id == me || tried[id] || !params.fits(u, speed, lo, hi, exclude) {
+		// A time control at random (lichess-bot's random challenge types),
+		// and bots that fit it; another time control when none does.
+		var (
+			pool    []User
+			clock   seekClock
+			lo, hi  int
+			unrated []string // speeds your bot has no rating at, for Around
+			asked   bool     // some bot was passed over for being asked already
+		)
+		for _, c := range params.clocks() {
+			l, h, ok := rangeAt(c.speed)
+			if !ok {
+				unrated = append(unrated, c.speed)
 				continue
 			}
-			pool = append(pool, u)
+			var fit []User
+			for _, u := range bots {
+				id := strings.ToLower(u.ID)
+				if id == "" || id == me || !params.fits(u, c.speed, l, h, exclude) {
+					continue
+				}
+				if until, ok := sk.resting[id]; ok && time.Now().Before(until) {
+					continue
+				}
+				if tried[id+"/"+c.speed] {
+					asked = true
+					continue
+				}
+				fit = append(fit, u)
+			}
+			if len(fit) > 0 {
+				pool, clock, lo, hi = fit, c, l, h
+				break
+			}
 		}
 		if len(pool) == 0 {
-			msg := fmt.Sprintf("No bot online fits your settings at %s right now (%d online). Trying again shortly…", speed, len(bots))
-			if len(tried) > 0 {
+			speeds := params.speeds()
+			msg := fmt.Sprintf("No bot online fits your settings at %s right now (%d online). Trying again shortly…", speeds, len(bots))
+			switch {
+			case asked:
 				msg = fmt.Sprintf("Every matching bot online has been asked (%d). Asking again shortly…", len(tried))
 				tried = map[string]bool{}
+			case len(unrated) > 0 && !strings.Contains(speeds, "/"):
+				msg = fmt.Sprintf("Your bot has no %s rating yet, so there is nothing to take the range around. Set a range instead.", speeds)
+			case len(unrated) > 0:
+				msg = fmt.Sprintf("No bot online fits your settings right now (%d online); your bot has no rating yet at %s, so those clocks are skipped. Trying again shortly…", len(bots), strings.Join(unrated, ", "))
 			}
 			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Current, st.Rating, st.Message = "", 0, msg }) {
 				return
@@ -381,9 +592,20 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			continue // the bots online may have changed meanwhile
 		}
 		u := pool[rand.Intn(len(pool))]
-		tried[strings.ToLower(u.ID)] = true
+		tried[strings.ToLower(u.ID)+"/"+clock.speed] = true
 		lastSent = time.Now()
-		accepted, id, retryAfter := b.seekOne(ctx, sk, client, u, speed, params.ChallengeParams)
+		cp := params.ChallengeParams
+		cp.Limit, cp.Increment, cp.Rated = clock.limit, clock.inc, params.rated()
+		random := len(params.Times) > 1 || len(params.Increments) > 1 || params.RatedMode == "random"
+		if !b.seekUpdate(sk, func(st *SeekStatus) {
+			st.MinRating, st.MaxRating = lo, hi
+			if random {
+				st.Speed = clock.speed
+			}
+		}) {
+			return
+		}
+		accepted, id, retryAfter := b.seekOne(ctx, sk, client, u, clock.speed, cp, random)
 		if ctx.Err() != nil {
 			return
 		}
@@ -431,7 +653,7 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 }
 
 // seekOne challenges one bot and waits for the answer.
-func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, speed string, p ChallengeParams) (accepted bool, id string, next time.Duration) {
+func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, speed string, p ChallengeParams, random bool) (accepted bool, id string, next time.Duration) {
 	name := u.DisplayName()
 	rating := u.RatingFor(speed)
 	if !b.seekUpdate(sk, func(st *SeekStatus) {
@@ -439,6 +661,14 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		st.NextAt = 0
 		st.Current, st.Rating = name, rating
 		st.Message = fmt.Sprintf("Challenging %s (%d)…", name, rating)
+		if random {
+			// Which of the random challenge types this one is.
+			mode := "casual"
+			if p.Rated {
+				mode = "rated"
+			}
+			st.Message = fmt.Sprintf("Challenging %s (%d) to %s %s %s…", name, rating, clockText(p.Limit, p.Increment), speed, mode)
+		}
 	}) {
 		return false, "", 0
 	}
@@ -447,14 +677,34 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		p.Username = u.Username
 	}
 	ch, err := b.challenge(p)
-	if err != nil {
-		wait := seekPause
-		if RateLimited(err) {
-			wait = time.Minute
+	if self, opponent, wait := ChallengeLimit(err); self {
+		// Your bot is rate limited: the loop holds every challenge until
+		// the time is up (the hold outlives this search, so a new one
+		// started meanwhile waits too).
+		b.holdChallenges(wait)
+		return false, "", 0
+	} else if opponent {
+		// The bot challenged has played its bot games for the day: leave it
+		// be until Lichess says it may play again, and ask another.
+		if wait <= 0 {
+			wait = time.Hour
 		}
-		b.seekUpdate(sk, func(st *SeekStatus) { st.Message = fmt.Sprintf("Could not challenge %s: %v", name, err) })
-		return false, "", wait
+		if sk.resting == nil {
+			sk.resting = map[string]time.Time{}
+		}
+		sk.resting[strings.ToLower(u.ID)] = time.Now().Add(wait)
+		b.seekUpdate(sk, func(st *SeekStatus) {
+			st.Message = fmt.Sprintf("%s has played as many bot games as Lichess allows today: passed over for %s.", name, waitText(wait))
+		})
+		return false, "", seekPause
 	}
+	if err != nil {
+		b.seekUpdate(sk, func(st *SeekStatus) { st.Message = fmt.Sprintf("Could not challenge %s: %v", name, err) })
+		return false, "", seekPause
+	}
+	b.mu.Lock()
+	b.holdBackoff = 0 // a challenge went through: the next refusal starts at a minute again
+	b.mu.Unlock()
 	answer := make(chan string, 1)
 	b.mu.Lock()
 	if a, ok := b.answered[ch.ID]; ok {

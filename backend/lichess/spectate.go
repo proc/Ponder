@@ -268,6 +268,7 @@ type Spectator struct {
 	games  map[string]*watched
 	order  []string        // the games, in the order they were found
 	shown  string          // the game on the board
+	picks  int             // games put on the board by hand (Show), counted
 	skip   map[string]bool // games that cannot be shown (a variant)
 	wake   chan struct{}   // a game ended: look for the next one
 	// Poll is how often to look for the player's next game.
@@ -278,6 +279,9 @@ type Spectator struct {
 	// On TV, how long a game that ended stays on the board before the next
 	// one, and how long to wait for its end to be known.
 	TVHold, TVWait time.Duration
+	// When the game on the board ends while the player has others going,
+	// one of them takes the board after this long (the result shows first).
+	SwitchHold time.Duration
 }
 
 // watched is a game being followed.
@@ -313,7 +317,7 @@ type watched struct {
 
 func NewSpectator(emit func(string, any), show func(game.ExternalView)) *Spectator {
 	return &Spectator{emit: emit, show: show, Poll: 5 * time.Second, status: SpectateStatus{State: "idle"},
-		wake: make(chan struct{}, 1), TVHold: 3 * time.Second, TVWait: 8 * time.Second}
+		wake: make(chan struct{}, 1), TVHold: 3 * time.Second, TVWait: 8 * time.Second, SwitchHold: 3 * time.Second}
 }
 
 // Active reports whether a player is being followed.
@@ -407,7 +411,11 @@ func (s *Spectator) Stop() {
 }
 
 // Show puts another of the followed games on the board.
-func (s *Spectator) Show(id string) error {
+func (s *Spectator) Show(id string) error { return s.showGame(id, true) }
+
+// showGame puts a followed game on the board; byHand when the person
+// picked it.
+func (s *Spectator) showGame(id string, byHand bool) error {
 	s.mu.Lock()
 	if s.games[id] == nil {
 		s.mu.Unlock()
@@ -415,6 +423,9 @@ func (s *Spectator) Show(id string) error {
 	}
 	gen := s.gen
 	s.shown = id
+	if byHand {
+		s.picks++
+	}
 	s.refreshLocked()
 	s.mu.Unlock()
 	s.push(gen, id)
@@ -786,15 +797,45 @@ func (s *Spectator) finish(gen int, id, status, winner string) {
 		save, _ = gamePGN(w.rated, w.speed, s.gameURL(w.id), pl(w.white), pl(w.black), w.initial, w.increment,
 			w.startFEN, w.moves, w.result, w.reason, time.Now())
 	}
+	onBoard := s.shown == id
+	hold, picks := s.SwitchHold, s.picks
 	s.refreshLocked()
 	s.mu.Unlock()
 	s.push(gen, id)
 	if save != "" {
 		go s.Save(save)
 	}
+	if onBoard {
+		go s.switchFrom(gen, id, picks, hold)
+	}
 	select {
 	case s.wake <- struct{}{}:
 	default:
+	}
+}
+
+// switchFrom puts another of the player's games that is still going on the
+// board, after hold, when the game id that ended is still the one shown
+// (not when a game was picked by hand meanwhile, even that one again, or
+// nothing else is going). The
+// newest such game goes on.
+func (s *Spectator) switchFrom(gen int, id string, picks int, hold time.Duration) {
+	if hold > 0 {
+		time.Sleep(hold)
+	}
+	s.mu.Lock()
+	next := ""
+	if gen == s.gen && s.shown == id && s.picks == picks {
+		for i := len(s.order) - 1; i >= 0; i-- {
+			if o := s.games[s.order[i]]; o != nil && !o.finished && s.order[i] != id {
+				next = s.order[i]
+				break
+			}
+		}
+	}
+	s.mu.Unlock()
+	if next != "" {
+		s.showGame(next, false)
 	}
 }
 

@@ -299,6 +299,31 @@ type ChallengeParams struct {
 type APIError struct {
 	Status  int
 	Message string
+	// RateKey is the limit Lichess named in a rate-limit answer
+	// ("bot.vsBot.day": games between bots in a day), and RetryAfter how
+	// long it said to wait (its ratelimit.seconds, or the Retry-After
+	// header); 0 when it did not say.
+	RateKey    string
+	RetryAfter time.Duration
+}
+
+// ChallengeLimit tells a challenge refused for a rate limit apart, as
+// lichess-bot does: self when your bot may not challenge for now (a 429,
+// with the daily bot-game limit or not), opponent when the bot challenged
+// has played its bot games for the day (a 400 naming that limit). wait is
+// how long Lichess said it lasts (0: it did not say).
+func ChallengeLimit(err error) (self, opponent bool, wait time.Duration) {
+	var e *APIError
+	if !errors.As(err, &e) {
+		return false, false, 0
+	}
+	switch {
+	case e.Status == http.StatusTooManyRequests:
+		return true, false, e.RetryAfter
+	case e.Status == http.StatusBadRequest && e.RateKey == "bot.vsBot.day":
+		return false, true, e.RetryAfter
+	}
+	return false, false, 0
 }
 
 func (e *APIError) Error() string {
@@ -358,7 +383,11 @@ func (c *Client) request(ctx context.Context, method, path string, form url.Valu
 
 func apiError(res *http.Response) error {
 	var body struct {
-		Error string `json:"error"`
+		Error     string `json:"error"`
+		RateLimit struct {
+			Key     string  `json:"key"`
+			Seconds float64 `json:"seconds"`
+		} `json:"ratelimit"`
 	}
 	data, _ := io.ReadAll(io.LimitReader(res.Body, 64*1024))
 	json.Unmarshal(data, &body)
@@ -366,7 +395,16 @@ func apiError(res *http.Response) error {
 	if msg == "" && res.StatusCode == http.StatusUnauthorized {
 		msg = "the API token was not accepted (check it, and that it has the \"Play bot moves\" permission)"
 	}
-	return &APIError{Status: res.StatusCode, Message: msg}
+	if msg == "" && res.StatusCode == http.StatusTooManyRequests {
+		msg = "too many requests"
+	}
+	e := &APIError{Status: res.StatusCode, Message: msg, RateKey: body.RateLimit.Key}
+	if body.RateLimit.Seconds > 0 {
+		e.RetryAfter = time.Duration(body.RateLimit.Seconds * float64(time.Second))
+	} else if s, err := strconv.ParseFloat(strings.TrimSpace(res.Header.Get("Retry-After")), 64); err == nil && s > 0 {
+		e.RetryAfter = time.Duration(s * float64(time.Second))
+	}
+	return e
 }
 
 // call sends a request and decodes a JSON answer into out (if not nil).

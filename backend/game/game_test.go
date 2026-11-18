@@ -471,3 +471,69 @@ func TestExternalDrawReason(t *testing.T) {
 		}
 	}
 }
+
+func TestReplaceEngine(t *testing.T) {
+	m := NewManager(func(string, any) {})
+	defer m.Shutdown()
+	slow := PlayerConfig{Type: "engine", Name: "Slow", EnginePath: enginePath,
+		Options: map[string]string{"Delay": "3000"}, TimeControl: TimeControl{Kind: "movetime", MoveTimeMs: 10000}}
+	if err := m.NewGame(Config{White: human(TimeControl{Kind: "none"}), Black: slow}); err != nil {
+		t.Fatal(err)
+	}
+	waitMoves := func(n int, within time.Duration) State {
+		t.Helper()
+		deadline := time.Now().Add(within)
+		for time.Now().Before(deadline) {
+			if s := m.State(); len(s.Moves) >= n {
+				return s
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("game did not reach %d moves: %d", n, len(m.State().Moves))
+		return State{}
+	}
+	if err := m.ReplaceEngine("white", slow); err == nil {
+		t.Fatal("white is human: no engine to replace")
+	}
+	if err := m.Move("e2e4"); err != nil {
+		t.Fatal(err)
+	}
+	// The slow engine is thinking: swapped for a quick one, which moves at once.
+	start := time.Now()
+	fast := PlayerConfig{Name: "Fast", EnginePath: enginePath, Options: map[string]string{"Delay": "0"}}
+	if err := m.ReplaceEngine("black", fast); err != nil {
+		t.Fatal(err)
+	}
+	s := waitMoves(2, 2*time.Second)
+	if time.Since(start) > 2*time.Second || s.Players["black"].Name != "Fast" || s.Players["black"].TimeControl.Kind != "movetime" {
+		t.Fatalf("after swap: %+v", s.Players["black"])
+	}
+	if len(s.Loading) != 0 || !s.Active {
+		t.Fatalf("still loading: %v", s.Loading)
+	}
+	// Reloaded on the human's turn: it waits, then answers the next move.
+	if err := m.ReplaceEngine("black", fast); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Move("d2d4"); err != nil {
+		t.Fatal(err)
+	}
+	waitMoves(4, 2*time.Second)
+	// An engine that cannot start: the one before is started again.
+	if err := m.ReplaceEngine("black", PlayerConfig{Name: "Missing", EnginePath: "/no/such/engine"}); err == nil {
+		t.Fatal("a missing engine should be an error")
+	}
+	s = m.State()
+	if !s.Active || s.Players["black"].Name != "Fast" {
+		t.Fatalf("after a failed swap: active %v, black %q", s.Active, s.Players["black"].Name)
+	}
+	if err := m.Move("g1f3"); err != nil {
+		t.Fatal(err)
+	}
+	waitMoves(6, 2*time.Second)
+	// The slow engine, long gone, never moved for black.
+	time.Sleep(3500 * time.Millisecond)
+	if s := m.State(); len(s.Moves) != 6 || !s.Active {
+		t.Fatalf("moves %d, active %v, %q", len(s.Moves), s.Active, s.Reason)
+	}
+}

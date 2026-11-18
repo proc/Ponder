@@ -466,6 +466,17 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		}
 		mgr.Abort()
 		return nil, nil
+	case "replaceEngine":
+		// Swap the engine playing a side of the game on the board, or
+		// reload it: the new one takes over from the position reached.
+		var a struct {
+			Side   string
+			Player game.PlayerConfig
+		}
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		return nil, mgr.ReplaceEngine(a.Side, a.Player)
 	case "state":
 		return mgr.State(), nil
 	case "pgn":

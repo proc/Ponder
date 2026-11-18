@@ -223,6 +223,13 @@ rest holds the moves or game list beside engine analysis and game details.
   played the moment it is your turn (if still legal). Right-click cancels.
 - **Takeback** – against an engine, take back your last move (and its
   reply); in a game between people, the last move.
+- **Swap or reload an engine** – mid-game, **⇄ Engine** on an engine's
+  bar opens a menu: **↻ Reload** starts it again (with its options as now
+  saved under Settings → Engines, so a changed option or a stuck engine is
+  fixed without a new game), or pick another engine to take over from the
+  position reached, on the same side and clock. Its clock waits while the
+  new engine starts; if that one can't be started, the engine before comes
+  back.
 - **Keyboard** – ← → move by move, ↑ ↓ / Home End to the start and end, F
   flip, Z zen mode (only the board and players). Flip and zen mode are also the two
   icons at the board's bottom right corner, L analysis, P pause it, B
@@ -443,6 +450,19 @@ The model is chosen under **Settings → AI**:
   aistudio.google.com). Local servers usually need none. Keys are kept
   encrypted with the system keychain where there is one, and are never shown
   again.
+
+AI is off until you turn on **Use an AI model** at the top of Settings → AI.
+While it's off, the AI button, AI annotate and live commentary are hidden,
+and nothing is sent anywhere. Settings from before the switch existed count
+as on if a model or key was already chosen. The speech server has its own
+switch, **Use a speech server**, also off by default. While it's off, the
+commentary and the announcer use the computer's own voices.
+
+Even when AI is on, without a key Ponder doesn't contact OpenAI, Claude,
+Google AI or any server outside this computer and its local network
+(localhost, a private address or a `.local` name). AI annotation, the chat
+and the live commentary say that a key is missing instead. The speech
+server follows the same rule.
 
 How each provider is reached:
 
@@ -862,7 +882,8 @@ game you watched). **Settings** turns them off or changes the volume.
 While a game is being played, its controls sit on the player bars beside
 the board: each person has **⚑ Resign** on their own bar, and the bar
 nearest you has **½ Draw** (between two people) and **✕ Abort**. They ask
-before acting, and are hidden when no game is in progress.
+before acting, and are hidden when no game is in progress. An engine's bar
+also has **⇄ Engine**, to swap that engine for another or reload it.
 
 ### The players of a Lichess game
 
@@ -1034,8 +1055,12 @@ position as it is played, the opponent, the move number and, once it is
 over, the result. One game is on the board, outlined in the row; click
 another to put that one there. A game that starts while another is being
 played joins the row (it is found within about a quarter of a minute) and
-does not take the board; when the game on the board is over, the next new
-game does. Finished games leave the row when a new one starts. Every game
+does not take the board. When the game on the board ends while another is
+still being played, the newest game still going takes the board after
+three seconds, once the result has shown. If nothing else is going, the
+next new game takes the board when it starts. Clicking a game in the row
+during those three seconds, even the finished one, keeps the board on that
+game. Finished games leave the row when a new one starts. Every game
 followed to its end is saved to the database, if watched games are kept.
 
 **Several engine games at once** – when your engine plays more than one
@@ -1047,7 +1072,10 @@ there, with the engine's window, scores and chat following. A game that
 starts while another is on the board takes the board, with the versus
 screen, and the earlier one stays in the row; turn **Switch the board to
 your engine's new game when it starts another** off in Settings → General
-to have the new game only join the row. A finished game stays in the row
+to have the new game only join the row. When the game on the board ends
+while another is still being played, that one takes the board three
+seconds later, once the result has shown; if you click a game in the row
+first, the board stays on your choice. A finished game stays in the row
 only while it is the one on the board.
 
 **Country flags** – Lichess players and bots show the flag from their
@@ -1230,7 +1258,16 @@ goes for the challenges you send from your own account.
 - **Clock** – initial time and increment; the speed it makes (bullet,
   blitz…) is shown under it, and the bots' ratings are read at that speed.
 - **Your engine plays** – either color, White or Black.
-- **Rated** – rated or casual games.
+- **Random clock** – a different clock for each challenge, the way
+  lichess-bot's matchmaking does it with `challenge_initial_time` and
+  `challenge_increment`. Turn it on and pick the minutes and increments to
+  draw from as chips (lichess-bot's defaults, 1 and 3 minutes with 1 or 2
+  seconds, to start with). Each challenge takes one pairing at random. If no
+  bot in range is rated at that speed, it tries another pairing. Bots'
+  ratings, and *Around yours*, are read at the speed of the clock drawn. A
+  bot that declined one clock may still be asked at another speed.
+- **Rated** – *Casual*, *Rated*, or *Random*: each challenge rated or casual
+  at random (lichess-bot's `challenge_mode: random`).
 - **Their rating** – *Between* a lowest and highest rating (empty: any), or
   *Around yours*: that many points either side of your bot's own rating at
   the speed, read from Lichess when the search starts and again every few
@@ -1246,6 +1283,16 @@ rules allow at once (**Games at once**, whoever started them): with room
 for two it challenges another bot while one game is being played, and the
 next challenge goes out when a game ends. It can be started while your
 engine is playing. The line under the button says which game it is on.
+
+If Lichess refuses a challenge for too many requests, no challenge goes out
+until the wait is over, as in lichess-bot. That includes Lichess's limit on
+games against bots in a day, which can last hours. The wait is the time
+Lichess gives; when it gives none, the wait is 1 minute, then 2, 4 and 8,
+up to 10, resetting once a challenge goes through. Stopping and starting
+the search, or Auto challenge starting again on reconnecting, doesn't cut
+the wait short. The line under the button says when the next challenge
+goes out. A bot that has played its own bot games for the day is skipped
+until Lichess says it can play again, and another bot is asked.
 
 **Auto challenge** – the switch above the button keeps the random-bot
 challenger running by itself: while it is on your engine challenges
@@ -1318,7 +1365,9 @@ accent and two warm tones: translucent cards that blur what is behind them,
 with a bright hairline edge, settings as rows with switches. How
 see-through the glass is is set with **Transparency** under **Settings →
 Appearance → Glass** (Solid to Clear; double-click the slider for the usual
-amount); dark themes are a little clearer at the same setting. The AI panel
+amount). Past the middle of the range the frosting thins too, so at 100%
+the cards are nearly clear, only their edges and a light blur left. Dark
+themes are a little clearer at the same setting. The AI panel
 is glass too.
 
 **3D board** (**Settings → Appearance → Board**, off at first) draws the

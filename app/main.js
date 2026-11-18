@@ -751,6 +751,34 @@ async function aiRequest(s) {
   const slot = aiSlot(s, aiProvider(s));
   return { provider: aiProvider(s), baseUrl: s.baseUrl, model: slot.model ?? '', key: await aiKey(slot) };
 }
+// A server on this computer or the local network (localhost, 127.x, ::1,
+// a .local name, a private address): it may need no key. Any other
+// address is a hosted service, which is not asked without one.
+function isLocalAddress(url) {
+  let host;
+  try { host = new URL(url).hostname.replace(/^\[|\]$/g, '').toLowerCase(); } catch { return false; }
+  return host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host === '::1'
+    || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+    || /^f[cd][0-9a-f]{2}:/.test(host) || /^fe80:/.test(host);
+}
+// The request for the AI server, or an error, with nothing sent, when it
+// has no key and needs one: a hosted provider, or a server elsewhere.
+// AI is off until turned on in Settings → AI. Settings saved before there
+// was a switch count as on when a model or key was chosen.
+function aiEnabled(s) {
+  if (typeof s.enabled === 'boolean') return s.enabled;
+  const used = (x) => Boolean(x?.model || x?.key || x?.plainKey);
+  return used(s) || Object.values(s.providers ?? {}).some(used);
+}
+async function aiRequestWithKey(s) {
+  if (!aiEnabled(s)) throw new Error('AI is off: turn it on in Settings → AI.');
+  const req = await aiRequest(s);
+  if (req.key) return req;
+  const p = ai.PROVIDERS[req.provider];
+  if (p.needsKey) throw new Error(`No API key for ${p.name}: add one in Settings → AI.`);
+  if (!isLocalAddress(ai.normalizeBase(req.baseUrl))) throw new Error('No API key for the AI endpoint: add one in Settings → AI (a server on this computer or network needs none).');
+  return req;
+}
 async function aiKey(settings) {
   if (settings.plainKey) return settings.plainKey;
   if (!settings.key) return '';
@@ -764,7 +792,7 @@ const publicAi = (s) => {
   const provider = aiProvider(s);
   const slot = aiSlot(s, provider);
   return {
-    provider, baseUrl: s.baseUrl, model: slot.model ?? '', hasKey: Boolean(slot.key || slot.plainKey), defaultUrl: ai.DEFAULTS.baseUrl,
+    enabled: aiEnabled(s), provider, baseUrl: s.baseUrl, model: slot.model ?? '', hasKey: Boolean(slot.key || slot.plainKey), defaultUrl: ai.DEFAULTS.baseUrl,
     contextWindow: slot.contextWindow ?? null,
     providers: Object.entries(ai.PROVIDERS).map(([id, p]) => ({
       id, name: p.name, needsKey: p.needsKey, modelHint: p.modelHint ?? '', defaultModel: p.defaultModel ?? '',
@@ -776,6 +804,7 @@ const publicAi = (s) => {
 ipcMain.handle('ai:settings', () => publicAi(loadAi()));
 ipcMain.handle('ai:save', async (_e, patch) => {
   const s = loadAi();
+  if (typeof patch?.enabled === 'boolean') s.enabled = patch.enabled;
   if (typeof patch?.provider === 'string' && ai.PROVIDERS[patch.provider]) s.provider = patch.provider;
   if (typeof patch?.baseUrl === 'string') s.baseUrl = ai.normalizeBase(patch.baseUrl);
   // The model and key are the chosen provider's.
@@ -803,14 +832,14 @@ ipcMain.handle('ai:save', async (_e, patch) => {
 let aiRun = null;
 ipcMain.handle('ai:models', async () => {
   const s = loadAi();
-  return ai.listModels(await aiRequest(s), { signal: AbortSignal.timeout(15000) });
+  return ai.listModels(await aiRequestWithKey(s), { signal: AbortSignal.timeout(15000) });
 });
 ipcMain.handle('ai:annotate', async (_e, game) => {
   const s = loadAi();
   aiRun?.abort();
   const run = aiRun = new AbortController();
   try {
-    return await ai.annotate(await aiRequest(s), game ?? {}, { signal: run.signal });
+    return await ai.annotate(await aiRequestWithKey(s), game ?? {}, { signal: run.signal });
   } finally {
     if (aiRun === run) aiRun = null;
   }
@@ -825,6 +854,7 @@ ipcMain.handle('ai:contextWindow', async (_e, model) => {
   const req = await aiRequest(s);
   const set = aiSlot(s, aiProvider(s)).contextWindow;
   if (set) return set;
+  try { await aiRequestWithKey(s); } catch { return null; } // no key: not asked
   const name = String(model || req.model || '');
   const key = `${req.provider}|${req.provider === 'local' ? s.baseUrl : ''}|${name}`;
   if (!aiWindows.has(key)) aiWindows.set(key, ai.contextWindow(req, name).catch(() => null));
@@ -849,7 +879,7 @@ ipcMain.handle('ai:chat', async (_e, id, messages, channel = 'chat') => {
     .filter((m) => ['system', 'user', 'assistant'].includes(m?.role) && typeof m.content === 'string')
     .map((m) => ({ role: m.role, content: m.content }));
   try {
-    return await ai.chat(await aiRequest(s), list, {
+    return await ai.chat(await aiRequestWithKey(s), list, {
       signal: run.signal,
       onDelta: (delta) => { if (win && !win.isDestroyed()) win.webContents.send('backend-event', 'aiChat', { id, delta }); },
       onThinking: (thinking) => { if (win && !win.isDestroyed()) win.webContents.send('backend-event', 'aiChat', { id, thinking }); },
@@ -869,9 +899,17 @@ ipcMain.handle('ai:chatCancel', (_e, channel = 'chat') => { aiChatRuns.get(Strin
 // The address defaults to OpenAI's; the model and voice are only what was
 // chosen ('' for the endpoint's own choice).
 const ttsOf = (s) => ({ baseUrl: ai.TTS_DEFAULTS.baseUrl, model: '', voice: '', ...(s.tts ?? {}) });
+// Off until turned on; settings saved before the switch count as on when
+// a model, voice, key or address of their own was set.
+function ttsEnabled(s) {
+  const t = s.tts ?? {};
+  if (typeof t.enabled === 'boolean') return t.enabled;
+  return Boolean(t.model || t.voice || t.key || t.plainKey || (t.baseUrl && t.baseUrl !== ai.TTS_DEFAULTS.baseUrl));
+}
 const publicTts = (s) => {
   const t = ttsOf(s);
   return {
+    enabled: ttsEnabled(s),
     baseUrl: t.baseUrl, model: t.model, voice: t.voice, instructions: t.instructions ?? '',
     hasKey: Boolean(t.key || t.plainKey), defaults: ai.TTS_DEFAULTS,
     usesAiKey: !(t.key || t.plainKey) && /api\.openai\.com/i.test(t.baseUrl) && Boolean(aiSlot(s, 'openai').key || aiSlot(s, 'openai').plainKey),
@@ -882,6 +920,7 @@ ipcMain.handle('tts:save', async (_e, patch) => {
   const s = loadAi();
   s.tts ??= {};
   patch = patch ?? {};
+  if (typeof patch.enabled === 'boolean') s.tts.enabled = patch.enabled;
   if (typeof patch.baseUrl === 'string') s.tts.baseUrl = ai.speechBase(patch.baseUrl);
   for (const k of ['model', 'voice', 'instructions']) {
     if (typeof patch[k] === 'string') { const v = patch[k].trim(); if (v) s.tts[k] = v; else delete s.tts[k]; }
@@ -897,9 +936,13 @@ ipcMain.handle('tts:save', async (_e, patch) => {
   return publicTts(s);
 });
 // The speech endpoint's key, or OpenAI's from Settings → AI for OpenAI.
+// With no key, a hosted endpoint is not asked (one on this computer or
+// network may need none).
 async function ttsKey(s, t) {
-  const key = await aiKey(t);
-  return key || (/api\.openai\.com/i.test(t.baseUrl) ? aiKey(aiSlot(s, 'openai')) : '');
+  if (!ttsEnabled(s)) throw new Error('The speech server is off: turn it on in Settings → AI.');
+  const key = (await aiKey(t)) || (/api\.openai\.com/i.test(t.baseUrl) ? await aiKey(aiSlot(s, 'openai')) : '');
+  if (!key && !isLocalAddress(t.baseUrl)) throw new Error('No API key for the speech server: add one in Settings → AI (a server on this computer or network needs none).');
+  return key;
 }
 ipcMain.handle('tts:speak', async (_e, text, opts) => {
   const s = loadAi();

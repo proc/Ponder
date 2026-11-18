@@ -66,15 +66,20 @@ function setTheme(name, { save = true } = {}) {
   if (state) { renderBoard(); renderMoves(); renderGameInfo(); } // the Game card's preview is drawn in the theme
 }
 
-// How see-through the glass is (Settings → Appearance): 0 is solid, 90
-// almost clear. The styles read it as --glass-t; it is kept on this computer.
+// How see-through the glass is (Settings → Appearance): 0 is solid, 100
+// nearly clear. The styles read it as --glass-t, with --glass-k and
+// --glass-blur easing off the extra body and the frosting past the middle;
+// it is kept on this computer.
 const GLASS_DEFAULT = 48;
 let glassTransparency = (() => {
-  try { const v = parseInt(localStorage.getItem('glassTransparency'), 10); return Number.isFinite(v) ? Math.max(0, Math.min(90, v)) : GLASS_DEFAULT; } catch { return GLASS_DEFAULT; }
+  try { const v = parseInt(localStorage.getItem('glassTransparency'), 10); return Number.isFinite(v) ? Math.max(0, Math.min(100, v)) : GLASS_DEFAULT; } catch { return GLASS_DEFAULT; }
 })();
 function setGlassTransparency(v, { save = true } = {}) {
-  glassTransparency = Math.max(0, Math.min(90, Math.round(+v || 0)));
-  document.documentElement.style.setProperty('--glass-t', `${glassTransparency}%`);
+  glassTransparency = Math.max(0, Math.min(100, Math.round(+v || 0)));
+  const t = glassTransparency, root = document.documentElement.style;
+  root.setProperty('--glass-t', `${t}%`);
+  root.setProperty('--glass-k', String(Math.max(0, Math.min(1, (100 - t) / 50))));
+  root.setProperty('--glass-blur', String(t <= 60 ? 1 : 1 - ((t - 60) / 40) * 0.8));
   if ($('#glass-transparency-value')) $('#glass-transparency-value').textContent = `${glassTransparency}%`;
   if (save) try { localStorage.setItem('glassTransparency', String(glassTransparency)); } catch { /* storage unavailable */ }
 }
@@ -1064,6 +1069,14 @@ function renderPlayers() {
     $('.abort', box).hidden = !((state.active && nearest) || (ours && state.moves.length < 2));
     $('.takeback', box).hidden = !(state.canTakeback && player?.type === 'human' && (humans === 1 || nearest) && !offers?.takeback);
     $('.takeback', box).title = play ? 'Ask your opponent to take back your last move' : 'Take back your last move';
+    // An engine in a game played here can be swapped or reloaded mid-game.
+    const loading = Boolean(state.loading?.includes(side));
+    const swap = $('.engine', box);
+    swap.hidden = !(state.active && !state.external && player?.type === 'engine');
+    swap.dataset.side = side;
+    swap.disabled = loading;
+    swap.textContent = loading ? '⇄ Starting…' : '⇄ Engine';
+    if (loading) $('.kind', box).textContent = `${side} · engine starting…`;
   }
   renderClocks();
   window.renderPlayOffer?.();
@@ -2890,6 +2903,54 @@ async function takeback() {
   }
 }
 for (const btn of document.querySelectorAll('.player .takeback')) btn.onclick = takeback;
+
+// Swapping or reloading the engine of a side, mid-game: the menu of the
+// "⇄ Engine" button in its bar. Reload starts it again with its saved
+// options (as they are now in Settings → Engines); another engine takes
+// over from the position reached, on the same clock.
+const engineMenu = $('#engine-menu');
+function closeEngineMenu() { engineMenu.hidden = true; }
+async function replaceEngine(side, player) {
+  closeEngineMenu();
+  try {
+    await api.backend('replaceEngine', { side, player });
+  } catch (err) {
+    notify(String(err.message || err), { title: player.enginePath ? 'The engine was not swapped' : 'The engine was not reloaded' });
+  }
+}
+async function openEngineMenu(btn) {
+  const side = btn.dataset.side;
+  const now = state?.players?.[side];
+  if (!now || now.type !== 'engine') return;
+  try { engines = await api.engines.list(); } catch { /* the list as it was */ }
+  const asPlayer = (e) => ({ name: e.name, enginePath: e.path, engineArgs: e.args ?? [], options: e.options ?? {} });
+  const current = engines.find((e) => e.path === now.enginePath && e.name === now.name) ?? engines.find((e) => e.path === now.enginePath);
+  const item = (label, sub, onclick, checked = false) => {
+    const b = el('button', { type: 'button', role: 'menuitem' }, [label]);
+    if (sub) b.append(el('span', { className: 'count', textContent: sub }));
+    if (checked) b.classList.add('current');
+    b.onclick = onclick;
+    return b;
+  };
+  const others = engines.filter((e) => e !== current);
+  engineMenu.replaceChildren(
+    el('div', { className: 'menu-head', textContent: `${side === 'white' ? 'White' : 'Black'}: ${now.name}` }),
+    item('↻ Reload', current ? 'with its saved options' : 'as it was started', () => replaceEngine(side, current ? asPlayer(current) : {})),
+    ...(others.length ? [el('div', { className: 'menu-head', textContent: 'Swap for' })] : []),
+    ...others.map((e) => item(e.name, '', () => replaceEngine(side, asPlayer(e)))),
+  );
+  const r = btn.getBoundingClientRect();
+  engineMenu.hidden = false;
+  const w = engineMenu.offsetWidth, h = engineMenu.offsetHeight;
+  engineMenu.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.right - w))}px`;
+  engineMenu.style.top = `${r.bottom + 4 + h > innerHeight - 8 ? Math.max(8, r.top - h - 4) : r.bottom + 4}px`;
+  engineMenu.firstElementChild?.nextElementSibling?.focus();
+}
+for (const btn of document.querySelectorAll('.player .act.engine')) {
+  btn.onclick = (e) => { e.stopPropagation(); if (engineMenu.hidden) openEngineMenu(btn); else closeEngineMenu(); };
+}
+document.addEventListener('click', (e) => { if (!e.target.closest?.('#engine-menu')) closeEngineMenu(); });
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeEngineMenu(); });
 for (const btn of document.querySelectorAll('.player .draw')) {
   btn.onclick = async () => {
     if (playLive()) {

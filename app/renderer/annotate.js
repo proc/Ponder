@@ -365,7 +365,24 @@ function fillChoices(sel, names, current, emptyLabel) {
 }
 const aiModelList = new Map(); // provider → the models it listed last
 let aiModelEmpty = '';
+// AI on or off (Settings → AI, off until turned on): off, nothing of it
+// shows and nothing is sent.
+let aiOn = null; // null until the settings are read
+function applyAiOn(on) {
+  aiOn = Boolean(on);
+  document.body.classList.toggle('ai-off', !aiOn);
+  $('#ai-enabled').checked = aiOn;
+  $('#ai-fields').hidden = !aiOn;
+  if (!aiOn) {
+    if (typeof setAiPanel === 'function' && aiPanel?.open) setAiPanel(false);
+    if (typeof cm !== 'undefined' && cm.on) setCommentary(false);
+  }
+}
+window.aiIsOn = () => aiOn;
+// Read once at start (the scripts after this one are loaded by the time it answers).
+api.ai.settings().then((s) => applyAiOn(s.enabled), () => applyAiOn(false));
 function showAiSettings(s) {
+  applyAiOn(s.enabled);
   const sel = $('#ai-provider');
   if (sel.options.length !== (s.providers ?? []).length) {
     sel.replaceChildren(...(s.providers ?? []).map((p) => el('option', { value: p.id, textContent: p.name })));
@@ -390,8 +407,12 @@ async function fillAiSettings() {
   try { s = await api.ai.settings(); } catch { return; }
   showAiSettings(s);
   // The list of models, asked for each time the settings open.
-  refreshAiModels({ quiet: true });
+  if (aiOn) refreshAiModels({ quiet: true });
 }
+$('#ai-enabled').addEventListener('change', async (e) => {
+  try { showAiSettings(await api.ai.save({ enabled: e.target.checked })); } catch (err) { aiSay(errorText(err), true); return; }
+  if (aiOn) refreshAiModels({ quiet: true });
+});
 window.fillAiSettings = fillAiSettings;
 const aiSay = (text, bad = false) => { $('#ai-note').textContent = text; $('#ai-note').classList.toggle('error', bad); };
 async function saveAiSetting(patch) {

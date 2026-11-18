@@ -25,11 +25,14 @@ func main() {
 	delay := flag.Duration("delay", 400*time.Millisecond, "opponent thinking time")
 	maxPlies := flag.Int("maxplies", 300, "games longer than this end in a draw")
 	notBot := flag.Bool("notbot", false, "start as a regular account (to try the upgrade)")
+	rateLimited := flag.Int("ratelimit", 0, "refuse this many challenges sent with 429 Too Many Requests")
+	rateSecs := flag.Float64("ratelimitsecs", 0, "seconds the 429 names (the daily bot-game limit); 0: a bare 429")
 	flag.Parse()
 	s := fake.New(*token, *user)
 	s.Delay = *delay
 	s.Bot = !*notBot
 	s.MaxPlies = *maxPlies
+	s.RateLimited, s.RateLimitSeconds = *rateLimited, *rateSecs
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		log.Fatal(err)

@@ -81,6 +81,8 @@ type State struct {
 	CanTakeback bool `json:"canTakeback"`
 	// Set while the board shows a game played elsewhere (a Lichess bot game).
 	External *ExternalInfo `json:"external,omitempty"`
+	// The sides whose engine is being swapped or reloaded.
+	Loading []string `json:"loading,omitempty"`
 }
 
 // ExternalInfo describes a game shown from elsewhere.
@@ -205,6 +207,12 @@ type current struct {
 	// Option changes saved while the engine was searching: sent before
 	// its next search.
 	pendingOpts [2][]string
+	// Which engine sits at each side: bumped when one is swapped or
+	// reloaded, so what the one before still sends is ignored.
+	seat [2]int
+	// A side's engine is being started in place of another: its clock
+	// waits and it is not asked for a move until it is ready.
+	loading [2]bool
 }
 
 // bookSoFar is the book opening reached by the last move played.
@@ -283,21 +291,7 @@ func (m *Manager) NewGame(cfg Config) error {
 		if !p.isEngine() {
 			continue
 		}
-		side := chess.Color(i)
-		e, err := uci.Start(p.EnginePath, p.EngineArgs, uci.Handlers{
-			OnInfo:     func(in uci.Info) { m.onInfo(gen, side, in) },
-			OnBestMove: func(mv string) { m.onBestMove(gen, side, mv) },
-			OnString:   func(text string) { m.onString(gen, side, text) },
-			OnExit:     func() { m.onEngineExit(gen, side) },
-		})
-		if err == nil {
-			if err = e.ApplyOptions(uci.WithWDL(e.Options, p.Options)); err == nil {
-				err = e.NewGame()
-			}
-			if err != nil {
-				e.Quit()
-			}
-		}
+		e, err := m.startEngine(gen, chess.Color(i), 0, p)
 		if err != nil {
 			if engines[0] != nil {
 				engines[0].Quit()
@@ -331,11 +325,165 @@ func (m *Manager) NewGame(cfg Config) error {
 	return nil
 }
 
+// startEngine starts the engine of a player, for the side and seat given,
+// ready for the game: its options set and told a new game begins.
+func (m *Manager) startEngine(gen int, side chess.Color, seat int, p PlayerConfig) (*uci.Engine, error) {
+	e, err := uci.Start(p.EnginePath, p.EngineArgs, uci.Handlers{
+		OnInfo:     func(in uci.Info) { m.onInfo(gen, side, seat, in) },
+		OnBestMove: func(mv string) { m.onBestMove(gen, side, seat, mv) },
+		OnString:   func(text string) { m.onString(gen, side, seat, text) },
+		OnExit:     func() { m.onEngineExit(gen, side, seat) },
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err = e.ApplyOptions(uci.WithWDL(e.Options, p.Options)); err == nil {
+		err = e.NewGame()
+	}
+	if err != nil {
+		e.Quit()
+		return nil, err
+	}
+	return e, nil
+}
+
+// fromSeat reports whether a message comes from the engine now at side in
+// the game being played (not one swapped out, or of a game before).
+func (m *Manager) fromSeat(gen int, side chess.Color, seat int) bool {
+	return gen == m.gen && m.g != nil && m.g.seat[side] == seat
+}
+
+// ReplaceEngine swaps the engine playing side ("white" or "black") in the
+// game being played for another (p, keeping the side's time control), or
+// reloads it (p's engine the same as before, or p with no engine path: the
+// engine exactly as it was started). The engine before is stopped
+// at once; the clock of that side waits while the new one starts, and if
+// it is that side's turn the new engine is asked for a move as soon as it
+// is ready. If the new engine cannot be started, the one before is started
+// again; if that fails too, the side forfeits.
+func (m *Manager) ReplaceEngine(sideName string, p PlayerConfig) error {
+	side := chess.White
+	switch sideName {
+	case "white":
+	case "black":
+		side = chess.Black
+	default:
+		return fmt.Errorf("unknown side %q", sideName)
+	}
+	m.mu.Lock()
+	g := m.g
+	if g == nil || g.over() {
+		m.mu.Unlock()
+		return errors.New("no game is being played")
+	}
+	if !g.players[side].isEngine() {
+		m.mu.Unlock()
+		return fmt.Errorf("%s is not played by an engine", colorNames[side])
+	}
+	if g.loading[side] {
+		m.mu.Unlock()
+		return fmt.Errorf("%s's engine is already being started", colorNames[side])
+	}
+	before := g.players[side]
+	if p.EnginePath == "" { // reload it as it was
+		p = before
+	}
+	p.Type, p.TimeControl, p.Rating = "engine", before.TimeControl, ""
+	if p.Name == "" {
+		p.Name = "Engine"
+	}
+	gen := m.gen
+	g.seat[side]++
+	seat := g.seat[side]
+	old := g.engines[side]
+	g.engines[side] = nil
+	g.loading[side] = true
+	g.pendingOpts[side] = nil
+	g.ignoreBest[side] = 0
+	if g.pos.Turn == side {
+		m.pauseTurnLocked()
+	}
+	m.emitStateLocked()
+	m.mu.Unlock()
+	if old != nil {
+		old.Quit()
+	}
+
+	e, err := m.startEngine(gen, side, seat, p)
+	used := p
+	if err != nil {
+		e, used = nil, before
+		if e2, err2 := m.startEngine(gen, side, seat, before); err2 == nil {
+			e = e2
+		}
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if gen != m.gen || m.g != g || g.over() || g.seat[side] != seat {
+		if e != nil {
+			e.Quit()
+		}
+		if err == nil {
+			err = errors.New("the game ended while the engine was starting")
+		}
+		return err
+	}
+	g.loading[side] = false
+	if e == nil {
+		m.endLocked(winResult(side.Other()),
+			fmt.Sprintf("%s forfeits: engine could not be started", capName(side)))
+		return err
+	}
+	g.engines[side] = e
+	g.players[side] = used
+	if side == chess.White {
+		g.cfg.White = used
+	} else {
+		g.cfg.Black = used
+	}
+	if g.pos.Turn == side {
+		m.startTurnLocked()
+	} else {
+		m.emitStateLocked()
+	}
+	if err != nil {
+		return fmt.Errorf("%s (the engine before was started again)", err)
+	}
+	return nil
+}
+
+// pauseTurnLocked stops the running clock of the side to move, counting the
+// time it has used so far, until the turn is started again.
+func (m *Manager) pauseTurnLocked() {
+	g := m.g
+	if g.flag != nil {
+		g.flag.Stop()
+		g.flag = nil
+	}
+	if !g.turnStart.IsZero() {
+		c := g.clocks[g.pos.Turn]
+		if c.Timed() && c.tc.Kind != "movetime" {
+			c.RemainingMs -= time.Since(g.turnStart).Milliseconds()
+			if c.RemainingMs < 0 {
+				c.RemainingMs = 0
+			}
+		}
+		g.turnStart = time.Time{}
+	}
+}
+
 // startTurnLocked starts the clock of the side to move and, if that side is
 // an engine, asks it for a move.
 func (m *Manager) startTurnLocked() {
 	g := m.g
 	side := g.pos.Turn
+	if g.loading[side] {
+		// Its engine is starting: the turn begins when it is ready.
+		g.turnStart = time.Time{}
+		m.emitStateLocked()
+		return
+	}
 	clock := g.clocks[side]
 	g.turnStart = time.Now()
 	engine := g.engines[side]
@@ -581,11 +729,11 @@ func (m *Manager) onFlag(gen, ply int) {
 	m.flagLocked(g.pos.Turn)
 }
 
-func (m *Manager) onBestMove(gen int, side chess.Color, s string) {
+func (m *Manager) onBestMove(gen int, side chess.Color, seat int, s string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	g := m.g
-	if gen != m.gen || g == nil || g.over() {
+	if !m.fromSeat(gen, side, seat) || g.over() {
 		return
 	}
 	if g.ignoreBest[side] > 0 {
@@ -604,21 +752,21 @@ func (m *Manager) onBestMove(gen int, side chess.Color, s string) {
 	m.applyLocked(mv)
 }
 
-func (m *Manager) onEngineExit(gen int, side chess.Color) {
+func (m *Manager) onEngineExit(gen int, side chess.Color, seat int) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if gen != m.gen || m.g == nil {
+	if !m.fromSeat(gen, side, seat) {
 		return
 	}
 	m.endLocked(winResult(side.Other()),
 		fmt.Sprintf("%s forfeits: engine process exited", capName(side)))
 }
 
-func (m *Manager) onInfo(gen int, side chess.Color, in uci.Info) {
+func (m *Manager) onInfo(gen int, side chess.Color, seat int, in uci.Info) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	g := m.g
-	if gen != m.gen || g == nil || g.over() || g.pos.Turn != side || in.MultiPV > 1 {
+	if !m.fromSeat(gen, side, seat) || g.over() || g.pos.Turn != side || in.MultiPV > 1 {
 		return
 	}
 	// Engines can send thousands of lines a second; the UI needs a few.
@@ -686,11 +834,11 @@ func OpeningName(text string) string {
 	return ""
 }
 
-func (m *Manager) onString(gen int, side chess.Color, text string) {
+func (m *Manager) onString(gen int, side chess.Color, seat int, text string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	g := m.g
-	if gen != m.gen || g == nil || g.over() {
+	if !m.fromSeat(gen, side, seat) || g.over() {
 		return
 	}
 	if len(text) > 500 {
@@ -783,6 +931,11 @@ func (m *Manager) stateLocked() State {
 		s.External = &ext
 	}
 	s.CanTakeback = m.takebackPliesLocked() > 0
+	for i, l := range g.loading {
+		if l && s.Active {
+			s.Loading = append(s.Loading, colorNames[i])
+		}
+	}
 	if s.Moves == nil {
 		s.Moves = []MoveRecord{}
 	}

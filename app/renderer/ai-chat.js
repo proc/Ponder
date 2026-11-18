@@ -50,6 +50,7 @@ function renderAiHandle() {
 }
 
 function setAiPanel(open, { focus = true } = {}) {
+  if (open && window.aiIsOn?.() === false) return; // AI is off
   const panel = $('#ai-panel');
   aiPanel.open = Boolean(open);
   if (aiPanel.open) aiPanel.unread = false;
