@@ -780,6 +780,15 @@ select {
   background-position: right 0.75rem top 54%, right 0.48rem top 54%;
   background-size: 0.28rem 0.28rem; background-repeat: no-repeat;
 }
+/* The open list. On Windows (and Linux) Chromium draws it as its own popup
+   and takes each option's colours from the page; without these it inherits
+   the select's see-through --fill, which lands on the popup's white base and
+   leaves the dark themes' light text unreadable. Opaque theme colours keep it
+   legible; the chosen row takes the accent. macOS draws a native menu and
+   ignores these. */
+select option, select optgroup { background-color: var(--panel); color: var(--text); }
+select option:checked { background-color: var(--accent); color: var(--on-accent); }
+select option:disabled { color: var(--muted); }
 :focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
 /* Ticks and choices. */
 input[type="checkbox"], input[type="radio"] {
