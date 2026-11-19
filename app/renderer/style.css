@@ -1929,12 +1929,21 @@ body.zen .float-win { display: none; }
 .chf-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chf-row.declined .chf-detail, .chf-row.failed .chf-detail { white-space: normal; }
 .chf-meta { font-size: 0.8rem; }
-/* When the next challenge to a random bot goes out. */
+/* What the random-bot run (auto challenge) is doing now; it stays when the
+   window is folded, so the window is never blank while it runs. */
 .chf-next {
-  flex: none; margin: 0; padding: 0.55rem 0.85rem; border-top: 1px solid var(--sep);
-  font-size: 0.88rem; font-weight: 600; font-variant-numeric: tabular-nums;
+  flex: none; display: flex; align-items: baseline; gap: 0.5rem; margin: 0; padding: 0.55rem 0.85rem;
+  border-top: 1px solid var(--sep); font-size: 0.86rem; line-height: 1.35; font-variant-numeric: tabular-nums;
 }
+.chf-next[hidden] { display: none; }
+.chf-next::before {
+  content: ''; flex: none; width: 0.45rem; height: 0.45rem; border-radius: 50%;
+  background: var(--muted); transform: translateY(-0.05rem);
+}
+.chf-next.busy::before { background: var(--highlight); animation: chf-wait 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .chf-next.busy::before { animation: none; } }
 .chf-list:empty + .chf-next { border-top: 0; }
+.float-win.folded > .chf-next:not([hidden]) { display: flex; }
 /* Auto challenge, to turn off without going to the Lichess tab; it stays
    when the window is folded. */
 .chf-auto {

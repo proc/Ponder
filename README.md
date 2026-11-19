@@ -1,8 +1,4 @@
-<p align="center">
-  <img src="esper.svg" alt="Ponder logo" width="160">
-</p>
-
-<h1 align="center">Ponder</h1>
+# Ponder
 
 A desktop chess GUI for UCI engines. The window is Electron; the chess
 rules, clocks and engine processes live in a Go backend that Electron

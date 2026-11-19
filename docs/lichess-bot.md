@@ -66,7 +66,16 @@ When Lichess refuses a challenge for too many requests (including the daily bot-
 
 Every challenge you send, including ones made on the Lichess website, shows in a small floating window: waiting (with countdown and **Cancel**), accepted, declined with reason, no answer, withdrawn, or **Not sent** with the error. Answered challenges go after a few seconds.
 
-While the random-bot challenger runs, the window stays up with its latest challenge, "Next challenge in 42 s", an **Auto challenge** switch or the game count with **Stop**, and "1 of 2 games at once". Drag, fold or hide it (✕); a **Challenges** button at the bottom right brings it back. It is hidden in zen mode.
+While the random-bot challenger runs, the window stays up with its latest challenge, an **Auto challenge** switch or the game count with **Stop**, and "1 of 2 games at once". Above the switch, a line always says what the challenger is doing now, with a countdown when it waits:
+
+- "Looking for an opponent…"
+- "Challenged maia1 to 3+2 blitz casual: waiting for an answer (12 s so far; withdrawn in 18 s if there is no answer)."
+- "grumpy declined: later. Next challenge in 42 s." (or "did not answer", or why it could not be sent)
+- "No bot online fits your settings at blitz right now (52 online). Trying again in 30 s."
+- "Lichess refused a challenge for too many requests: none until 12:34 (in 9 min)."
+- "Your engine is playing: the next challenge goes out when the game ends."
+
+That line stays when the window is folded, so the window is never blank while the challenger runs. Drag, fold or hide it (✕); a **Challenges** button at the bottom right brings it back. It is hidden in zen mode.
 
 ## Watching your engine play
 

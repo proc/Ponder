@@ -44,6 +44,8 @@ type harness struct {
 	// Every ponderHit event, and how many moves the board showed then.
 	ponderHits  []PonderHit
 	hitsShownAt []int
+	// Every random-bot run status emitted, in order.
+	seeks []SeekStatus
 }
 
 func newHarness(t *testing.T, policy Policy) *harness {
@@ -58,6 +60,9 @@ func newHarness(t *testing.T, policy Policy) *harness {
 			switch ev {
 			case "lichess":
 				h.last = data.(Status)
+				if sk := h.last.Seek; sk != nil {
+					h.seeks = append(h.seeks, *sk)
+				}
 			case "engineInfo":
 				h.infos++
 				h.engineInfos = append(h.engineInfos, data.(game.EngineInfo))
@@ -481,10 +486,10 @@ func TestSeekWaitsAMinuteBetweenChallenges(t *testing.T) {
 	if err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2, Color: "random"}}); err != nil {
 		t.Fatal(err)
 	}
-	s := h.waitFor("waiting after the first answer", func(s Status) bool { return s.Seek != nil && s.Seek.Tried == 1 && s.Seek.NextAt > 0 })
-	if left := time.Until(time.UnixMilli(s.Seek.NextAt)); left < 300*time.Millisecond {
-		t.Fatalf("next challenge only %v away", left)
-	}
+	// (A short pause after the answer counts down too; then the rest of the minute.)
+	h.waitFor("waiting after the first answer", func(s Status) bool {
+		return s.Seek != nil && s.Seek.Tried == 1 && s.Seek.Phase == "pause" && time.Until(time.UnixMilli(s.Seek.NextAt)) > 300*time.Millisecond
+	})
 	if err := h.bot.Challenge(ChallengeParams{Username: "x", Limit: 60}); err == nil {
 		t.Fatal("manual challenge allowed during the search")
 	}

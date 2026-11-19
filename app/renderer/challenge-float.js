@@ -6,8 +6,11 @@
 // few seconds, then goes; with none left the window closes. Drag it by its
 // header; the arrow folds it down to the header. It opens at the bottom
 // right of the app's window each time. While your engine is challenging random bots,
-// a declined challenge stays until the next one goes out, and the window
-// counts down to it. ✕ hides it, until the button it leaves in the tray at
+// a declined challenge stays until the next one goes out, and a line at the
+// bottom always says what the run is doing now (looking for an opponent,
+// waiting for an answer, waiting before the next challenge, no bot that
+// fits, held back by Lichess…), with a countdown to whatever it waits for;
+// that line stays when the window is folded. ✕ hides it, until the button it leaves in the tray at
 // the bottom right is pressed; whether it is hidden is kept.
 
 const chf = {
@@ -45,10 +48,12 @@ function chfSeekChallenge(sc) {
   if (!it) {
     for (const [k, old] of chf.items) if (old.who === 'engine' && old.held) { clearTimeout(old.timer); chf.items.delete(k); }
     const c = { id: sc.id || key, user: sc.user, title: sc.title ?? '', rating: sc.rating ?? 0, tc: chfClock(sc.limit, sc.increment ?? 0),
-      rated: Boolean(sc.rated), speed: sc.speed ?? '', color: 'random' };
+      rated: Boolean(sc.rated), speed: sc.speed ?? '', color: 'random', expiresAt: sc.answerBy || 0 };
     it = { who: 'engine', c, state: 'waiting', text: '' };
     chf.items.set(key, it);
   }
+  // How long it waits for an answer, when the outgoing list does not say.
+  if (it.state === 'waiting' && sc.answerBy && !it.c.expiresAt) it.c = { ...it.c, expiresAt: sc.answerBy };
   if (sc.state === 'waiting') return;
   // Its end, unless already known: a row the outgoing list took to be
   // withdrawn learns here that it was declined, or had no answer.
@@ -97,25 +102,66 @@ function chfExpire(key, it) {
   it.timer = setTimeout(() => { chf.items.delete(key); renderChallengeFloat(); }, CHF_KEEP[it.state] ?? 8000);
 }
 
-// When your engine's next challenge to a random bot goes out, if it is
-// waiting to send one: { at } (Unix ms), or { text } while it looks for a bot.
-function chfNext() {
-  const seek = lx.status.seek;
-  if (!seek?.active || seek.playing) return null;
-  if ([...chf.items.values()].some((it) => it.who === 'engine' && it.state === 'waiting')) return null;
-  if (seek.nextAt > Date.now()) return { at: seek.nextAt };
-  return [...chf.items.values()].some((it) => it.held) ? { text: 'Looking for the next bot to challenge…' } : null;
+// A wait in plain words: "40 s", "3 min", "1 h 5 min".
+function chfSpan(ms) {
+  // (Non-breaking spaces: "56 s" is not split across lines.)
+  const left = Math.max(0, Math.ceil(ms / 1000));
+  if (left < 90) return `${left}\u00a0s`;
+  if (left < 3600) return `${Math.round(left / 60)}\u00a0min`;
+  const min = Math.round((left % 3600) / 60);
+  return `${Math.floor(left / 3600)}\u00a0h${min ? `\u00a0${min}\u00a0min` : ''}`;
 }
 
-function chfNextText(n) {
-  const left = Math.max(0, Math.ceil((+n.dataset.at - Date.now()) / 1000));
-  const span = left >= 60 ? `${Math.floor(left / 60)} min ${left % 60} s` : `${left} s`;
-  n.textContent = left ? `Next challenge in ${span}` : 'Sending the next challenge…';
+// What your engine's random-bot run (auto challenge, or a number of games
+// asked for) is doing right now, in words, for the line at the bottom of
+// the window: { text, kind } (kind: its look), or null when no run is on.
+// It ticks: a wait counts down, and a challenge out counts up.
+function chfNow() {
+  const seek = lx.status.seek;
+  const auto = typeof autoChallenge !== 'undefined' && autoChallenge;
+  if (!seek?.active) {
+    if (!auto) return null;
+    return lx.status.state === 'connected'
+      ? { text: 'Starting auto challenge…', kind: 'busy' }
+      : { text: 'Auto challenge starts when your engine connects to Lichess.', kind: 'idle' };
+  }
+  const now = Date.now();
+  const left = seek.nextAt > now ? seek.nextAt - now : 0;
+  const msg = String(seek.message ?? '').trim();
+  const sc = seek.challenge;
+  switch (seek.phase) {
+    case 'waiting': {
+      if (!sc) break;
+      const what = [chfClock(sc.limit, sc.increment ?? 0), sc.speed, sc.rated ? 'rated' : 'casual'].filter(Boolean).join(' ');
+      const since = `${chfSpan(now - sc.at)} so far`;
+      const until = sc.answerBy > now ? `; withdrawn in ${chfSpan(sc.answerBy - now)} if there is no answer` : '';
+      return { text: `Challenged ${sc.user} to ${what}: waiting for an answer (${since}${until}).`, kind: 'busy' };
+    }
+    case 'pause':
+      return { text: left ? `${msg} Next challenge in ${chfSpan(left)}.` : msg || 'Looking for an opponent…', kind: 'busy' };
+    case 'nobots': case 'offline': case 'error':
+      return { text: left ? `${msg} Trying again in ${chfSpan(left)}.` : `${msg} Trying again now…`, kind: 'idle' };
+    case 'limited':
+      return { text: left ? `${msg.replace(/\.$/, '')} (in ${chfSpan(left)}).` : 'Lichess allows challenges again: looking for an opponent…', kind: 'idle' };
+    case 'playing':
+      return { text: msg, kind: 'idle' };
+    default:
+      break;
+  }
+  // Looking for an opponent, or sending a challenge (an older backend: no phase).
+  return { text: msg || 'Looking for an opponent…', kind: 'busy' };
 }
-setInterval(() => {
+
+function chfNowText() {
   const n = $('#ch-float-next');
-  if (!$('#ch-float').hidden && n.dataset.at) chfNextText(n);
-}, 500);
+  const now = chfNow();
+  n.hidden = !now;
+  n.textContent = now?.text ?? '';
+  n.title = now?.text ?? '';
+  n.className = 'chf-next' + (now ? ' ' + now.kind : '');
+  return now;
+}
+setInterval(() => { if (!$('#ch-float').hidden) chfNowText(); }, 500);
 
 // Called with each status of your engine's connection ('engine') or of
 // your own account ('you'): prev and next are the statuses.
@@ -130,7 +176,7 @@ function trackChallenges(who, prev, next) {
       for (const [k, old] of chf.items) if (old.who === who && old.held) { clearTimeout(old.timer); chf.items.delete(k); }
       chf.items.set(key, { who, c, state: 'waiting', text: '' });
     }
-    else if (it.state === 'waiting') it.c = c; // its time to wait may have been set since
+    else if (it.state === 'waiting') it.c = { ...c, expiresAt: c.expiresAt || it.c.expiresAt }; // its time to wait may have been set since
   }
   const games = new Set((next.games ?? []).map((g) => g.id));
   for (const [key, it] of chf.items) {
@@ -177,21 +223,21 @@ function chfGameText(id, who) {
 function renderChallengeFloat() {
   const win = $('#ch-float');
   const items = [...chf.items];
-  const upcoming = chfNext();
   const was = win.hidden;
   // Auto challenge (or a run of random-bot challenges) can be stopped here.
   const seeking = Boolean(lx.status.seek?.active);
   const auto = typeof autoChallenge !== 'undefined' && autoChallenge;
   // Up while your engine is challenging random bots, so its bottom row says
   // how the run stands (and why nothing goes out while it plays its games).
-  const wanted = !(items.length === 0 && !upcoming?.at && !seeking);
+  // Auto challenge on: up too while it starts, so the switch is at hand.
+  const wanted = items.length > 0 || seeking || (auto && lx.status.state === 'connected');
   win.hidden = !wanted || Boolean(chf.pos.hidden);
   // Hidden with ✕: a button in the tray says how it stands, and brings it back.
   const pill = chfPill();
   pill.hidden = !(wanted && chf.pos.hidden);
   if (!pill.hidden) {
     const waitingNow = items.filter(([, it]) => it.state === 'waiting').length;
-    pill.textContent = 'Challenges' + (waitingNow ? ` · ${waitingNow} waiting` : upcoming?.at ? ' · next soon' : '');
+    pill.textContent = 'Challenges' + (waitingNow ? ` · ${waitingNow} waiting` : seeking && lx.status.seek.nextAt > Date.now() ? ' · next soon' : '');
   }
   if (win.hidden) return;
   const row = $('#ch-float-auto');
@@ -206,14 +252,12 @@ function renderChallengeFloat() {
   const most = lx.status.maxGames || 1;
   const going = (lx.status.games ?? []).filter((g) => !g.finished && g.playing).length;
   const gamesLine = $('#ch-float-games');
-  gamesLine.textContent = `${going} of ${most} game${most === 1 ? '' : 's'} at once` + (going >= most ? ': the next challenge waits for one to end' : '');
+  // (Why nothing goes out while they are all being played: the line above says.)
+  gamesLine.textContent = `${going} of ${most} game${most === 1 ? '' : 's'} at once` + (going >= most && !seeking ? ': the next challenge waits for one to end' : '');
   gamesLine.classList.toggle('full', going >= most);
   // Each time it opens: at the bottom right.
   if (was) { delete chf.pos.x; delete chf.pos.y; }
-  const next = $('#ch-float-next');
-  next.hidden = !upcoming;
-  if (upcoming?.at) { next.dataset.at = upcoming.at; chfNextText(next); }
-  else { delete next.dataset.at; next.textContent = upcoming?.text ?? ''; }
+  chfNowText();
   const waiting = items.filter(([, it]) => it.state === 'waiting').length;
   $('#ch-float-count').textContent = waiting ? `${waiting} waiting` : '';
   const folded = Boolean(chf.pos.folded);

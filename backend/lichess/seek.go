@@ -195,6 +195,27 @@ type SeekStatus struct {
 	// (not sent) or gone (withdrawn when the run stopped). It stays until
 	// the next one goes out, so the challenges window can always show it.
 	Challenge *SeekChallenge `json:"challenge,omitempty"`
+	// Phase is what the run is doing right now, so the challenges window is
+	// never blank while it runs; Message says it in words, and NextAt when a
+	// wait ends:
+	//   looking  reading the bots online, to pick one
+	//   sending  sending a challenge to Current
+	//   waiting  Challenge is out, waiting for an answer
+	//   pause    between challenges (after an answer, or one a minute at most)
+	//   playing  in as many games as it may play at once
+	//   nobots   no bot online fits the settings; it looks again at NextAt
+	//   limited  Lichess refused a challenge for too many requests; none until NextAt
+	//   offline  not connected to Lichess; it tries again at NextAt
+	//   error    Lichess could not be read; it tries again at NextAt
+	Phase string `json:"phase"`
+}
+
+// set says what the run is doing now; wait > 0 is how long until it acts again.
+func (st *SeekStatus) set(phase, msg string, wait time.Duration) {
+	st.Phase, st.Message, st.NextAt = phase, msg, 0
+	if wait > 0 {
+		st.NextAt = time.Now().Add(wait).UnixMilli()
+	}
 }
 
 // SeekChallenge is the random-bot run's latest challenge.
@@ -209,7 +230,8 @@ type SeekChallenge struct {
 	Rated     bool   `json:"rated"`
 	Speed     string `json:"speed,omitempty"`
 	State     string `json:"state"`
-	Reason    string `json:"reason,omitempty"` // why it was declined, or the error
+	Reason    string `json:"reason,omitempty"`   // why it was declined, or the error
+	AnswerBy  int64  `json:"answerBy,omitempty"` // while waiting: when it is withdrawn if not answered (Unix ms)
 }
 
 // SeekFailure is a challenge Lichess refused to send.
@@ -356,7 +378,7 @@ func (b *Bot) StartSeek(p SeekParams) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	sk := &seeker{params: p, cancel: cancel, status: SeekStatus{
 		Active: true, Speed: p.speeds(), MinRating: p.MinRating, MaxRating: p.MaxRating,
-		Message: "Looking for bots online…", Games: limit,
+		Phase: "looking", Message: "Looking for an opponent…", Games: limit,
 	}}
 	b.mu.Lock()
 	b.seek = sk
@@ -474,7 +496,7 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 				if most > 1 {
 					msg = fmt.Sprintf("Your engine is playing %d games, as many as it may at once: the next challenge goes out when one ends.", most)
 				}
-				if !b.seekUpdate(sk, func(st *SeekStatus) { st.Playing, st.Current, st.Rating, st.NextAt, st.Message = true, "", 0, 0, msg }) {
+				if !b.seekUpdate(sk, func(st *SeekStatus) { st.Playing, st.Current, st.Rating = true, "", 0; st.set("playing", msg, 0) }) {
 					return
 				}
 			}
@@ -485,13 +507,19 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 		}
 		if waiting {
 			waiting = false
-			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Playing, st.Message = false, "A game is over: looking for the next bot…" }) {
+			if !b.seekUpdate(sk, func(st *SeekStatus) {
+				st.Playing = false
+				st.set("looking", "A game is over: looking for the next opponent…", 0)
+			}) {
 				return
 			}
 		}
 		client, err := b.connected()
 		if err != nil {
-			b.seekUpdate(sk, func(st *SeekStatus) { st.Message = "Not connected to Lichess" })
+			b.seekUpdate(sk, func(st *SeekStatus) {
+				st.Current, st.Rating = "", 0
+				st.set("offline", "Not connected to Lichess.", seekRetry)
+			})
 			if !sleepCtx(ctx, seekRetry) {
 				return
 			}
@@ -506,13 +534,13 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 		// Lichess said too many challenges: none until it allows them again.
 		if until := b.heldUntil(me); !until.IsZero() {
 			msg := fmt.Sprintf("Lichess refused a challenge for too many requests: none until %s.", until.Format("15:04"))
-			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Current, st.Rating, st.NextAt, st.Message = "", 0, until.UnixMilli(), msg }) {
+			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Current, st.Rating = "", 0; st.set("limited", msg, time.Until(until)) }) {
 				return
 			}
 			if !sleepCtx(ctx, time.Until(until)) {
 				return
 			}
-			b.seekUpdate(sk, func(st *SeekStatus) { st.NextAt, st.Message = 0, "Looking for bots online…" })
+			b.seekUpdate(sk, func(st *SeekStatus) { st.set("looking", "Looking for an opponent…", 0) })
 			continue
 		}
 		settings()
@@ -524,7 +552,7 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 				return
 			}
 			if err != nil {
-				b.seekUpdate(sk, func(st *SeekStatus) { st.Message = "Could not read your bot's rating: " + err.Error() })
+				b.seekUpdate(sk, func(st *SeekStatus) { st.set("error", "Could not read your bot's rating: "+err.Error(), seekRetry) })
 				if !sleepCtx(ctx, seekRetry) {
 					return
 				}
@@ -544,6 +572,18 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			}
 			return max(r-params.Around, 1), r + params.Around, true
 		}
+		// Looking for an opponent; after an answer, what became of the last
+		// challenge stays said meanwhile (the look takes a moment).
+		if !b.seekUpdate(sk, func(st *SeekStatus) {
+			if st.Phase == "pause" {
+				st.NextAt = 0
+			} else {
+				st.Current, st.Rating = "", 0
+				st.set("looking", "Looking for an opponent…", 0)
+			}
+		}) {
+			return
+		}
 		lctx, lcancel := context.WithTimeout(ctx, 20*time.Second)
 		bots, err := client.OnlineBots(lctx, 300)
 		lcancel()
@@ -555,7 +595,7 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			if RateLimited(err) {
 				wait = time.Minute
 			}
-			b.seekUpdate(sk, func(st *SeekStatus) { st.Message = "Could not list the bots online: " + err.Error() })
+			b.seekUpdate(sk, func(st *SeekStatus) { st.set("error", "Could not list the bots online: "+err.Error(), wait) })
 			if !sleepCtx(ctx, wait) {
 				return
 			}
@@ -598,17 +638,17 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 		}
 		if len(pool) == 0 {
 			speeds := params.speeds()
-			msg := fmt.Sprintf("No bot online fits your settings at %s right now (%d online). Trying again shortly…", speeds, len(bots))
+			msg := fmt.Sprintf("No bot online fits your settings at %s right now (%d online).", speeds, len(bots))
 			switch {
 			case asked:
-				msg = fmt.Sprintf("Every matching bot online has been asked (%d). Asking again shortly…", len(tried))
+				msg = fmt.Sprintf("Every matching bot online has been asked (%d); they will be asked again.", len(tried))
 				tried = map[string]bool{}
 			case len(unrated) > 0 && !strings.Contains(speeds, "/"):
 				msg = fmt.Sprintf("Your bot has no %s rating yet, so there is nothing to take the range around. Set a range instead.", speeds)
 			case len(unrated) > 0:
-				msg = fmt.Sprintf("No bot online fits your settings right now (%d online); your bot has no rating yet at %s, so those clocks are skipped. Trying again shortly…", len(bots), strings.Join(unrated, ", "))
+				msg = fmt.Sprintf("No bot online fits your settings right now (%d online); your bot has no rating yet at %s, so those clocks are skipped.", len(bots), strings.Join(unrated, ", "))
 			}
-			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Current, st.Rating, st.Message = "", 0, msg }) {
+			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Current, st.Rating = "", 0; st.set("nobots", msg, seekRetry) }) {
 				return
 			}
 			if !sleepCtx(ctx, seekRetry) {
@@ -618,8 +658,14 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 		}
 		// One challenge a minute at most, however quickly the last was answered.
 		if wait := time.Until(lastSent.Add(seekGap)); !lastSent.IsZero() && wait > 0 {
-			next := time.Now().Add(wait)
-			if !b.seekUpdate(sk, func(st *SeekStatus) { st.NextAt = next.UnixMilli() }) {
+			if !b.seekUpdate(sk, func(st *SeekStatus) {
+				// What became of the last challenge stays said, with the wait.
+				msg := st.Message
+				if st.Phase != "pause" || msg == "" {
+					msg = "One challenge a minute at most: waiting to send the next."
+				}
+				st.set("pause", msg, wait)
+			}) {
 				return
 			}
 			if !sleepCtx(ctx, wait) {
@@ -666,7 +712,8 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			}
 			msg := fmt.Sprintf("%s accepted: game %d%s.", name, played, of)
 			if !b.seekUpdate(sk, func(st *SeekStatus) {
-				st.Played, st.Current, st.Rating, st.Message = played, "", 0, msg
+				st.Played, st.Current, st.Rating = played, "", 0
+				st.set("pause", msg, 0)
 			}) {
 				return
 			}
@@ -682,6 +729,15 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			}
 			continue
 		}
+		if !b.seekUpdate(sk, func(st *SeekStatus) {
+			st.Current, st.Rating, st.Phase = "", 0, "pause"
+			st.NextAt = 0
+			if retryAfter > 0 {
+				st.NextAt = time.Now().Add(retryAfter).UnixMilli()
+			}
+		}) {
+			return
+		}
 		if !sleepCtx(ctx, retryAfter) {
 			return
 		}
@@ -694,9 +750,8 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 	rating := u.RatingFor(speed)
 	if !b.seekUpdate(sk, func(st *SeekStatus) {
 		st.Tried++
-		st.NextAt = 0
 		st.Current, st.Rating = name, rating
-		st.Message = fmt.Sprintf("Challenging %s (%d)…", name, rating)
+		st.set("sending", fmt.Sprintf("Challenging %s (%d)…", name, rating), 0)
 		if random {
 			// Which of the random challenge types this one is.
 			mode := "casual"
@@ -728,7 +783,10 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		// the time is up (the hold outlives this search, so a new one
 		// started meanwhile waits too).
 		b.holdChallenges(wait)
-		b.seekUpdate(sk, func(st *SeekStatus) { failed(st, "Lichess refused it: too many requests") })
+		b.seekUpdate(sk, func(st *SeekStatus) {
+			st.set("pause", fmt.Sprintf("Lichess refused the challenge to %s: too many requests.", name), 0)
+			failed(st, "Lichess refused it: too many requests")
+		})
 		return false, "", 0
 	} else if opponent {
 		// The bot challenged has played its bot games for the day: leave it
@@ -741,14 +799,14 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		}
 		sk.resting[strings.ToLower(u.ID)] = time.Now().Add(wait)
 		b.seekUpdate(sk, func(st *SeekStatus) {
-			st.Message = fmt.Sprintf("%s has played as many bot games as Lichess allows today: passed over for %s.", name, waitText(wait))
+			st.set("pause", fmt.Sprintf("%s has played as many bot games as Lichess allows today: passed over for %s.", name, waitText(wait)), seekPause)
 			failed(st, fmt.Sprintf("It has played as many bot games as Lichess allows today; passed over for %s", waitText(wait)))
 		})
 		return false, "", seekPause
 	}
 	if err != nil {
 		b.seekUpdate(sk, func(st *SeekStatus) {
-			st.Message = fmt.Sprintf("Could not challenge %s: %v", name, err)
+			st.set("pause", fmt.Sprintf("Could not challenge %s: %v", name, err), seekPause)
 			failed(st, err.Error())
 		})
 		return false, "", seekPause
@@ -756,7 +814,11 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 	b.mu.Lock()
 	b.holdBackoff = 0 // a challenge went through: the next refusal starts at a minute again
 	b.mu.Unlock()
-	b.seekUpdate(sk, func(st *SeekStatus) { current(st, ch.ID, "waiting", "") })
+	b.seekUpdate(sk, func(st *SeekStatus) {
+		current(st, ch.ID, "waiting", "")
+		st.Challenge.AnswerBy = time.UnixMilli(sent).Add(seekAnswerTimeout).UnixMilli()
+		st.Phase, st.NextAt = "waiting", 0 // the message still says what was sent
+	})
 	answer := make(chan string, 1)
 	b.mu.Lock()
 	if a, ok := b.answered[ch.ID]; ok {
@@ -782,7 +844,10 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		got = "stopped"
 	}
 	if got == "accepted" {
-		b.seekUpdate(sk, func(st *SeekStatus) { current(st, ch.ID, "accepted", "") })
+		b.seekUpdate(sk, func(st *SeekStatus) {
+			current(st, ch.ID, "accepted", "")
+			st.set("pause", fmt.Sprintf("%s accepted.", name), 0)
+		})
 		return true, ch.ID, 0
 	}
 	if got == "timeout" || got == "stopped" {
@@ -805,7 +870,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		state, reason = "declined", strings.TrimPrefix(reasonText(got), ": ")
 	}
 	b.seekUpdate(sk, func(st *SeekStatus) {
-		st.Message = fmt.Sprintf("%s %s.", name, why)
+		st.set("pause", fmt.Sprintf("%s %s.", name, why), seekPause)
 		current(st, ch.ID, state, reason)
 	})
 	return false, "", seekPause

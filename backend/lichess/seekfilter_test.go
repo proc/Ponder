@@ -174,7 +174,9 @@ func TestSeekHoldsAfterRateLimit(t *testing.T) {
 	if err := h.bot.StartSeek(SeekParams{ChallengeParams: cp}); err != nil {
 		t.Fatal(err)
 	}
-	s := h.waitFor("held", func(s Status) bool { return s.Seek != nil && strings.Contains(s.Seek.Message, "too many requests") })
+	s := h.waitFor("held", func(s Status) bool {
+		return s.Seek != nil && s.Seek.Phase == "limited" && strings.Contains(s.Seek.Message, "too many requests")
+	})
 	if s.Seek.NextAt == 0 || time.Until(time.UnixMilli(s.Seek.NextAt)) < time.Second {
 		t.Fatalf("hold %+v", s.Seek)
 	}
@@ -306,4 +308,74 @@ func TestSeekReportsItsChallengeDeclinedAtOnce(t *testing.T) {
 		t.Fatalf("gone from the status: %+v", st.Seek)
 	}
 	h.bot.StopSeek()
+}
+
+// While it runs, the random-bot run always says what it is doing: a
+// phase and a message in each status, with when the wait ends whenever it
+// waits (so the challenges window is never blank).
+func TestSeekAlwaysSaysWhatItIsDoing(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap, seekPoll = 300*time.Millisecond, 20*time.Millisecond, 200*time.Millisecond, 400*time.Millisecond, 20*time.Millisecond
+	defer func() { seekGap, seekPoll = time.Minute, time.Second }()
+	h := newHarness(t, Policy{})
+	// No bot in range at first.
+	h.fake.Online = []fake.OnlineBot{{Name: "strongbot", Rating: 2600}}
+	h.connect()
+	if err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2, Color: "random"},
+		MinRating: 1600, MaxRating: 1800, Games: -1}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("no bots", func(s Status) bool { return s.Seek != nil && s.Seek.Phase == "nobots" })
+	// grumpy declines, sleepy does not answer; then SlowBot accepts.
+	h.fake.SetOnline(fake.OnlineBot{Name: "grumpy", Rating: 1700})
+	h.waitFor("grumpy declined", func(s Status) bool { return s.Seek != nil && s.Seek.Tried == 1 && s.Seek.Phase == "pause" })
+	h.fake.SetOnline(fake.OnlineBot{Name: "sleepy", Rating: 1650})
+	h.waitFor("sleepy asked", func(s Status) bool { return s.Seek != nil && s.Seek.Tried == 2 && s.Seek.Phase == "pause" })
+	h.fake.SetOnline(fake.OnlineBot{Name: "SlowBot", Rating: 1700})
+	h.waitFor("playing", func(s Status) bool { return s.Seek != nil && s.Seek.Phase == "playing" })
+	h.bot.StopSeek()
+
+	h.mu.Lock()
+	seeks := append([]SeekStatus(nil), h.seeks...)
+	h.mu.Unlock()
+	seen := map[string]bool{}
+	for _, st := range seeks {
+		if !st.Active {
+			continue
+		}
+		seen[st.Phase] = true
+		if st.Phase == "" || st.Message == "" {
+			t.Fatalf("a status that says nothing: %+v", st)
+		}
+		switch st.Phase {
+		case "nobots", "limited", "offline", "error":
+			if st.NextAt == 0 {
+				t.Fatalf("%s without when it tries again: %+v", st.Phase, st)
+			}
+		case "waiting":
+			if st.Challenge == nil || st.Challenge.State != "waiting" || st.Challenge.AnswerBy <= st.Challenge.At || st.Current == "" {
+				t.Fatalf("waiting without its challenge: %+v %+v", st, st.Challenge)
+			}
+		case "sending":
+			if st.Current == "" {
+				t.Fatalf("sending to no one: %+v", st)
+			}
+		}
+	}
+	for _, p := range []string{"looking", "nobots", "sending", "waiting", "pause", "playing"} {
+		if !seen[p] {
+			t.Fatalf("never %s; phases %v", p, seen)
+		}
+	}
+	// After a decline, it says who declined and why while it waits for the next.
+	said := func(sub string) bool {
+		for _, st := range seeks {
+			if st.Phase == "pause" && st.NextAt > 0 && strings.Contains(st.Message, sub) {
+				return true
+			}
+		}
+		return false
+	}
+	if !said("grumpy declined") || !said("sleepy did not answer") {
+		t.Fatalf("the pause did not say what became of the challenge")
+	}
 }
