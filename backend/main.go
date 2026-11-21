@@ -957,7 +957,7 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		return nil, nil
 	case "lichessUpgrade":
 		return bot.UpgradeToBot()
-	case "lichessAccept", "lichessDecline", "lichessCancel", "lichessResign", "lichessAbort", "lichessWatch":
+	case "lichessAccept", "lichessDecline", "lichessCancel", "lichessDismiss", "lichessResign", "lichessAbort", "lichessWatch":
 		var a struct{ ID, Reason string }
 		if err := decode(&a); err != nil {
 			return nil, err
@@ -969,6 +969,9 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			return nil, bot.Decline(a.ID, a.Reason)
 		case "lichessCancel":
 			return nil, bot.Cancel(a.ID)
+		case "lichessDismiss":
+			bot.Dismiss(a.ID)
+			return nil, nil
 		case "lichessResign":
 			if player.Has(a.ID) {
 				return nil, player.Resign(a.ID)
@@ -1041,7 +1044,7 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			return nil, err
 		}
 		return nil, player.Challenge(a)
-	case "lichessAcctAccept", "lichessAcctDecline", "lichessAcctCancel", "lichessAcctShow", "lichessAcctResign", "lichessAcctAbort", "lichessAcctDraw", "lichessAcctTakeback":
+	case "lichessAcctAccept", "lichessAcctDecline", "lichessAcctCancel", "lichessAcctDismiss", "lichessAcctShow", "lichessAcctResign", "lichessAcctAbort", "lichessAcctDraw", "lichessAcctTakeback":
 		var a struct {
 			ID     string
 			Yes    bool
@@ -1057,6 +1060,9 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			return nil, player.Decline(a.ID, a.Reason)
 		case "lichessAcctCancel":
 			return nil, player.Cancel(a.ID)
+		case "lichessAcctDismiss":
+			player.Dismiss(a.ID)
+			return nil, nil
 		case "lichessAcctShow":
 			return nil, player.Show(a.ID)
 		case "lichessAcctResign":

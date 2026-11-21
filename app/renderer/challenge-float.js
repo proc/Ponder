@@ -274,15 +274,20 @@ function renderChallengeFloat() {
       ? lxButton('Cancel', () => (who === 'engine' ? lichessCommand('lichessCancel', { id: c.id }) : meCommand('lichessAcctCancel', { id: c.id })))
       : lxButton('✕', () => { clearTimeout(it.timer); chf.items.delete(key); renderChallengeFloat(); }, 'small chf-x');
     if (state !== 'waiting') { action.title = 'Dismiss'; action.setAttribute('aria-label', 'Dismiss'); }
+    // Lichess would not cancel it: it can still be closed, here only.
+    const failed = state === 'waiting' ? window.chFailed?.get(c.id) : '';
+    const close = failed ? lxButton('✕', () => { clearTimeout(it.timer); chf.items.delete(key); window.dismissChallenge(c.id, who); }, 'small chf-x') : null;
+    if (close) { close.title = `Dismiss: take it off the list here; Lichess is not asked again. It said: ${failed}`; close.setAttribute('aria-label', 'Dismiss'); }
     const detail = state === 'waiting' ? expiryNote(c)
       : el('span', { className: 'lx-meta chf-detail', textContent: state === 'accepted' ? chfGameText(c.id, who) : it.text, title: it.text });
     return el('div', { className: 'chf-row ' + state }, [
       el('div', { className: 'chf-line' }, [
         el('span', { className: 'lx-meta', textContent: who === 'engine' ? 'Your engine →' : 'You →' }),
         lxWho(c.user, c.title, c.rating),
-        el('span', { className: 'chf-actions' }, [action]),
+        el('span', { className: 'chf-actions' }, close ? [action, close] : [action]),
       ]),
       el('div', { className: 'chf-line' }, [status, detail]),
+      ...(failed ? [el('div', { className: 'chf-detail chf-failed', textContent: `Could not cancel: ${failed}` })] : []),
       el('div', { className: 'lx-meta chf-meta', textContent: challengeMeta(c) }),
     ]);
   }));

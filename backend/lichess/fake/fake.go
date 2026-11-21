@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -106,6 +107,9 @@ type Server struct {
 	BotsDone         map[string]float64
 	// The opponent accepts draw offers and takeback proposals (Board API).
 	AcceptOffers bool
+	// FailAnswers makes the next accepts, declines and cancels of challenges
+	// fail with 500 Internal Server Error, the challenge staying as it was.
+	FailAnswers int
 	// Like Lichess, the spectator stream (/api/stream/game) starts by
 	// replaying every position of the game; StreamLag sends each position
 	// that many moves late, and positions after plies in Drop are lost.
@@ -290,8 +294,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		ok(nil)
+	case len(parts) == 4 && parts[1] == "challenge" && (parts[3] == "accept" || parts[3] == "decline" || parts[3] == "cancel") && s.failAnswer():
+		w.WriteHeader(500)
+		fmt.Fprint(w, line(map[string]string{"error": "Internal error"}))
 	case len(parts) == 4 && parts[1] == "challenge" && parts[3] == "accept":
-		if err := s.accept(parts[2]); err != nil {
+		if err := s.accept(parts[2]); errors.Is(err, errNoChallenge) {
+			w.WriteHeader(404)
+			fmt.Fprint(w, `{"error":"Not found"}`)
+		} else if err != nil {
 			bad(err.Error())
 			return
 		}
@@ -1272,12 +1282,40 @@ func (s *Server) seek(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 }
 
+var errNoChallenge = errors.New("no such challenge")
+
+// failAnswer reports whether this answer to a challenge fails (FailAnswers).
+func (s *Server) failAnswer() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.FailAnswers <= 0 {
+		return false
+	}
+	s.FailAnswers--
+	return true
+}
+
+// FailNextAnswers sets FailAnswers while the server runs.
+func (s *Server) FailNextAnswers(n int) {
+	s.mu.Lock()
+	s.FailAnswers = n
+	s.mu.Unlock()
+}
+
+// Forget drops a challenge without telling anyone, as when it expires on
+// Lichess and the event stream misses it: answering it then gets a 404.
+func (s *Server) Forget(id string) {
+	s.mu.Lock()
+	delete(s.pending, id)
+	s.mu.Unlock()
+}
+
 func (s *Server) accept(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.pending[id]
 	if c == nil {
-		return fmt.Errorf("no such challenge")
+		return errNoChallenge
 	}
 	delete(s.pending, id)
 	botWhite := c.Color == "black" // the challenger asked for black
@@ -1399,6 +1437,13 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 		}
 		id := s.Challenge(from, q.Get("bot") == "1", q.Get("rated") == "1", limit, inc, color, q.Get("variant"))
 		fmt.Fprint(w, line(map[string]string{"id": id}))
+	case "/_fake/forget":
+		s.Forget(q.Get("id"))
+		fmt.Fprint(w, "{}\n")
+	case "/_fake/failanswers":
+		n, _ := strconv.Atoi(q.Get("n"))
+		s.FailNextAnswers(n)
+		fmt.Fprint(w, "{}\n")
 	case "/_fake/autogame":
 		limit, _ := strconv.Atoi(q.Get("limit"))
 		if limit == 0 {

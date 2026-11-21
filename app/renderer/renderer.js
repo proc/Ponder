@@ -4178,6 +4178,10 @@ function optionRow(opt, value) {
     ...(note ? [el('span', { className: 'opt-note', textContent: note })] : []),
   ]);
   row.dataset.name = opt.name.toLowerCase();
+  // What the option does (option-help.js), on hover anywhere on the row,
+  // and read out with the control for keyboard and screen reader users.
+  row.title = optionHelp(opt);
+  input.setAttribute('aria-description', row.title);
   const entry = { opt, input, row };
   const changed = () => {
     const v = input.read();

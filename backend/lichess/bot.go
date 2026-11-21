@@ -689,6 +689,10 @@ func (b *Bot) Accept(id string) error {
 		delete(b.expect, id)
 		delete(b.accepted, id)
 		b.mu.Unlock()
+		if ChallengeGone(err) {
+			b.Dismiss(id)
+			return errChallengeGone
+		}
 		return err
 	}
 	b.mu.Lock()
@@ -709,6 +713,10 @@ func (b *Bot) Decline(id, reason string) error {
 		reason = "generic"
 	}
 	if err := client.Decline(ctx, id, reason); err != nil {
+		if ChallengeGone(err) {
+			b.Dismiss(id)
+			return errChallengeGone
+		}
 		return err
 	}
 	b.mu.Lock()
@@ -861,6 +869,10 @@ func (b *Bot) Cancel(id string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	if err := client.Cancel(ctx, id); err != nil {
+		if ChallengeGone(err) {
+			b.Dismiss(id)
+			return errChallengeGone
+		}
 		return err
 	}
 	b.mu.Lock()
@@ -868,6 +880,22 @@ func (b *Bot) Cancel(id string) error {
 	b.mu.Unlock()
 	b.emit()
 	return nil
+}
+
+// Dismiss takes a challenge off the lists here without asking Lichess
+// anything: for one that could not be answered or cancelled (an error, or
+// gone from Lichess already). One still on Lichess comes back when the bot
+// connects again.
+func (b *Bot) Dismiss(id string) {
+	b.mu.Lock()
+	_, in := b.incoming[id]
+	_, out := b.outgoing[id]
+	delete(b.incoming, id)
+	delete(b.outgoing, id)
+	b.mu.Unlock()
+	if in || out {
+		b.emit()
+	}
 }
 
 func (b *Bot) Resign(id string) error {

@@ -529,13 +529,36 @@ func (p *Player) SetChallengeTimeout(secs int) {
 }
 
 func (p *Player) Accept(id string) error {
-	return p.call(func(ctx context.Context, c *Client) error { return c.Accept(ctx, id) })
+	err := p.call(func(ctx context.Context, c *Client) error { return c.Accept(ctx, id) })
+	if ChallengeGone(err) {
+		p.Dismiss(id)
+		return errChallengeGone
+	}
+	return err
+}
+
+// Dismiss takes a challenge off the lists here without asking Lichess
+// anything, as Bot.Dismiss does.
+func (p *Player) Dismiss(id string) {
+	p.mu.Lock()
+	_, in := p.incoming[id]
+	_, out := p.outgoing[id]
+	delete(p.incoming, id)
+	delete(p.outgoing, id)
+	p.mu.Unlock()
+	if in || out {
+		p.emit()
+	}
 }
 
 // Decline turns a challenge down; reason is one of Lichess's decline
 // reasons ("" for the plain one), which the challenger is shown.
 func (p *Player) Decline(id, reason string) error {
 	err := p.call(func(ctx context.Context, c *Client) error { return c.Decline(ctx, id, reason) })
+	if ChallengeGone(err) {
+		p.Dismiss(id)
+		return errChallengeGone
+	}
 	if err == nil {
 		p.mu.Lock()
 		delete(p.incoming, id)
@@ -547,6 +570,10 @@ func (p *Player) Decline(id, reason string) error {
 
 func (p *Player) Cancel(id string) error {
 	err := p.call(func(ctx context.Context, c *Client) error { return c.Cancel(ctx, id) })
+	if ChallengeGone(err) {
+		p.Dismiss(id)
+		return errChallengeGone
+	}
 	if err == nil {
 		p.mu.Lock()
 		delete(p.outgoing, id)

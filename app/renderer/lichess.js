@@ -43,15 +43,54 @@ function challengeFailed(err, args, who) {
   if (args?.username) window.challengeNotSent?.(who, { user: args.username, limit: args.limit, increment: args.increment, rated: args.rated, color: args.color, error: errorText(err) });
   notify(errorText(err), { title: `${who === 'you' ? 'Your challenge' : 'Your engine’s challenge'}${to} was not sent` });
 }
+// Challenges Lichess would not let you (or your engine) accept, decline or
+// cancel, with the error: their rows get Dismiss, which takes them off the
+// list here without asking Lichess again. One Lichess no longer has at all
+// is taken off by the backend, and a note says why.
+const chFailed = new Map(); // id -> error text
+const CH_ANSWERS = /^lichess(Acct)?(Accept|Decline|Cancel)$/;
+function chAnswered(cmd, args, err) {
+  if (!CH_ANSWERS.test(cmd) || !args?.id) return;
+  if (!err) { chFailed.delete(args.id); return; }
+  const text = errorText(err);
+  if (/no longer on Lichess/i.test(text)) {
+    chFailed.delete(args.id);
+    notify(`${text.charAt(0).toUpperCase()}${text.slice(1)}.`, { title: 'Challenge' });
+  } else chFailed.set(args.id, text);
+  chRedraw();
+}
+function chRedraw() {
+  renderLichess();
+  if (typeof renderMe === 'function') renderMe();
+  renderChallengePop();
+  window.renderChallengeFloat?.();
+}
+function dismissChallenge(id, who) {
+  chFailed.delete(id);
+  api.backend(who === 'you' ? 'lichessAcctDismiss' : 'lichessDismiss', { id }).catch(() => { /* gone already */ });
+  chRedraw();
+}
+// Dismiss, on a row whose challenge could not be answered or cancelled.
+function chDismissButton(id, who) {
+  if (!chFailed.has(id)) return [];
+  const b = lxButton('Dismiss', () => dismissChallenge(id, who));
+  b.title = `Take this challenge off the list here; Lichess is not asked again. It said: ${chFailed.get(id)}`;
+  return [b];
+}
+window.chFailed = chFailed;
+window.chDismissButton = chDismissButton;
+window.dismissChallenge = dismissChallenge;
 const challengeNews = (msg) => /declined the challenge|did not answer|could not (accept|challenge)/i.test(msg ?? '');
 
 async function lichessCommand(cmd, args) {
   try {
     const result = await api.backend(cmd, args);
     if (lx.note) lxSetNote('');
+    chAnswered(cmd, args, null);
     return result ?? true;
   } catch (err) {
     lxSetNote(errorText(err));
+    chAnswered(cmd, args, err);
     if (cmd === 'lichessChallenge') challengeFailed(err, args, 'engine');
     else if (cmd === 'lichessSeek') notify(errorText(err), { title: 'The random-bot challenge did not start' });
     return null;
@@ -248,7 +287,7 @@ function renderLichess() {
     return el('div', { className: 'lx-row' }, [
       lxWho(c.user, c.title, c.rating),
       el('span', { className: 'lx-meta', textContent: challengeMeta(c) + (c.note && c.supported ? ` · outside your settings (${c.note})` : '') }),
-      el('span', { className: 'lx-actions' }, [accept, decline]),
+      el('span', { className: 'lx-actions' }, [accept, decline, ...chDismissButton(c.id, 'engine')]),
     ]);
   }));
 
@@ -261,7 +300,7 @@ function renderLichess() {
     lxWho(c.user, c.title, c.rating),
     el('span', { className: 'lx-meta', textContent: challengeMeta(c) }),
     expiryNote(c),
-    el('span', { className: 'lx-actions' }, [lxButton('Cancel', () => lichessCommand('lichessCancel', { id: c.id }))]),
+    el('span', { className: 'lx-actions' }, [lxButton('Cancel', () => lichessCommand('lichessCancel', { id: c.id })), ...chDismissButton(c.id, 'engine')]),
   ])));
 
   // Games, newest first.
@@ -1385,10 +1424,12 @@ async function answerChallenge({ c, who }, accept) {
   const cmd = who === 'engine' ? (accept ? 'lichessAccept' : 'lichessDecline') : (accept ? 'lichessAcctAccept' : 'lichessAcctDecline');
   const args = { id: c.id };
   if (!accept) args.reason = chReason(c);
+  // An error is said on the challenge's own row, which can then be dismissed.
   try {
     await api.backend(cmd, args);
+    chAnswered(cmd, args, null);
   } catch (err) {
-    chPop.error = errorText(err);
+    chAnswered(cmd, args, err);
   }
   chPop.busy.delete(c.id);
   renderChallengePop();
@@ -1408,7 +1449,7 @@ function renderChallengePop(redraw = false) {
   pill.hidden = true;
   for (const id of ids) chPop.seen.add(id);
   // Drawn again only when something shown changed: a menu stays open.
-  const key = JSON.stringify([list.map(({ c, who }) => [c.id, who, chPop.busy.has(c.id), chReason(c), chPop.open.has(c.id), botLookup(c.user, PL_SPEEDS.includes(c.speed) ? c.speed : 'blitz').at]),
+  const key = JSON.stringify([list.map(({ c, who }) => [c.id, who, chPop.busy.has(c.id), chFailed.get(c.id) ?? '', chReason(c), chPop.open.has(c.id), botLookup(c.user, PL_SPEEDS.includes(c.speed) ? c.speed : 'blitz').at]),
     chPop.error, pl.chartSpeed, pl.range]);
   if (key === chPop.key && dlg.open && !redraw) return;
   chPop.key = key;
@@ -1431,13 +1472,15 @@ function renderChallengePop(redraw = false) {
     reason.disabled = busy;
     say();
     const note = c.note && c.supported && who === 'engine' ? ` · outside your auto-accept rules (${c.note})` : '';
+    const failed = chFailed.get(c.id);
     return el('div', { className: 'ch-row' }, [
       el('div', { className: 'ch-who' }, [
         lxWho(c.user, c.title, c.rating),
         ...(both ? [el('span', { className: 'ch-to', textContent: who === 'engine' ? 'to your engine' : 'to you' })] : []),
       ]),
       el('div', { className: 'ch-meta', textContent: challengeMeta(c) + note }),
-      el('div', { className: 'ch-actions' }, [accept, decline]),
+      el('div', { className: 'ch-actions' }, [accept, decline, ...chDismissButton(c.id, who)]),
+      ...(failed ? [el('p', { className: 'error ch-failed', textContent: `${failed.charAt(0).toUpperCase()}${failed.slice(1)}${/[.!?]$/.test(failed) ? '' : '.'} Try again, or dismiss it to take it off the list.` })] : []),
       challengerProfile(c),
       el('label', { className: 'ch-decline' }, [el('span', { textContent: 'Decline with' }), reason, said]),
     ]);
@@ -2011,9 +2054,11 @@ async function meCommand(cmd, args) {
   try {
     const result = await api.backend(cmd, args);
     if (me.note) meSetNote('');
+    chAnswered(cmd, args, null);
     return result ?? true;
   } catch (err) {
     meSetNote(errorText(err));
+    chAnswered(cmd, args, err);
     if (cmd === 'lichessAcctChallenge') challengeFailed(err, args, 'you');
     return null;
   }
@@ -2101,7 +2146,7 @@ function renderMe() {
       el('span', { className: 'lx-label', textContent: 'Challenge' }),
       lxWho(c.user, c.title, c.rating),
       el('span', { className: 'lx-meta', textContent: challengeMeta(c) }),
-      el('span', { className: 'lx-actions' }, [accept, lxButton('Decline', () => meCommand('lichessAcctDecline', { id: c.id }))]),
+      el('span', { className: 'lx-actions' }, [accept, lxButton('Decline', () => meCommand('lichessAcctDecline', { id: c.id })), ...chDismissButton(c.id, 'you')]),
     ]);
   }));
   $('#lx-me-outgoing').replaceChildren(...s.outgoing.map((c) => row('waiting', [
@@ -2109,7 +2154,7 @@ function renderMe() {
     lxWho(c.user, c.title, c.rating),
     el('span', { className: 'lx-meta', textContent: challengeMeta(c) }),
     expiryNote(c),
-    el('span', { className: 'lx-actions' }, [lxButton('Cancel', () => meCommand('lichessAcctCancel', { id: c.id }))]),
+    el('span', { className: 'lx-actions' }, [lxButton('Cancel', () => meCommand('lichessAcctCancel', { id: c.id })), ...chDismissButton(c.id, 'you')]),
   ])));
   $('#lx-me-games').replaceChildren(...s.games.map((g) => {
     const onBoard = state?.external?.id === g.id;

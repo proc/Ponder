@@ -58,4 +58,4 @@ Packaging for other systems, signing and the code layout are in
 
 Chess960, and signed installers.
 
-Type `nyan` anywhere outside a text box for a surprise.
+Type `nyan` (or `veridis`) anywhere outside a text box for a surprise.

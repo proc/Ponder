@@ -158,7 +158,12 @@ General → Music**; music resumes on restart if it was playing.
 awake**: **never**, **while a game is played** (default) or **always**. It also
 keeps the computer from sleeping.
 
-## Easter egg
+## Easter eggs
 
 Type `nyan` anywhere outside a text box: a pixel cat flies across the
 window on a rainbow, to a little chiptune (heard when sounds are on).
+
+Type `veridis` for another: Ponder plays Veridis Quo by Daft Punk from a MIDI
+file, on a little synth of its own, and the board's squares light up with
+the melody. It plays only when sounds are on and stops when they go off;
+type `veridis` again, press Escape, or press the music button (or U) to stop it.

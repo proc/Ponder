@@ -11,6 +11,7 @@ Two engines are bundled: **Ponder Basic**, a small real engine (alpha-beta, a fe
 Options open when you add an engine, and later under **Options** (Threads, Hash, Skill Level, …).
 
 - Options are grouped (Basics, Evaluation and opening book, Endgame tablebases, Logging, Search and tuning) with default and range, a slider for small ranges, **Browse…** for files and folders, a reset, a search box and **Changed only**.
+- Hovering over an option says what it does, for the options engines commonly have (Hash, Threads, MultiPV, Skill Level, EvalFile, the Syzygy options, …). A value in angle brackets, such as `<embedded>`, names a network built into the engine rather than a file. Any other option shows its type, range and default. Screen readers read the same text with the control.
 - Out-of-range numbers are caught before saving. Only changed options are sent.
 - Saved options apply at once: analysis restarts, and an engine playing now gets them before its next search. Tournaments keep the options they started with.
 

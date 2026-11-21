@@ -326,6 +326,16 @@ func ChallengeLimit(err error) (self, opponent bool, wait time.Duration) {
 	return false, false, 0
 }
 
+// ChallengeGone tells apart Lichess's answer that a challenge is not
+// there (404): it was cancelled, declined, accepted or expired meanwhile.
+func ChallengeGone(err error) bool {
+	var e *APIError
+	return errors.As(err, &e) && e.Status == http.StatusNotFound
+}
+
+// errChallengeGone is said instead, once the challenge is taken off the list.
+var errChallengeGone = errors.New("this challenge is no longer on Lichess: it was cancelled or it expired, so it was taken off the list")
+
 func (e *APIError) Error() string {
 	if e.Message != "" {
 		return fmt.Sprintf("Lichess: %s", e.Message)

@@ -21,7 +21,7 @@ You can save tokens for several bot accounts and switch between them. Paste anot
 
 ## Accepting challenges
 
-Challenges to your bot (or your own account) are listed in the tab and float up in a window at the bottom right, each with **Accept**, **Decline**, the challenger's ratings, games, record and bio (**More…** for full record and rating history), and **Decline with** to pick Lichess's reason (too fast, rated only, no bots, …). **Hide** (or ✕) shrinks it to a corner button with the count; the next challenge brings it back.
+Challenges to your bot (or your own account) are listed in the tab and float up in a window at the bottom right, each with **Accept**, **Decline**, the challenger's ratings, games, record and bio (**More…** for full record and rating history), and **Decline with** to pick Lichess's reason (too fast, rated only, no bots, …). **Hide** (or ✕) shrinks it to a corner button with the count; the next challenge brings it back. When Lichess will not take an answer (a network error, Lichess failing, a token without challenge rights), the error shows on that challenge's row with **Dismiss**, which takes it off the list here without asking Lichess again; the same goes for a challenge you sent that cannot be cancelled. A challenge Lichess no longer has (cancelled or expired meanwhile) is taken off the list as soon as you try to answer it, with a note saying so.
 
 **Accept automatically** (off after every connect) accepts challenges matching the **Auto-accept rules** and declines the rest with the matching reason. The rules set:
 

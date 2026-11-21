@@ -1,6 +1,7 @@
 package lichess
 
 import (
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
@@ -909,5 +910,51 @@ func TestReloadEngineMidGame(t *testing.T) {
 	})
 	if err := h.bot.ReloadEngine("nope", nil); err == nil {
 		t.Fatal("reloaded a game that is not there")
+	}
+}
+
+// A challenge that cannot be answered stays until dismissed, and Dismiss
+// takes it off without asking Lichess; one Lichess no longer has (404) is
+// taken off by the answer itself.
+func TestChallengeThatCannotBeAnsweredCanBeDismissed(t *testing.T) {
+	h := newHarness(t, Policy{Casual: true, Humans: true, Bots: true, MaxGames: 1})
+	h.connect()
+	id := h.fake.Challenge("Alice", false, false, 300, 0, "white", "standard")
+	h.waitFor("challenge", func(s Status) bool { return len(s.Incoming) == 1 })
+	// Lichess fails: the challenge stays, with the error said.
+	h.fake.FailNextAnswers(2)
+	if err := h.bot.Accept(id); err == nil {
+		t.Fatal("accept went through")
+	}
+	if err := h.bot.Decline(id, "generic"); err == nil {
+		t.Fatal("decline went through")
+	}
+	if s := h.bot.Status(); len(s.Incoming) != 1 {
+		t.Fatalf("incoming %+v", s.Incoming)
+	}
+	calls := len(h.fake.Calls())
+	h.bot.Dismiss(id)
+	h.waitFor("dismissed", func(s Status) bool { return len(s.Incoming) == 0 })
+	if len(h.fake.Calls()) != calls {
+		t.Fatalf("dismissing asked Lichess: %v", h.fake.Calls()[calls:])
+	}
+
+	// Gone from Lichess without a word: answering it takes it off.
+	for _, accept := range []bool{true, false} {
+		id = h.fake.Challenge("Bob", false, false, 300, 0, "white", "standard")
+		h.waitFor("challenge", func(s Status) bool { return len(s.Incoming) == 1 })
+		h.fake.Forget(id)
+		var err error
+		if accept {
+			err = h.bot.Accept(id)
+		} else {
+			err = h.bot.Decline(id, "generic")
+		}
+		if !errors.Is(err, errChallengeGone) {
+			t.Fatalf("accept %v: %v", accept, err)
+		}
+		if s := h.bot.Status(); len(s.Incoming) != 0 {
+			t.Fatalf("accept %v: still listed %+v", accept, s.Incoming)
+		}
 	}
 }
