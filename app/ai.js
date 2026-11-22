@@ -47,7 +47,7 @@ Rules:
 - Comment on the 6 to 20 most instructive moves: turning points, mistakes, good ideas, the opening choice, the decisive moment. Not every move.
 - Each comment is one or two sentences, under 45 words, plain text, concrete: plans, threats, better moves in standard notation.
 - Only mention moves and squares that fit the position. Where the PGN has engine evaluations ([%eval]) or marks, agree with them.
-- Do not use curly braces or line breaks inside comments.`;
+- Each item of "comments" is an object in its own curly braces, as shown. Do not use curly braces or line breaks inside the comment text.`;
 
 function buildMessages(game) {
   const list = (game.moves ?? []).map((m) => `ply ${m.ply}: ${m.number}${m.white ? '.' : '...'} ${m.san}`).join('\n');
@@ -61,6 +61,30 @@ function buildMessages(game) {
 
 const MARKS = new Set(['!!', '!', '!?', '?!', '?', '??']);
 
+// A reply that is almost the JSON asked for, but not quite: a comment
+// without its braces ("comments": ["ply": 9, "mark": "!", …]), a comma
+// missing, or an answer cut off before its end. Its fields are read in
+// order: each "ply" starts a comment, and the "mark" and "comment" after
+// it, before the next "ply", are that comment's. A comment cut off is left
+// out. Null when no summary or comment is found.
+function salvage(t) {
+  const str = String.raw`"((?:[^"\\]|\\.)*)"`; // a JSON string, its escapes kept
+  const unquote = (s) => { try { return JSON.parse(`"${s}"`); } catch { return s; } };
+  const field = (chunk, name) => {
+    const m = new RegExp(`"${name}"\\s*:\\s*${str}`).exec(chunk);
+    return m ? unquote(m[1]) : undefined;
+  };
+  const summary = field(t, 'summary');
+  const comments = [];
+  const plies = [...t.matchAll(/"ply"\s*:\s*"?(\d+)"?/g)];
+  plies.forEach((m, i) => {
+    const chunk = t.slice(m.index + m[0].length, i + 1 < plies.length ? plies[i + 1].index : t.length);
+    comments.push({ ply: Number(m[1]), mark: field(chunk, 'mark') ?? field(chunk, 'nag') ?? '', comment: field(chunk, 'comment') ?? field(chunk, 'text') ?? '' });
+  });
+  if (summary === undefined && !comments.length) return null;
+  return { summary: summary ?? '', comments };
+}
+
 // The model's reply as { summary, comments: [{ ply, mark, comment }] }.
 // Models wrap JSON in prose, code fences or "thinking": the object is dug
 // out. A reply with no JSON at all becomes the summary.
@@ -73,7 +97,8 @@ function parseReply(text, plies) {
   if (start >= 0 && end > start) {
     try { data = JSON.parse(t.slice(start, end + 1)); } catch { /* not JSON after all */ }
   }
-  if (!data || typeof data !== 'object') {
+  if (!data || typeof data !== 'object') data = salvage(t);
+  if (!data) {
     if (!t) throw new Error('The model gave an empty answer');
     return { summary: clean(t).slice(0, 1200), comments: [], loose: true };
   }
@@ -376,12 +401,10 @@ async function chat(settings, messages, opts = {}) {
     if (now.length > shown.length && now.startsWith(shown)) onDelta?.(now.slice(shown.length));
     shown = now;
   };
-  const onData = (chunk, res) => {
-    if (res.statusCode < 200 || res.statusCode >= 300) return;
-    if (!/event-stream/i.test(res.headers['content-type'] ?? '')) return; // answered whole: read below
-    pending += chunk.toString('utf8');
-    const lines = pending.split(/\r?\n/);
-    pending = lines.pop();
+  // Whether the answer came as a stream (server-sent events): then it was
+  // read as it came, even if all of it was thinking.
+  let streamed = false;
+  const readLines = (lines) => {
     for (const line of lines) {
       if (!line.startsWith('data:')) continue;
       const data = line.slice(5).trim();
@@ -396,6 +419,15 @@ async function chat(settings, messages, opts = {}) {
         if (typeof delta?.content === 'string' && delta.content) feed(delta.content);
       } catch { /* a line that is not JSON: skip it */ }
     }
+  };
+  const onData = (chunk, res) => {
+    if (res.statusCode < 200 || res.statusCode >= 300) return;
+    if (!/event-stream/i.test(res.headers['content-type'] ?? '')) return; // answered whole: read below
+    streamed = true;
+    pending += chunk.toString('utf8');
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop();
+    readLines(lines);
   };
   let res;
   try {
@@ -421,7 +453,13 @@ async function chat(settings, messages, opts = {}) {
     const detail = errorDetail(res.text);
     throw new Error(`${name} answered ${res.status}${res.status === 401 || res.status === 403 ? ' (check the API key in Settings → AI)' : ''}${detail ? `: ${detail}` : ''}`);
   }
-  if (!raw) {
+  if (streamed && pending) readLines([pending]); // a last line without its line break
+  if (!streamed && /^data:/m.test(res.text)) {
+    // A stream all the same, sent without saying so (no text/event-stream).
+    streamed = true;
+    readLines(res.text.split(/\r?\n/));
+  }
+  if (!streamed) {
     // Not streamed: the whole answer is one JSON object.
     try {
       const whole = JSON.parse(res.text);
@@ -434,11 +472,13 @@ async function chat(settings, messages, opts = {}) {
       feed(text);
     } catch { throw new Error(`${name} did not answer in a form this app reads; is it an OpenAI-compatible API?`); }
   }
-  if (!shown.trim() && cap && finish === 'length') {
+  // Nothing but thinking within the cap (a model that reasons first): asked
+  // again without it. Some servers do not say why the answer ended.
+  if (!shown.trim() && cap && (finish === 'length' || (!finish && thought.trim()))) {
     uncapped.add(capKey);
     return chat(settings, messages, { ...opts, maxTokens: 0 });
   }
-  if (!shown.trim()) throw new Error('The model gave an empty answer');
+  if (!shown.trim()) throw new Error(thought.trim() ? 'The model only thought aloud and gave no answer' : 'The model gave an empty answer');
   // truncated: the cap ended the answer before the model did.
   return { text: shown.trim(), thinking: thought.trim(), model, usage, truncated: finish === 'length' };
 }
@@ -716,4 +756,4 @@ async function speechVoices({ provider, baseUrl, key, model }, { signal, sendImp
   return [];
 }
 
-module.exports = { speechVoices, speechModels, speech, speechBase, TTS_DEFAULTS, TTS_PROVIDERS, ttsProviderOf, wavOf, chat, DEFAULTS, PROVIDERS, normalizeBase, buildMessages, parseReply, listModels, annotate, anthropicMessages, contextWindow, usageOf };
+module.exports = { speechVoices, speechModels, speech, speechBase, TTS_DEFAULTS, TTS_PROVIDERS, ttsProviderOf, wavOf, chat, DEFAULTS, PROVIDERS, normalizeBase, buildMessages, parseReply, salvage, listModels, annotate, anthropicMessages, contextWindow, usageOf };

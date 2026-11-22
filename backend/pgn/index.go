@@ -42,6 +42,12 @@ type record struct {
 	plies                                    int32
 	sub                                      int32 // which game within the chunk
 	lichess                                  bool  // its Site is on lichess.org
+	// For the search: the opening (ECO code and name), the time control as
+	// written, and what the headers say of the speed and of being rated.
+	opening, timeControl string
+	eco                  [3]byte // "B90", or zeros
+	speed                speed
+	rated                rating
 }
 
 // Collection is an indexed PGN file of any size.
@@ -241,6 +247,7 @@ func (c *Collection) index(r io.Reader, progress func(int64)) error {
 		for _, rec := range res.records {
 			rec.white, rec.black, rec.event = in.get(rec.white), in.get(rec.black), in.get(rec.event)
 			rec.date, rec.round, rec.result = in.get(rec.date), in.get(rec.round), in.get(rec.result)
+			rec.opening, rec.timeControl = in.get(rec.opening), in.get(rec.timeControl)
 			c.records = append(c.records, rec)
 		}
 		if res.err != "" {
@@ -344,6 +351,17 @@ func scanChunk(ch chunk, in *interner) chunkResult {
 				cur.result = in.get(t.Value)
 			case "Site":
 				cur.lichess = strings.Contains(strings.ToLower(t.Value), "lichess.org")
+			case "ECO":
+				cur.eco = ecoCode(t.Value)
+			case "Opening":
+				cur.opening = in.get(t.Value)
+			case "TimeControl":
+				cur.timeControl = in.get(t.Value)
+			case "WhiteTimeControl":
+				// Each side had its own clock: the list goes by White's.
+				if cur.timeControl == "" {
+					cur.timeControl = in.get(t.Value)
+				}
 			}
 		},
 		move:   func(string) { cur.plies++ },
@@ -352,6 +370,8 @@ func scanChunk(ch chunk, in *interner) chunkResult {
 			if cur.result == "" {
 				cur.result = in.get(resultToken)
 			}
+			cur.speed = speedOf(cur.event, cur.timeControl)
+			cur.rated = ratedOf(cur.event)
 			res.records = append(res.records, cur)
 			cur = record{offset: ch.offset, length: int32(len(ch.text)), sub: cur.sub + 1}
 			resultToken = ""

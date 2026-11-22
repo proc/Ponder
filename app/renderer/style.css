@@ -1514,6 +1514,23 @@ button.link:hover:not(:disabled) { text-decoration: underline; }
 .games-search input, .games-search select { min-width: 0; width: 100%; padding: 0.2rem 0.4rem; color: var(--text); }
 .games-search .gs-range span { display: flex; align-items: center; gap: 0.3rem; }
 .games-search .gs-foot { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.games-search .gs-wide { grid-column: span 2; }
+@container (max-width: 24rem) { .games-search .gs-wide { grid-column: 1 / -1; } }
+/* The player's result and colour wait for a player's name. */
+.games-search .gs-idle { opacity: 0.55; }
+.games-search .gs-foot .hint { line-height: 1.35; }
+.games-search .gs-foot .hint.warn { color: var(--danger); }
+/* The filters in force, as chips that take themselves off. */
+.games-filters { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+.games-filters[hidden] { display: none; }
+.games-filters .gs-chip {
+  display: inline-flex; align-items: center; gap: 0.35rem; max-width: 100%; cursor: pointer;
+  background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text);
+}
+.games-filters .gs-chip > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.games-filters .gs-chip .x { color: var(--muted); font-size: 0.95rem; line-height: 1; }
+.games-filters .gs-chip:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+.games-filters .gs-chip:hover .x { color: var(--text); }
 /* Under the head: what can be done with the file, and with the game shown. */
 .games-tools { display: flex; align-items: center; gap: 0.35rem; flex: none; margin-top: 0.35rem; }
 .games-tools-gap { flex: 1; }
@@ -3856,7 +3873,10 @@ label.cm-row { cursor: pointer; }
 .cm-settings .cm-voice { justify-content: flex-end; flex: none; padding-top: 0.2rem; }
 .cm-settings .cm-row:has(#cm-speak) + .cm-voice { border-top: 0; padding-top: 0; min-height: 0; padding-bottom: 0.55rem; }
 .cm-settings #cm-voice { flex: 1 1 8rem; max-width: none; }
-.ec-settings #ec-persona { flex: 1 1 8rem; max-width: 15rem; min-width: 0; }
+.ec-settings #ec-name { flex: 1 1 8rem; max-width: 15rem; min-width: 0; }
+.ec-settings .ec-custom-row { border-top: 0 !important; padding-top: 0; }
+.ec-settings .ec-custom-row[hidden] { display: none; }
+.ec-settings #ec-custom { flex: 1; min-width: 0; resize: vertical; font: inherit; font-size: 0.82rem; }
 .ec-settings .ec-note { margin: 0; padding: 0 0 0.55rem; font-size: 0.78rem; }
 #pane-ai .cm-item:not(.summary) {
   padding: 0.65rem 0.8rem; border-radius: var(--r-l); background: var(--glass);

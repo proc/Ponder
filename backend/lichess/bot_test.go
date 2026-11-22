@@ -49,6 +49,7 @@ type harness struct {
 	seeks []SeekStatus
 	// Every lichessBotMove event, and how many moves Lichess had then.
 	botMoves         []BotMove
+	gameEnds         []BotGameEnd
 	botMovesOnServer []int
 }
 
@@ -75,6 +76,8 @@ func newHarness(t *testing.T, policy Policy) *harness {
 				moves, _, _, _ := h.fake.Game(m.GameID)
 				h.botMoves = append(h.botMoves, m)
 				h.botMovesOnServer = append(h.botMovesOnServer, len(moves))
+			case "lichessBotGameEnd":
+				h.gameEnds = append(h.gameEnds, data.(BotGameEnd))
 			case "ponderHit":
 				h.ponderHits = append(h.ponderHits, data.(PonderHit))
 				n := -1
@@ -1127,5 +1130,69 @@ func TestTakenOverGameAbortedLetsChallengesGo(t *testing.T) {
 	h.waitFor("game over", func(s Status) bool { g := gameView(s, id); return g.Finished })
 	if err := h.bot.Challenge(ChallengeParams{Username: "Bob", Limit: 180, Increment: 2, Color: "random"}); err != nil {
 		t.Fatalf("challenge after the aborted game: %v", err)
+	}
+}
+
+// When a game the engine played ends, the app is told how (for the
+// engine's last chat message): its result from the engine's side, the
+// reason, the moves and what the engine thought at each of its moves.
+func TestGameEndIsToldForTheEngineChat(t *testing.T) {
+	h := newHarness(t, Policy{})
+	h.fake.MaxPlies = 12 // a draw after 12 plies
+	id := h.fake.StartGame("Alice", true, 300, 2)
+	h.connect()
+	h.waitFor("game over", func(s Status) bool { g := gameView(s, id); return g != nil && g.Finished })
+	deadline := time.Now().Add(5 * time.Second)
+	var ends []BotGameEnd
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		ends = append([]BotGameEnd(nil), h.gameEnds...)
+		h.mu.Unlock()
+		if len(ends) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(ends) != 1 {
+		t.Fatalf("%d game ends told, want 1", len(ends))
+	}
+	e := ends[0]
+	moves, _, _, _ := h.fake.Game(id)
+	if e.GameID != id || e.Outcome != "drawn" || e.Result != "1/2-1/2" || e.Reason != "Draw" || e.Status != "draw" ||
+		e.Side != "white" || e.Opponent != "Alice" || len(e.Moves) != len(moves) || e.FEN == "" {
+		t.Fatalf("game end %+v; %d moves on Lichess", e, len(moves))
+	}
+	// The engine's evaluations, at its own moves (White's: even plies).
+	if len(e.Evals) == 0 {
+		t.Fatal("no evaluations")
+	}
+	for _, ev := range e.Evals {
+		if ev.Ply%2 != 0 || ev.Move != e.Moves[ev.Ply] {
+			t.Fatalf("evaluation %+v is not at one of the engine's moves %v", ev, e.Moves)
+		}
+	}
+
+	// A game the engine loses (here it is told White resigned), and an
+	// aborted game: lost, and nothing told.
+	lost := h.fake.StartGame("Bob", true, 300, 2)
+	h.waitFor("listed", func(s Status) bool { return gameView(s, lost) != nil })
+	if err := h.bot.Play(lost); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.Resign(lost, "white")
+	h.waitFor("lost", func(s Status) bool { g := gameView(s, lost); return g != nil && g.Finished })
+	gone := h.fake.StartGame("Carol", false, 300, 2)
+	h.waitFor("listed", func(s Status) bool { return gameView(s, gone) != nil })
+	if err := h.bot.Play(gone); err != nil {
+		t.Fatal(err)
+	}
+	h.fake.EndGame(gone, "aborted", "")
+	h.waitFor("aborted", func(s Status) bool { g := gameView(s, gone); return g != nil && g.Finished })
+	time.Sleep(200 * time.Millisecond)
+	h.mu.Lock()
+	ends = append([]BotGameEnd(nil), h.gameEnds...)
+	h.mu.Unlock()
+	if len(ends) != 2 || ends[1].GameID != lost || ends[1].Outcome != "lost" || ends[1].Result != "0-1" {
+		t.Fatalf("game ends %+v", ends)
 	}
 }

@@ -147,28 +147,56 @@
             <div class="games-head" id="games-head" hidden>
               <span class="name" id="games-file"></span>
               <input type="search" id="games-filter" placeholder="Filter by player, event, date or result" spellcheck="false">
-              <button type="button" class="small" id="games-search-toggle" aria-expanded="false" aria-controls="games-search" title="Search the games by player, result, event, date or length">Search <span class="count" id="games-search-count"></span></button>
+              <button type="button" class="small" id="games-search-toggle" aria-expanded="false" aria-controls="games-search" title="Search the games by player and who won, result, opening, speed, rated or casual, event, date or length">Search <span class="count" id="games-search-count"></span></button>
               <button type="button" class="small icon" id="games-reload" title="Read the file again and show its games as they are now" aria-label="Reload the games"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
               <button type="button" class="small" id="games-db" title="List the games in your game database, where finished games are kept">Database</button>
               <button type="button" class="small" id="games-close" title="Close the file and clear this list">Close</button>
             </div>
-            <form class="games-search" id="games-search" autocomplete="off" hidden>
-              <label>Player <input type="text" id="gs-player" data-q="player" placeholder="Either colour" spellcheck="false"></label>
-              <label>White <input type="text" id="gs-white" data-q="white" spellcheck="false"></label>
-              <label>Black <input type="text" id="gs-black" data-q="black" spellcheck="false"></label>
-              <label>Event <input type="text" id="gs-event" data-q="event" spellcheck="false"></label>
-              <label>Result <select id="gs-result" data-q="result">
-                <option value="">Any</option>
+            <form class="games-search" id="games-search" autocomplete="off" aria-label="Search the games" hidden>
+              <label class="gs-wide">Player <input type="text" id="gs-players" data-f="players" placeholder="One name, or several separated by commas" title="Games with any of these players, as White or Black. Separate names with commas, and put a name that has a comma in quotes, like &quot;Carlsen, Magnus&quot;." spellcheck="false"></label>
+              <label>The player’s result <select id="gs-outcome" data-f="outcome" title="How the player named did. With several names, any of them.">
+                <option value="">Any result</option>
+                <option value="won">Won</option>
+                <option value="lost">Lost</option>
+                <option value="drew">Drew</option>
+              </select></label>
+              <label>The player’s colour <select id="gs-side" data-f="side" title="The colour the player named had">
+                <option value="">Either colour</option>
+                <option value="white">White</option>
+                <option value="black">Black</option>
+              </select></label>
+              <label>White <input type="text" id="gs-white" data-f="white" placeholder="Name or names" spellcheck="false"></label>
+              <label>Black <input type="text" id="gs-black" data-f="black" placeholder="Name or names" spellcheck="false"></label>
+              <label>Result of the game <select id="gs-result" data-f="result">
+                <option value="">Any result</option>
                 <option value="1-0">White won</option>
                 <option value="0-1">Black won</option>
                 <option value="1/2-1/2">Draw</option>
-                <option value="decisive">Decisive</option>
+                <option value="decisive">Won by either side</option>
                 <option value="*">Unfinished</option>
               </select></label>
-              <label class="gs-range">Date <span><input type="text" id="gs-from" data-q="dateFrom" placeholder="From" title="YYYY, YYYY.MM or YYYY.MM.DD" maxlength="10"> – <input type="text" id="gs-to" data-q="dateTo" placeholder="To" title="YYYY, YYYY.MM or YYYY.MM.DD" maxlength="10"></span></label>
-              <label class="gs-range">Moves <span><input type="number" id="gs-min" data-q="minMoves" min="0" step="1" placeholder="Min"> – <input type="number" id="gs-max" data-q="maxMoves" min="0" step="1" placeholder="Max"></span></label>
-              <span class="gs-foot"><span class="hint" id="games-search-note"></span><button type="button" class="small" id="games-search-clear">Clear</button></span>
+              <label>Opening <input type="text" id="gs-opening" data-f="opening" placeholder="ECO code or name" title="An ECO code (B90), the start of one (B9 or B), a range (B90-B99), or words from the opening’s name (Najdorf). Separate several with commas." spellcheck="false"></label>
+              <label>Speed <select id="gs-speed" data-f="speed" title="Worked out from the time control as Lichess does it (the base time plus 40 increments), or else from the event’s name">
+                <option value="">Any speed</option>
+                <option value="ultrabullet">UltraBullet</option>
+                <option value="bullet">Bullet</option>
+                <option value="blitz">Blitz</option>
+                <option value="rapid">Rapid</option>
+                <option value="classical">Classical</option>
+                <option value="correspondence">Correspondence</option>
+              </select></label>
+              <label>Time control <input type="text" id="gs-tc" data-f="timeControl" placeholder="180+2" title="The time control exactly as the file writes it: seconds, then the increment, like 180+2" spellcheck="false"></label>
+              <label>Rated <select id="gs-rated" data-f="rated" title="As the event says (“Rated Blitz game”, “Casual game”). Games whose event says neither are left out of both.">
+                <option value="">Rated or casual</option>
+                <option value="rated">Rated only</option>
+                <option value="casual">Casual only</option>
+              </select></label>
+              <label>Event <input type="text" id="gs-event" data-f="event" placeholder="Words in the event" spellcheck="false"></label>
+              <label class="gs-range">Date <span><input type="text" id="gs-from" data-f="dateFrom" placeholder="From" aria-label="Played on or after" title="YYYY, YYYY.MM or YYYY.MM.DD" maxlength="10"> – <input type="text" id="gs-to" data-f="dateTo" placeholder="To" aria-label="Played on or before" title="YYYY, YYYY.MM or YYYY.MM.DD" maxlength="10"></span></label>
+              <label class="gs-range">Moves <span><input type="number" id="gs-min" data-f="minMoves" min="0" step="1" placeholder="Fewest" aria-label="At least this many moves"> – <input type="number" id="gs-max" data-f="maxMoves" min="0" step="1" placeholder="Most" aria-label="At most this many moves"></span></label>
+              <span class="gs-foot"><span class="hint" id="games-search-note" aria-live="polite"></span><button type="button" class="small" id="games-search-clear">Clear all</button></span>
             </form>
+            <div class="games-filters" id="games-filters" role="group" aria-label="Filters in force" hidden></div>
             <div class="games-tools" id="games-tools" hidden>
               <button type="button" class="small" id="games-import" title="Add every game of another PGN file to this one">Import…</button>
               <button type="button" class="small" id="games-export" title="Write the games listed (all of them, or those matching the filter) to a new PGN file">Export…</button>
@@ -980,7 +1008,9 @@
           <div class="cm-row"><label class="cm-row-text" for="ec-every" title="How often the engine says something: after so many of its opponent’s moves">Answer every</label><select id="ec-every">
             <option value="1">move</option><option value="2">2 moves</option><option value="3">3 moves</option><option value="5">5 moves</option><option value="8">8 moves</option>
           </select></div>
-          <div class="cm-row"><label class="cm-row-text" for="ec-persona" title="Who the engine is in the chat: a name, or a few words on its character. Left empty, it is the engine, by its own name">Character</label><input type="text" id="ec-persona" maxlength="200" spellcheck="true" placeholder="The engine, by its own name"></div>
+          <div class="cm-row"><label class="cm-row-text" for="ec-name" title="The name the engine goes by in the chat. Left empty, it uses its own name.">Name</label><input type="text" id="ec-name" maxlength="40" spellcheck="false" placeholder="The engine’s own name"></div>
+          <div class="cm-row"><label class="cm-row-text" for="ec-style" title="How the engine talks in the chat. Whatever its personality, it stays kind to its opponent.">Personality</label><select id="ec-style"></select></div>
+          <div class="cm-row ec-custom-row" hidden><textarea id="ec-custom" maxlength="400" rows="3" spellcheck="true" aria-label="Your own personality" placeholder="Describe how the engine talks: its manner, what it cares about, its quirks. For example: a cheerful pirate who loves knights and hates trading queens."></textarea></div>
           <p class="hint error ec-note" id="ec-note" hidden></p>
         </div>
         <div class="cm-feed" id="cm-feed" role="log" aria-live="polite" tabindex="0"></div>
@@ -1602,6 +1632,7 @@
   <!-- An opening's history, strengths and weaknesses, shown while hovering its name. -->
   <div id="opening-pop" class="opening-pop" role="tooltip" hidden></div>
   <script src="option-help.js"></script>
+  <script src="games-search-data.js"></script>
   <script src="renderer.js"></script>
   <script src="voice-parse.js"></script>
   <script src="voice.js"></script>

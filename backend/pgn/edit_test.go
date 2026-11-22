@@ -306,3 +306,123 @@ func TestSearchAndSort(t *testing.T) {
 		t.Fatalf("limited search: %d matched, rows %+v", matched, rows)
 	}
 }
+
+const advancedGames = `[Event "Rated Blitz game"]
+[Site "https://lichess.org/abc"]
+[Date "2025.03.01"]
+[White "Devilfishbot"]
+[Black "someone"]
+[Result "1-0"]
+[ECO "B90"]
+[Opening "Sicilian Defense: Najdorf Variation"]
+[TimeControl "180+2"]
+
+1. e4 c5 2. Nf3 d6 1-0
+
+[Event "Casual Rapid game"]
+[Site "https://lichess.org/def"]
+[Date "2025.03.02"]
+[White "other"]
+[Black "EsperEngine"]
+[Result "0-1"]
+[ECO "C65"]
+[Opening "Ruy Lopez: Berlin Defense"]
+[TimeControl "600+0"]
+
+1. e4 e5 2. Nf3 Nc6 3. Bb5 Nf6 0-1
+
+[Event "Rated Bullet game"]
+[Date "2025.03.03"]
+[White "EsperEngine"]
+[Black "Devilfishbot"]
+[Result "1/2-1/2"]
+[ECO "A00"]
+[TimeControl "60+0"]
+
+1. a3 a6 1/2-1/2
+
+[Event "Casual game"]
+[Date "2025.03.04"]
+[White "Devilfishbot"]
+[Black "Stockfish"]
+[Result "0-1"]
+[ECO "B99"]
+[TimeControl "40/7200:3600"]
+
+1. e4 c5 0-1
+
+[Event "Club night"]
+[White "esperengine"]
+[Black "devilfishbot"]
+[Result "1-0"]
+[TimeControl "-"]
+
+1. d4 1-0
+`
+
+func TestAdvancedSearch(t *testing.T) {
+	c := openText(t, advancedGames)
+	pick := func(q Query) string {
+		var out []string
+		for _, i := range c.Select(q) {
+			out = append(out, strconv.Itoa(i))
+		}
+		return strings.Join(out, "")
+	}
+	both := []string{"Devilfishbot", " EsperEngine "}
+	for _, tc := range []struct {
+		name string
+		q    Query
+		want string
+	}{
+		{"either of two names", Query{Players: both}, "01234"},
+		{"one name, either colour", Query{Players: []string{"devilfish"}}, "0234"},
+		{"one name won", Query{Players: []string{"devilfishbot"}, Outcome: "won"}, "0"},
+		{"either of two won", Query{Players: both, Outcome: "won"}, "014"},
+		{"either of two lost", Query{Players: both, Outcome: "lost"}, "34"},
+		{"either of two drew", Query{Players: both, Outcome: "drew"}, "2"},
+		{"won with black", Query{Players: both, Outcome: "won", Side: "black"}, "1"},
+		{"played white", Query{Players: []string{"devilfishbot"}, Side: "white"}, "03"},
+		{"old single player field joins the list", Query{Player: "stockfish", Players: []string{"someone"}}, "03"},
+		{"white won, no names", Query{Side: "white", Outcome: "won"}, "04"},
+		{"black won, no names", Query{Side: "black", Outcome: "won"}, "13"},
+		{"several whites", Query{Whites: []string{"other", "esperengine"}}, "124"},
+		{"eco code", Query{Openings: []string{"b90"}}, "0"},
+		{"eco start", Query{Openings: []string{"B9"}}, "03"},
+		{"eco letter", Query{Openings: []string{"B"}}, "03"},
+		{"eco range", Query{Openings: []string{"B99–C70"}}, "13"},
+		{"opening name or code", Query{Openings: []string{"berlin", "A00"}}, "12"},
+		{"speed blitz", Query{Speed: "blitz"}, "0"},
+		{"speed bullet from the clock", Query{Speed: "Bullet"}, "2"},
+		{"speed classical from stages", Query{Speed: "classical"}, "3"},
+		{"speed correspondence", Query{Speed: "correspondence"}, "4"},
+		{"time control as written", Query{TimeControl: "180 + 2"}, "0"},
+		{"rated", Query{Rated: "rated"}, "02"},
+		{"casual", Query{Rated: "casual"}, "13"},
+		{"together", Query{Players: both, Outcome: "won", Rated: "rated", Speed: "blitz", MinMoves: 2}, "0"},
+		{"unknown values are ignored", Query{Side: "green", Outcome: "maybe", Speed: "fast", Rated: "sometimes"}, "01234"},
+	} {
+		if got := pick(tc.q); got != tc.want {
+			t.Errorf("%s: picked %q, want %q", tc.name, got, tc.want)
+		}
+	}
+	if !(Query{Players: []string{" "}, Side: "green"}).Empty() || (Query{Outcome: "won"}).Empty() || (Query{Openings: []string{"B"}}).Empty() {
+		t.Error("Empty is wrong")
+	}
+}
+
+func TestSpeedOf(t *testing.T) {
+	for _, tc := range []struct {
+		event, tc string
+		want      speed
+	}{
+		{"", "15+0", ultraBullet}, {"", "120+1", bullet}, {"", "180+0", blitz}, {"", "300+3", blitz},
+		{"", "600+5", rapid}, {"", "1800+0", classical}, {"", "-", correspondence},
+		{"Rated Rapid game", "?", rapid}, {"Rated UltraBullet game", "", ultraBullet}, {"Some open", "", none},
+		{"", "*30", none},
+	} {
+		if got := speedOf(tc.event, tc.tc); got != tc.want {
+			t.Errorf("speedOf(%q, %q) = %d, want %d", tc.event, tc.tc, got, tc.want)
+		}
+	}
+}

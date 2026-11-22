@@ -3,6 +3,7 @@ package lichess
 import (
 	"path/filepath"
 
+	"board/backend/chess"
 	"board/backend/game"
 )
 
@@ -83,4 +84,79 @@ func (r *runner) engineNameLocked() string {
 		return filepath.Base(r.engPath)
 	}
 	return ""
+}
+
+// BotGameEnd is the "lichessBotGameEnd" event: a game the engine played is
+// over (not aborted). The app uses it for the engine's last chat message,
+// on how the game ended and how it went, written by the AI in character.
+type BotGameEnd struct {
+	GameID         string `json:"gameId"`
+	URL            string `json:"url"`
+	Me             string `json:"me"`
+	Engine         string `json:"engine"`
+	Opponent       string `json:"opponent"`
+	OpponentRating int    `json:"opponentRating,omitempty"`
+	OpponentTitle  string `json:"opponentTitle,omitempty"`
+	Side           string `json:"side"` // the engine's: white or black
+	Rated          bool   `json:"rated"`
+	Speed          string `json:"speed,omitempty"`
+	// Result: 1-0, 0-1 or 1/2-1/2. Outcome: the engine's own, won, lost or
+	// drawn. Reason: how, in words ("Black wins by checkmate"); Status:
+	// Lichess's word for it (mate, resign, outoftime, draw, stalemate, …).
+	Result  string `json:"result"`
+	Outcome string `json:"outcome"`
+	Reason  string `json:"reason"`
+	Status  string `json:"status"`
+	// The game: its first position, the moves (SAN) and the last position.
+	StartFEN string   `json:"startFen"`
+	Moves    []string `json:"moves"`
+	FEN      string   `json:"fen"`
+	// What the engine thought as it went: its evaluation at each of its
+	// moves, from White's side.
+	Evals []BotEval `json:"evals,omitempty"`
+}
+
+// BotEval is the engine's evaluation when it played the move at Ply (0:
+// White's first), from White's side.
+type BotEval struct {
+	Ply    int    `json:"ply"`
+	Move   string `json:"move"` // SAN
+	CP     int    `json:"cp"`
+	IsMate bool   `json:"isMate,omitempty"`
+	Mate   int    `json:"mate,omitempty"`
+}
+
+// gameEndLocked describes a game the engine played that has just ended.
+func (r *runner) gameEndLocked(status string) BotGameEnd {
+	opp := r.opponent()
+	out := BotGameEnd{
+		GameID: r.id, URL: r.url(), Me: r.b.meLocked(), Engine: r.engineNameLocked(),
+		Opponent: opp.DisplayName(), OpponentRating: opp.Rating, OpponentTitle: opp.Title,
+		Side: r.side(), Rated: r.rated, Speed: r.speed,
+		Result: r.result, Reason: r.reason, Status: status,
+		StartFEN: r.startFEN, FEN: r.pos.FEN(),
+	}
+	switch {
+	case r.result == "1/2-1/2":
+		out.Outcome = "drawn"
+	case (r.result == "1-0") == (r.color == chess.White):
+		out.Outcome = "won"
+	default:
+		out.Outcome = "lost"
+	}
+	pos := r.start
+	out.Moves = make([]string, 0, len(r.moves))
+	for i, u := range r.moves {
+		mv, err := parseMove(&pos, u)
+		if err != nil {
+			break
+		}
+		san := pos.SAN(mv)
+		out.Moves = append(out.Moves, san)
+		if c, ok := r.chosen[i]; ok && c.HasEval {
+			out.Evals = append(out.Evals, BotEval{Ply: i, Move: san, CP: c.CP, IsMate: c.IsMate, Mate: c.Mate})
+		}
+		pos = pos.Make(mv)
+	}
+	return out
 }

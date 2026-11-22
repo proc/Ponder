@@ -2911,8 +2911,11 @@ api.onEvent((event, data) => {
     window.lichessAccountStatus?.(data);
   } else if (event === 'lichessBotMove') {
     window.engineChatBotMove?.(data); // your engine's move on Lichess: its chat message, if due
+  } else if (event === 'lichessBotGameEnd') {
+    window.engineChatGameEnd?.(data); // your engine's game on Lichess is over: its last chat message
   } else if (event === 'lichessChat') {
     window.lichessChatEvent?.(data);
+    window.engineChatHeard?.(data); // your engine's opponent wrote to it: an answer, with engine chat on
   } else if (event === 'lichessWatch') {
     lichessWatchStatus(data);
   } else if (event === 'engineString') {
@@ -3213,42 +3216,93 @@ function sortGames(by) {
   fetchGames();
 }
 
-// The search: what the Search panel asks of the games listed.
-const searchFields = () => [...$('#games-search').querySelectorAll('[data-q]')];
-function gamesQuery() {
-  const q = {};
-  for (const f of searchFields()) {
-    const v = f.value.trim();
-    if (!v) continue;
-    q[f.dataset.q] = f.type === 'number' ? Math.max(0, Math.round(+v) || 0) : v;
-  }
-  return q;
+// The search: what the Search panel asks of the games listed. Its values
+// are kept between sessions (games-search-data.js turns them into the
+// backend's query and describes them); the filters in force show as chips
+// under the head, each with a way to take it off.
+const GS = window.gamesSearchData;
+const searchFields = () => [...$('#games-search').querySelectorAll('[data-f]')];
+function searchValues() {
+  const v = GS.empty();
+  for (const f of searchFields()) v[f.dataset.f] = f.value;
+  return GS.normalize(v);
 }
-const searchCount = () => Object.values(gamesQuery()).filter(Boolean).length;
+function setSearchValues(values) {
+  const v = GS.normalize(values);
+  for (const f of searchFields()) f.value = v[f.dataset.f] ?? '';
+}
+function saveGamesSearch() {
+  try { localStorage.setItem('gamesSearch', JSON.stringify(searchValues())); } catch { /* ignore */ }
+}
+try { setSearchValues(JSON.parse(localStorage.getItem('gamesSearch') ?? 'null')); } catch { /* none kept */ }
+const gamesQuery = () => GS.buildQuery(searchValues());
+const searchCount = () => GS.describe(searchValues()).length;
 function clearGamesSearch() {
-  for (const f of searchFields()) f.value = '';
+  setSearchValues(GS.empty());
+  saveGamesSearch();
 }
 function renderGamesSearch() {
-  const n = searchCount();
+  const values = searchValues();
+  const active = GS.describe(values);
+  const n = active.length;
   $('#games-search-count').textContent = n ? String(n) : '';
+  $('#games-search-toggle').setAttribute('aria-label', n ? `Search, ${n} filter${n === 1 ? '' : 's'} in force` : 'Search');
   $('#games-search-clear').disabled = !n;
+  // The player's result and colour mean nothing until a player is named.
+  const named = GS.splitList(values.players).length > 0;
+  for (const id of ['#gs-outcome', '#gs-side']) $(id).closest('label').classList.toggle('gs-idle', !named);
   const list = collection?.list;
-  $('#games-search-note').textContent = !n ? 'Fill in what the games must have; every part must hold.'
+  const problems = GS.problems(values);
+  $('#games-search-note').textContent = problems.length ? problems.join(' ')
+    : !n ? 'Fill in what the games must have. Every part filled in must hold; several names or openings in one field mean any of them.'
     : list ? `${list.matched.toLocaleString()} of ${collection.total.toLocaleString()} games match.` : '';
+  $('#games-search-note').classList.toggle('warn', problems.length > 0);
+  // The chips: shown whether or not the panel is open.
+  const box = $('#games-filters');
+  box.hidden = !collection || !n;
+  const chips = active.map(({ fields, text }) => {
+    const b = el('button', { type: 'button', className: 'chip gs-chip', title: `Remove this filter: ${text}` }, [
+      el('span', { textContent: text }), el('span', { className: 'x', textContent: '×', ariaHidden: 'true' }),
+    ]);
+    b.setAttribute('aria-label', `Remove the filter “${text}”`);
+    b.onclick = () => {
+      setSearchValues(GS.without(searchValues(), fields));
+      saveGamesSearch();
+      fetchGames();
+      // The keyboard goes to the next chip, or to the Search button.
+      requestAnimationFrame(() => ($('#games-filters .gs-chip') ?? $('#games-search-toggle')).focus());
+    };
+    return b;
+  });
+  if (n > 1) {
+    const all = el('button', { type: 'button', className: 'small gs-clear-all', textContent: 'Clear all' });
+    all.onclick = () => { clearGamesSearch(); fetchGames(); $('#games-search-toggle').focus(); };
+    chips.push(all);
+  }
+  box.replaceChildren(...chips);
 }
 $('#games-search-toggle').onclick = () => {
   const open = $('#games-search').hidden;
   $('#games-search').hidden = !open;
   $('#games-search-toggle').setAttribute('aria-expanded', String(open));
-  if (open) $('#gs-player').focus();
+  if (open) $('#gs-players').focus();
 };
 let searchTimer = null;
 $('#games-search').addEventListener('input', () => {
+  saveGamesSearch();
+  renderGamesSearch();
   clearTimeout(searchTimer);
   searchTimer = setTimeout(fetchGames, 150);
 });
 $('#games-search').onsubmit = (e) => { e.preventDefault(); clearTimeout(searchTimer); fetchGames(); };
-$('#games-search-clear').onclick = () => { clearGamesSearch(); fetchGames(); };
+$('#games-search').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('#games-search').hidden) {
+    e.preventDefault();
+    $('#games-search-toggle').click();
+    $('#games-search-toggle').focus();
+  }
+});
+$('#games-search-clear').onclick = () => { clearGamesSearch(); fetchGames(); $('#gs-players').focus(); };
 
 let listRequest = 0;
 async function fetchGames() {
@@ -3358,7 +3412,11 @@ function renderGames() {
     })));
   }
   renderGamesSearch();
-  if (rows.length === 0 && collection.list) rows.push(el('p', { className: 'hint', textContent: 'No games match.' }));
+  if (rows.length === 0 && collection.list) {
+    const filtered = searchCount() > 0;
+    rows.push(el('p', { className: 'hint', textContent: filtered && collection.total
+      ? 'No games match. The filters in force are listed above; remove some of them to see more games.' : 'No games match.' }));
+  }
   // The list is drawn again; the row that had the keyboard keeps it.
   const focused = document.activeElement?.closest?.('#games-list .game-row')?.dataset.index ?? gamesFocus;
   gamesFocus = null;
@@ -3658,7 +3716,6 @@ $('#games-close').onclick = async () => {
   await command('closePgn');
   collection = null;
   $('#games-filter').value = '';
-  clearGamesSearch();
   renderGames();
   renderStatus();
 };
@@ -3709,7 +3766,6 @@ async function openPgn(given, { list = false } = {}) {
   }
   collection = { source: result.name, path: file.path, total: result.total, errors: result.errors ?? {}, list: null };
   $('#games-filter').value = '';
-  clearGamesSearch();
   renderGames();
   if (list) { await fetchGames(); return; }
   showTab('games');

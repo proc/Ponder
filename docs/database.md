@@ -20,7 +20,19 @@ With the database or any PGN file open in the Games tab:
 
 - **Sorting** – click a column name (#, White, Black, Result, Event, Date, Moves) to sort, again to reverse. **#** is file order. The choice is remembered.
 - **Analysed** – a ✓ marks a game whose computer analysis is complete: one engine has analysed every position in it (hover for which). A stopped analysis gets no tick until it is finished. Analysed positions are remembered between sessions, so the ticks stay. The round is still shown on the Game card.
-- **Search** – filter by player, White, Black, event, result, date range (YYYY, YYYY.MM or YYYY.MM.DD) and length in moves, together with the filter box. **Clear** empties it.
+- **Search** – the filter box above the list finds games with every word typed in it, in any of the columns. **Search** beside it opens a panel for a closer search; the number on the button is how many of its filters are in force. Every part you fill in must hold, and several names or openings in one field, separated by commas, mean any of them. Put a name that has a comma in quotes, like `"Carlsen, Magnus"`.
+  - **Player** – one or more names, as White or Black. **The player's result** (won, lost or drew) and **The player's colour** apply to the player named: *Devilfishbot, EsperEngine* with *Won* lists every game either of them won, and with *Black* as well, only those they won with Black. Without a name these two are not used.
+  - **White** and **Black** – names for that colour only.
+  - **Result of the game** – White won, Black won, a draw, won by either side, or unfinished.
+  - **Opening** – an ECO code (B90), the start of one (B9, or just B), a range (B90-B99), or words from the opening's name (Najdorf). The file needs `ECO` or `Opening` headers for this.
+  - **Speed** – UltraBullet, Bullet, Blitz, Rapid, Classical or Correspondence, worked out from the `TimeControl` header the way Lichess does it (the base time plus 40 increments), or else from the event's name, such as "Rated Blitz game".
+  - **Time control** – the `TimeControl` header as written, in seconds: 180+2.
+  - **Rated** – rated or casual games, as the event says ("Rated Blitz game", "Casual game"). Games whose event says neither are left out of both.
+  - **Event** – words in the event's name.
+  - **Date** – from and to, as YYYY, YYYY.MM or YYYY.MM.DD. A date that cannot be read is not used, and the panel says so.
+  - **Moves** – the fewest and the most moves.
+
+  The filters in force show as chips under the header, even with the panel closed. Click a chip to remove that filter, or **Clear all** to remove them all. The search is remembered, also when you open another file or restart Ponder. **Export…** writes the games that match.
 - **Reload** (↻ beside Close) – reread the file.
 - **Import…** – add every game from another PGN file.
 - **Export…** – write the listed games to a new PGN file.

@@ -63,3 +63,59 @@ test('a server that refuses the option: asked again without it', async () => {
   assert.equal(out.text, 'Bold knight!');
   assert.equal(s.seen[1].body.max_tokens, undefined);
 });
+
+// A stand-in server that streams (server-sent events): each answer is a list
+// of events; type is the content type it says, if any.
+function streamer(...answers) {
+  const seen = [];
+  const sendImpl = async (url, { body, onData }) => {
+    seen.push({ url, body: JSON.parse(body) });
+    const a = answers.length > 1 ? answers.shift() : answers[0];
+    const text = a.events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('') + 'data: [DONE]\n\n';
+    const res = { statusCode: 200, headers: a.type === undefined ? { 'content-type': 'text/event-stream' } : a.type ? { 'content-type': a.type } : {} };
+    // In two pieces, cut mid-line, as a network would.
+    const cut = Math.floor(text.length / 2);
+    onData?.(Buffer.from(text.slice(0, cut)), res);
+    onData?.(Buffer.from(text.slice(cut)), res);
+    return { status: 200, text, headers: res.headers };
+  };
+  return { seen, sendImpl };
+}
+const think = (t) => ({ choices: [{ delta: { reasoning_content: t } }] });
+const word = (t) => ({ choices: [{ delta: { content: t } }] });
+const end = (why) => ({ choices: [{ delta: {}, finish_reason: why }] });
+
+test('a thinking model that streams only its thinking within the cap: asked again without it', async () => {
+  const s = streamer(
+    { events: [think('The user wants a short hello. '), think('Let me think about the knight…'), end('length')] },
+    { events: [think('Short and friendly.'), word('Good luck, '), word('have fun!'), end('stop')] },
+  );
+  const out = await ai.chat({ provider: 'local', baseUrl: 'http://127.0.0.1:9/v1', model: 'qwen-thinker' }, [{ role: 'user', content: 'hi' }], { maxTokens: 100, sendImpl: s.sendImpl });
+  assert.equal(out.text, 'Good luck, have fun!');
+  assert.equal(out.thinking, 'Short and friendly.');
+  assert.equal(s.seen.length, 2);
+  assert.equal(s.seen[0].body.max_tokens, 100);
+  assert.equal(s.seen[1].body.max_tokens, undefined);
+});
+
+test('thinking only, and the server does not say why it stopped: asked again without the cap', async () => {
+  const s = streamer({ events: [think('Hmm…')] }, { events: [word('Hello!')] });
+  const out = await ai.chat({ provider: 'local', baseUrl: 'http://127.0.0.1:9/v1', model: 'quiet-thinker' }, [{ role: 'user', content: 'hi' }], { maxTokens: 100, sendImpl: s.sendImpl });
+  assert.equal(out.text, 'Hello!');
+  assert.equal(s.seen.length, 2);
+});
+
+test('a stream sent without saying so (no text/event-stream) is read all the same', async () => {
+  for (const type of [null, 'text/plain; charset=utf-8', 'application/json']) {
+    const s = streamer({ type, events: [word('Bold '), word('knight!'), end('stop')] });
+    const out = await ai.chat({ provider: 'local', baseUrl: 'http://127.0.0.1:9/v1', model: `loose-${type}` }, [{ role: 'user', content: 'hi' }], { maxTokens: 100, sendImpl: s.sendImpl });
+    assert.equal(out.text, 'Bold knight!', String(type));
+  }
+});
+
+test('a model that never gets past its thinking, even uncapped: said plainly', async () => {
+  const s = streamer({ events: [think('Still thinking…'), end('stop')] });
+  await assert.rejects(
+    ai.chat({ provider: 'local', baseUrl: 'http://127.0.0.1:9/v1', model: 'stuck-thinker' }, [{ role: 'user', content: 'hi' }], { sendImpl: s.sendImpl }),
+    /only thought aloud and gave no answer/);
+});

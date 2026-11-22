@@ -1518,6 +1518,8 @@ func (r *runner) onState(st GameState) {
 	eng := r.eng
 	var save string
 	var bye []chatSend
+	var end BotGameEnd // the engine's game is over: for its last chat message
+	hasEnd := false
 	if ended && !r.finished {
 		r.finished = true
 		r.result, r.reason = resultOf(st)
@@ -1529,6 +1531,7 @@ func (r *runner) onState(st GameState) {
 		}
 		if r.play && r.result != "*" {
 			bye = r.greeting.lines(false, b.meLocked(), r.opponent().DisplayName())
+			end, hasEnd = r.gameEndLocked(st.Status), true
 		}
 	} else if !ended && eng != nil {
 		cmds = r.engineCommandsLocked(st)
@@ -1551,6 +1554,9 @@ func (r *runner) onState(st GameState) {
 	}
 	if save != "" {
 		go b.hooks.Save(save)
+	}
+	if hasEnd && b.hooks.Emit != nil {
+		b.hooks.Emit("lichessBotGameEnd", end)
 	}
 	if len(bye) > 0 {
 		go r.send(bye)

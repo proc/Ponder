@@ -178,9 +178,17 @@ It is asked not to give that line away, and not to give advice.
 
 - **Answer every** sets how often it speaks: every move, or every 2, 3, 5 or
   8 of its opponent's moves, as for live commentary.
-- **Character** is who the engine is in the chat: a name, or a few words on
-  its personality ("Captain Gambit, a cheerful pirate"). Left empty, it is
-  the engine, by its own name.
+- **Name** is the name the engine goes by in the chat. Left empty, it uses
+  its own name.
+- **Personality** is how it talks: Friendly (at first), Cocky, Gentleman,
+  Grumpy, Coach, Pirate, Robot, Zen or Bard. **Your own…** opens a box to
+  describe it yourself, up to 400 characters ("a sleepy cat who naps between
+  moves and hates trading queens"). Whatever the personality, the engine is
+  told to stay kind to its opponent: no insults, and no remarks about them as
+  a person. The personality is used for every message: after moves, in
+  answers and in the last message of the game. An older **Character**
+  setting carries over: a name stays the name, and a longer description
+  becomes your own personality.
 - **Your engine on Lichess:** the message is posted in both rooms of the
   game's chat: the players' room, for its opponent, and the spectators'
   room, for the people watching. If Lichess refuses it in one room, it is
@@ -189,6 +197,15 @@ It is asked not to give that line away, and not to give advice.
   not.
 - **A game against an engine on this computer:** the message shows in the
   game's chat card. Nothing is posted anywhere.
+- **When its opponent writes to it on Lichess**, in the players' room or the
+  spectators' room, the engine answers in that same room, in character. The
+  AI is given what the opponent wrote, the last few lines of the chat, the
+  moves so far and the engine's last evaluation, and is told to ignore any
+  instructions in the message. Only the opponent is answered, not people
+  watching. An engine answers at most eight times in a game, so two bots
+  that both answer can't talk forever. Answers keep to the same limits as
+  the messages after moves. If one would come too soon, it waits, and goes
+  out answering the latest thing said.
 
 The engine never waits for a message: one is asked for only after its move
 has been played. Messages are limited to one every 15 seconds in a game,
@@ -196,12 +213,29 @@ and four a minute over all games. On Lichess each message is two posts, one
 in each room, so that is at most eight posts a minute. Its first move answers nothing, so it says
 nothing then.
 
-**Length.** Lichess takes chat messages of up to 140 characters. The model
-is asked to write within that, and its answer is capped at a small number of
-tokens.
+**When the game is over**, the engine sends one last message, in
+character. It says the game is over and how it ended: the result and the
+way it ended (checkmate, resignation, time, stalemate, a draw, …). It speaks
+as the winner or the loser: if it lost, it congratulates its opponent; if it
+won, it thanks them; if it was a draw, it says so. Then it gives a quick
+recap of the game: how it began, where it turned and how it finished. The AI
+is given the result and how it ended, all the moves (and the opening, in a
+game on this computer), and the engine's evaluation at each of its moves,
+with the moves where it swung most. On Lichess this message goes to both
+rooms; in a game on this computer it shows in the chat card. An aborted game
+gets none. It waits for the limits below if it must, rather than being left
+out, and it is sent once a game.
+
+**Length.** A message may be up to 400 characters: a line or two, or a
+few sentences when there is more to say. Lichess takes chat messages of up
+to 140 characters, so a longer message is posted in parts, at most three,
+one after another a moment apart. It is split between sentences where they
+fit, else between words. Each part after the first counts as one more
+message under the limit of four a minute. The model's answer is capped at a
+small number of tokens.
 
 - If a message comes back too long, the model is shown its own message and
-  asked once more for a version of 140 characters or fewer.
+  asked once more for a version of 400 characters or fewer.
 - If that is too long as well, the message is cut to fit as a last resort,
   at the end of a sentence where one fits, else at a word, with an ellipsis.
   It is never cut in the middle of a word.
