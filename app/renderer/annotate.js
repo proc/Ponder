@@ -137,6 +137,7 @@ async function saveAnnotations({ quiet = true } = {}) {
     const r = await api.backend('pgnAnnotate', { annotations: pgnAnnotations({ kept: quiet }) ?? {} });
     if (state?.game === game) {
       notes.dirty = false;
+      window.reviewSaved?.();
       if (!quiet) {
         // Saved by hand: the lines on the board are the game's now.
         const keepAll = (n) => { n.keep = true; n.children.forEach(keepAll); };
@@ -198,11 +199,23 @@ function annFromFile(nags = [], comment = '') {
     else if (NAG_POS[n] && !a.pos) a.pos = n;
     else a.other.push(n);
   }
-  // "[%ai]" says the comment was the AI model's: it is known as such again.
+  // "[%ai]" says the comment was the AI model's, "[%auto]" the computer
+  // analysis's, "[%autonag]" that the mark was the analysis's: each is known
+  // as such again (a new analysis replaces the analysis's own).
+  const OURS = ['[%ai]', '[%auto]', '[%autonag]'];
   const cmds = comment.match(/\[%[^\]]*\]/g) ?? [];
-  a.cmds = cmds.filter((c) => c !== '[%ai]').join(' ');
+  a.cmds = cmds.filter((c) => !OURS.includes(c)).join(' ');
   a.comment = comment.replace(/\[%[^\]]*\]/g, ' ').replace(/\s+/g, ' ').trim();
   if (cmds.includes('[%ai]') && a.comment) a.ai = true;
+  if (cmds.includes('[%auto]') && a.comment) a.auto = true;
+  if (cmds.includes('[%autonag]') && a.nag) a.autoNag = true;
+  // Saved by an analysis before these were marked: its comment and mark
+  // are known by their form ("Blunder. Qe7 was best." with ??).
+  const kind = { 6: 'Inaccuracy', 2: 'Mistake', 4: 'Blunder' }[a.nag];
+  if (!cmds.some((c) => OURS.includes(c)) && kind && new RegExp(`^${kind}\\.( |$)`).test(a.comment)) {
+    a.auto = true;
+    a.autoNag = true;
+  }
   return annEmpty(a) ? undefined : a;
 }
 
@@ -211,8 +224,8 @@ async function loadAnnotations() {
   if (!state?.loaded || state.index < 0 || an.loadedFor === state.game) return;
   const game = an.loadedFor = state.game;
   let got;
-  try { got = await api.backend('pgnAnnotations', { index: state.index }); } catch { return; }
-  if (!got || state.game !== game) return;
+  try { got = await api.backend('pgnAnnotations', { index: state.index }); } catch { an.ready = game; return; }
+  if (!got || state.game !== game) { if (state?.game === game) an.ready = game; return; }
   if (got.before) notes.before = annFromFile([], got.before) ?? null;
   for (const [ply, note] of Object.entries(got.moves ?? {})) {
     const a = annFromFile(note.nags, note.comment);
@@ -229,7 +242,11 @@ async function loadAnnotations() {
     for (const v of lines) if (!have.some((n) => n.uci === v.uci)) have.push(build(v, null, +base, +base + 1));
     tree.branches.set(+base, have);
   }
-  notes.dirty = false;
+  // A computer analysis made while another game was on the board: its
+  // marks and comments stand in for the ones an earlier one saved.
+  notes.dirty = Boolean(window.reviewNeedsSave?.());
+  if (notes.dirty) window.refreshReviewNotes?.();
+  an.ready = game; // what the file has is on the board: saving cannot lose it
   renderMoves();
 }
 window.loadAnnotations = loadAnnotations;

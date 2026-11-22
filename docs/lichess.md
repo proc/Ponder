@@ -14,13 +14,34 @@ To let your engine play on Lichess, see [Your engine on Lichess](lichess-bot.md)
 
 **Play** uses Lichess's [Board API](https://lichess.org/api#tag/Board), so you move on Ponder's board.
 
-- **Sign in with Lichess** opens your browser to approve Ponder (playing, and sending and answering challenges). No password is needed. The sign-in is kept, encrypted with the system keychain, until you **Sign out**.
-- **Use an API token instead** takes a personal token with the `board:play` permission.
+- **Sign in with Lichess** opens your browser to approve Ponder (playing, sending and answering challenges, and reading the players you follow). No password is needed. The sign-in is kept, encrypted with the system keychain, until you **Sign out**.
+- **Use an API token instead** takes a personal token with the `board:play` permission (**Create one ↗** also ticks `challenge:read`, `challenge:write` and `follow:read`).
+- If you signed in before Ponder asked for `follow:read`, **Following** says so with **Sign in again**; everything else works meanwhile.
 - Anonymous games are not possible: Lichess does not let apps play without an account.
+
+## Your Lichess home
+
+Once you are signed in, **Play** opens on your Lichess home, read again every minute while it is open (↻ reads it at once):
+
+- **Profile** – your name, when you joined and time played, your ratings (Bullet, Blitz, Rapid, Classical, Correspondence, Puzzles, and any variant you have played) with games and recent progress (**?** for provisional), and your won / drawn / lost record. **Profile ↗** opens it on Lichess.
+- **Lichess TV**, **Daily puzzle** and **Puzzles** – go to Watch, or to the Puzzles tab (today's puzzle starts at once). Beside them, who Lichess TV's top rated channel has on now, with **Watch**.
+- **Challenges to you**, with **Accept** and **Decline**.
+- **Your games** – every game you have going on Lichess, correspondence ones too: a small board, the opponent, speed, and whose move it is with the time left. **Resume** puts it on the board to play; a game Ponder was not following yet is followed from then on.
+- **Quick pairing** and **Create a seek** – see below.
+- **Lobby** – the correspondence seeks waiting in the Lichess lobby: player, rating, days a move, rated or casual, colour.
+- **Challenge a friend**.
+- **Following** – the players you follow, online ones first (**Online only** hides the rest): playing (with the clock), online, or when they were last seen, with **Watch** (their game on the board, in Watch), **Challenge** (fills in *Challenge a friend*) and **Profile ↗**.
+
+### What Lichess does not let apps do
+
+- **Join someone else's seek.** Lichess's API can post seeks but not accept them, so the lobby's **Join on Lichess ↗** opens Lichess's lobby; the game then shows under Your games. Real-time seeks are not listed at all (Lichess sends them only to its own page); Quick pairing and Create a seek are paired with a matching one instead.
+- **Withdraw a correspondence seek.** It stays in the lobby until someone accepts it or it expires.
+- **Seek blitz or faster.** Seeks are rapid, classical or correspondence; challenge someone for faster games.
 
 ## Playing on Lichess yourself
 
 - **Quick pairing** (10+0, 10+5, 15+10, 30+0, 30+20, rated or casual) searches the Lichess lobby until an opponent is found. Press it again or **Cancel** to stop. Lichess lets apps seek **rapid and slower** games only.
+- **Create a seek** sets your own: real time (minutes and increment, rapid or slower) or correspondence (1, 2, 3, 5, 7, 10 or 14 days a move), colour, rated, and **Opponent** within ±100 to ±500 of your rating at that speed. It is kept between runs. A real-time seek shows under Quick pairing with **Cancel**; a correspondence seek goes into the lobby, and its game starts when someone accepts it.
 - For blitz or bullet, **challenge a friend** by username with any time, increment and colour.
 - Challenges sent to you are listed with **Accept** and **Decline**, and float up in a window (see [Accepting challenges](lichess-bot.md#accepting-challenges)).
 

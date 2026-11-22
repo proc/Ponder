@@ -47,6 +47,9 @@ type harness struct {
 	hitsShownAt []int
 	// Every random-bot run status emitted, in order.
 	seeks []SeekStatus
+	// Every lichessBotMove event, and how many moves Lichess had then.
+	botMoves         []BotMove
+	botMovesOnServer []int
 }
 
 func newHarness(t *testing.T, policy Policy) *harness {
@@ -67,6 +70,11 @@ func newHarness(t *testing.T, policy Policy) *harness {
 			case "engineInfo":
 				h.infos++
 				h.engineInfos = append(h.engineInfos, data.(game.EngineInfo))
+			case "lichessBotMove":
+				m := data.(BotMove)
+				moves, _, _, _ := h.fake.Game(m.GameID)
+				h.botMoves = append(h.botMoves, m)
+				h.botMovesOnServer = append(h.botMovesOnServer, len(moves))
 			case "ponderHit":
 				h.ponderHits = append(h.ponderHits, data.(PonderHit))
 				n := -1
@@ -354,7 +362,7 @@ func TestParseCastlingKingToRook(t *testing.T) {
 	}
 }
 
-func TestConnectingPlaysNothing(t *testing.T) {
+func TestConnectingAnswersNoChallengeAndTakesOverGames(t *testing.T) {
 	h := newHarness(t, Policy{Casual: true, Humans: true, Bots: true, MaxGames: 4})
 	h.connect()
 	// A game the engine was playing before; the app then went away without
@@ -368,35 +376,121 @@ func TestConnectingPlaysNothing(t *testing.T) {
 	h.bot.Disconnect(false)
 
 	// A challenge waiting, and the old game still going: connecting again
-	// accepts nothing and plays nothing, even with rules that would accept.
+	// answers no challenge, even with rules that would accept, but the
+	// engine takes the game back.
 	h.fake.Challenge("Bob", false, false, 300, 0, "random", "standard")
+	before, _, _, _ := h.fake.Game(id)
 	h.connect()
 	s := h.waitFor("listed", func(s Status) bool { return len(s.Games) == 1 && len(s.Incoming) == 1 })
-	if s.AutoAccept || s.Games[0].Playing {
-		t.Fatalf("connecting should be passive: %+v", s)
+	if s.AutoAccept {
+		t.Fatalf("connecting turned automatic accepting on: %+v", s)
 	}
-	h.waitFor("in sync", func(s Status) bool { return s.Games[0].MyTurn })
-	before, _, _, _ := h.fake.Game(id)
-	time.Sleep(time.Second)
-	after, _, _, _ := h.fake.Game(id)
-	if len(after) != len(before) {
-		t.Fatalf("the engine moved without Play: %d → %d moves", len(before), len(after))
-	}
+	h.waitFor("engine plays the old game", func(s Status) bool { return s.Games[0].Playing && s.Games[0].Moves > len(before) })
 	for _, c := range h.fake.Calls() {
 		if strings.Contains(c, "/accept") && !strings.Contains(c, id) || strings.Contains(c, "decline") {
 			t.Fatalf("answered a challenge by itself: %v", h.fake.Calls())
 		}
 	}
-	// Play hands the game to the engine.
-	if err := h.bot.Play(id); err != nil {
+
+	// A game started elsewhere while connected (by another program, say)
+	// is listed but not played until Play.
+	other := h.fake.StartGame("Carol", true, 300, 0)
+	h.waitFor("other game listed", func(s Status) bool {
+		g := gameView(s, other)
+		return g != nil && g.MyTurn
+	})
+	time.Sleep(500 * time.Millisecond)
+	if moves, _, _, _ := h.fake.Game(other); len(moves) != 0 || gameView(h.bot.Status(), other).Playing {
+		t.Fatalf("the engine played a game started elsewhere without Play: %v", moves)
+	}
+	if err := h.bot.Play(other); err != nil {
 		t.Fatal(err)
 	}
-	h.waitFor("engine plays", func(s Status) bool { return s.Games[0].Playing && s.Games[0].Moves > len(before) })
+	h.waitFor("engine plays", func(s Status) bool { g := gameView(s, other); return g.Playing && g.Moves > 0 })
 	// Turning automatic accepting on answers the waiting challenge.
 	if err := h.bot.SetAutoAccept(true); err != nil {
 		t.Fatal(err)
 	}
-	h.waitFor("auto accepted", func(s Status) bool { return len(s.Incoming) == 0 && len(s.Games) == 2 && s.Games[0].Playing })
+	h.waitFor("auto accepted", func(s Status) bool { return len(s.Incoming) == 0 && len(s.Games) == 3 })
+}
+
+func gameView(s Status, id string) *GameView {
+	for i := range s.Games {
+		if s.Games[i].ID == id {
+			return &s.Games[i]
+		}
+	}
+	return nil
+}
+
+// Games in progress when Ponder connects are played by the engine from
+// where they stand, and the one where it is the engine's move is shown on
+// the board. A game the engine cannot play (correspondence) is left alone.
+func TestConnectTakesOverGamesInProgress(t *testing.T) {
+	h := newHarness(t, Policy{})
+	h.fake.Delay = 400 * time.Millisecond
+	theirs := h.fake.StartGame("Alice", false, 300, 2) // the bot is Black; White to move
+	mine := h.fake.StartGame("Bob", true, 300, 2, "e2e4", "e7e5", "g1f3", "b8c6")
+	corr := h.fake.StartGame("Carol", true, -1, 0, "d2d4", "d7d5")
+
+	h.connect()
+	h.waitFor("engine moved in the game on its move", func(s Status) bool {
+		g := gameView(s, mine)
+		return g != nil && g.Playing && g.Moves >= 5
+	})
+	h.waitFor("engine plays the other game", func(s Status) bool {
+		g := gameView(s, theirs)
+		return g != nil && g.Playing && g.Moves >= 2
+	})
+	if moves, _, _, _ := h.fake.Game(mine); len(moves) < 5 || moves[3] != "b8c6" {
+		t.Fatalf("the engine did not go on from the position: %v", moves)
+	}
+	s := h.bot.Status()
+	if g := gameView(s, corr); g == nil || g.Playing {
+		t.Fatalf("a correspondence game was taken over: %+v", g)
+	}
+	if moves, _, _, _ := h.fake.Game(corr); len(moves) != 2 {
+		t.Fatalf("the engine moved in a correspondence game: %v", moves)
+	}
+	if w := h.bot.Watching(); w != mine {
+		t.Fatalf("the board shows %q, want the game on the engine's move %q", w, mine)
+	}
+	h.mu.Lock()
+	shown := len(h.shown) > 0 && h.shown[len(h.shown)-1].ID == mine
+	h.mu.Unlock()
+	if !shown {
+		t.Fatal("the game was not put on the board")
+	}
+	if g := gameView(s, mine); !strings.Contains(g.Message, "took over") {
+		t.Errorf("no word that the game was taken over: %q", g.Message)
+	}
+}
+
+// A game that starts while the connection to Lichess is lost is taken
+// over when it comes back; games the engine was playing go on.
+func TestReconnectTakesOverGameStartedMeanwhile(t *testing.T) {
+	h := newHarness(t, Policy{})
+	h.fake.Delay = 300 * time.Millisecond
+	first := h.fake.StartGame("Alice", true, 300, 2)
+	h.connect()
+	h.waitFor("first game played", func(s Status) bool { g := gameView(s, first); return g != nil && g.Playing && g.Moves >= 1 })
+
+	h.fake.DropStreams()
+	h.waitFor("connection lost", func(s Status) bool { return s.State == "reconnecting" })
+	later := h.fake.StartGame("Bob", true, 300, 2)
+	h.waitFor("game started meanwhile played", func(s Status) bool {
+		g := gameView(s, later)
+		return s.State == "connected" && g != nil && g.Playing && g.Moves >= 1
+	})
+	before, _, _, _ := h.fake.Game(first)
+	h.waitFor("first game goes on", func(s Status) bool { g := gameView(s, first); return g.Playing && g.Moves > len(before) })
+	if n := len(h.bot.Status().Games); n != 2 {
+		t.Fatalf("%d games listed, want 2", n)
+	}
+	// The board stays on the game it showed.
+	if w := h.bot.Watching(); w != first {
+		t.Errorf("the board switched to %q, want %q", w, first)
+	}
 }
 
 func TestSeekChallengesRandomBotsUntilOneAccepts(t *testing.T) {
@@ -956,5 +1050,82 @@ func TestChallengeThatCannotBeAnsweredCanBeDismissed(t *testing.T) {
 		if s := h.bot.Status(); len(s.Incoming) != 0 {
 			t.Fatalf("accept %v: still listed %+v", accept, s.Incoming)
 		}
+	}
+}
+
+// An aborted game is over: the next challenge goes out, by the random-bot
+// search and by hand, however the game was aborted.
+func TestAbortedGameLetsTheNextChallengeGo(t *testing.T) {
+	for _, tc := range []struct {
+		name, color, how string
+		end              func(h *harness, id string)
+	}{
+		{"engine aborts before any move", "black", "", func(h *harness, id string) {
+			if err := h.bot.Abort(id); err != nil {
+				h.t.Fatal(err)
+			}
+		}},
+		{"engine aborts after its first move", "white", "", func(h *harness, id string) {
+			h.waitFor("first move", func(s Status) bool { g := gameView(s, id); return g != nil && g.Moves == 1 })
+			if err := h.bot.Abort(id); err != nil {
+				h.t.Fatal(err)
+			}
+		}},
+		{"opponent aborts", "white", "", func(h *harness, id string) { h.fake.EndGame(id, "aborted", "") }},
+		{"Lichess aborts a game nobody moved in", "black", "", func(h *harness, id string) { h.fake.EndGame(id, "noStart", "") }},
+		{"game stream closes and the game is gone", "black", "gone", func(h *harness, id string) { h.fake.EndGame(id, "aborted", "gone") }},
+		{"only the event stream says it ended", "black", "silent", func(h *harness, id string) { h.fake.EndGame(id, "aborted", "silent") }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seekAnswerTimeout, seekPause, seekRetry, seekGap, seekPoll = 2*time.Second, 20*time.Millisecond, 100*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
+			finishGrace = 200 * time.Millisecond
+			h := newHarness(t, Policy{})
+			h.fake.Still = true // the opponent never moves
+			h.fake.Online = []fake.OnlineBot{{Name: "SlowBot", Rating: 1700}, {Name: "FastBot", Rating: 1710}}
+			h.connect()
+			if err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2, Color: tc.color}, Games: 2}); err != nil {
+				t.Fatal(err)
+			}
+			s := h.waitFor("first game", func(s Status) bool { return len(s.Games) == 1 })
+			id := s.Games[0].ID
+			tc.end(h, id)
+			h.waitFor("game over", func(s Status) bool { g := gameView(s, id); return g != nil && g.Finished })
+			h.waitFor("second game", func(s Status) bool { return len(s.Games) == 2 })
+			if n := strings.Count(strings.Join(h.fake.Calls(), "\n"), "POST /api/challenge/"); n != 2 {
+				t.Errorf("%d challenges sent, want 2", n)
+			}
+			// That game aborted too, a challenge by hand goes out.
+			second := ""
+			for _, g := range h.bot.Status().Games {
+				if g.ID != id {
+					second = g.ID
+				}
+			}
+			h.fake.EndGame(second, "aborted", tc.how)
+			h.waitFor("second game over", func(s Status) bool { g := gameView(s, second); return g != nil && g.Finished })
+			h.waitFor("search done", func(s Status) bool { return s.Seek == nil })
+			if err := h.bot.Challenge(ChallengeParams{Username: "SlowBot", Limit: 180, Increment: 2, Color: "random"}); err != nil {
+				t.Fatalf("challenge by hand after an aborted game: %v", err)
+			}
+		})
+	}
+}
+
+// A game taken over on connecting that is then aborted (its stream closing
+// and the game gone) no longer holds back a challenge.
+func TestTakenOverGameAbortedLetsChallengesGo(t *testing.T) {
+	finishGrace = 200 * time.Millisecond
+	h := newHarness(t, Policy{})
+	h.fake.Still = true
+	id := h.fake.StartGame("Alice", false, 300, 2)
+	h.connect()
+	h.waitFor("taken over", func(s Status) bool { g := gameView(s, id); return g != nil && g.Playing })
+	if err := h.bot.Challenge(ChallengeParams{Username: "Bob", Limit: 180, Increment: 2, Color: "random"}); err == nil {
+		t.Fatal("a challenge went out while the engine played")
+	}
+	h.fake.EndGame(id, "aborted", "gone")
+	h.waitFor("game over", func(s Status) bool { g := gameView(s, id); return g.Finished })
+	if err := h.bot.Challenge(ChallengeParams{Username: "Bob", Limit: 180, Increment: 2, Color: "random"}); err != nil {
+		t.Fatalf("challenge after the aborted game: %v", err)
 	}
 }

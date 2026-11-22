@@ -68,6 +68,8 @@ async function main() {
     icon: path.join(root, 'assets', 'icon'), // .icns or .ico, by platform
     appBundleId: 'org.ponder.chess',
     appCategoryType: 'public.app-category.board-games',
+    // macOS shows this when Ponder first asks for the microphone.
+    extendInfo: { NSMicrophoneUsageDescription: 'Ponder listens for voice commands, such as your moves, while you have them turned on. The sound stays on this computer.' },
     platform,
     arch,
     electronVersion,

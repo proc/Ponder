@@ -38,19 +38,33 @@ opening), moves, annotations and engine evaluations. With a hosted
 provider or endpoint, this leaves your computer. AI annotate sends only
 when you press its button.
 
-**Speech server.** Comments can be read by the computer's own voices or by a
-speech server. **Use a speech server** is off by default, and the server
-follows the same no-key rule. While it is off, commentary and the announcer
-use the computer's voices. Set it up under **Settings → AI → Commentary
-voice**:
+**Speech service.** Comments can be read by the computer's own voices or by a
+speech service. **Use a speech service** is off by default. While it is off,
+commentary and the announcer use the computer's voices. Set it up under
+**Settings → AI → Commentary voice**, choosing the **Service**:
 
-- Any OpenAI-compatible text-to-speech endpoint, OpenAI's or your own
-  (Kokoro-FastAPI, openedai-speech, LocalAI). `localhost:8880` is enough for
-  a local one.
-- Pick the model and voice from lists (**Refresh** fetches again), plus an
-  optional speaking style for models that take one.
-- Its API key is encrypted like the AI keys; with none, OpenAI's endpoint
-  uses the OpenAI key. **Test** plays a sentence.
+- **OpenAI**: models `gpt-4o-mini-tts` (the default), `tts-1` and `tts-1-hd`;
+  voices such as alloy, coral, nova and verse.
+- **Google AI (Gemini)**: Gemini's speech models through the Gemini API,
+  `gemini-3.8-flash-lite-tts` by default (**Refresh** adds any other speech
+  models your key can use); voices such as Kore, Puck and Zephyr. It uses
+  the same kind of API key as Google AI for the chat, from Google AI Studio.
+- **Claude** is listed but can't be chosen: Anthropic offers no
+  text-to-speech. Claude can still write the commentary, for another
+  service or the computer's voice to read.
+- **Your own server**: any OpenAI-compatible text-to-speech server
+  (Kokoro-FastAPI, openedai-speech, LocalAI). Type its **Address**;
+  `localhost:8880` is enough for a local one. A server on your computer or
+  network needs no key.
+
+Each service keeps its own model, voice, style and key, so switching back
+and forth keeps them. Pick the model and voice from the lists (**Refresh**
+asks the service again), plus an optional speaking **Style** for the models
+that take one (`gpt-4o-mini-tts` and Gemini's). Keys are encrypted like the
+AI keys. With no key of their own, OpenAI and Google AI use the key you set
+for them as the AI provider. **Test voice** plays a sentence; if the key is
+refused, the quota is used up or the service can't be reached, the reason
+shows under the settings.
 
 ## AI annotate
 
@@ -111,7 +125,7 @@ replies with one sentence. At the end it gives a short summary.
 - If the endpoint does not answer, commentary turns off with a notification;
   **Retry** asks again, covering any moves played since, and turns it back
   on.
-- Comments are not saved with the game unless you annotate with them.
+- Each comment is also saved with the game (see below).
 
 **The commentator.** By default a small pixel-art chess piece says the
 comments in a speech bubble instead of the card. Choose it under **Settings
@@ -126,20 +140,81 @@ still. To use the card instead, turn off **Show a commentator character that
 says the live commentary** (Settings → AI) or **A commentator character says
 the commentary in a speech bubble** (Commentary view).
 
-**Annotate the game with the commentary** (Commentary view) adds each comment
-as an annotation on its move, and the summary before the first move, so
-**Save** or **Copy** includes them. Existing annotations are left alone, and
-**Remove the AI's annotations** (under **Annotate**) takes them off. Finished
-games added to the game database keep them.
+**Saved with the game.** As soon as a comment is complete it becomes the
+comment on the move it is about, in the moves list and in the game's PGN,
+marked `[%ai]`. The summary becomes the comment before the first move.
+
+- A comment already on the move (yours, the file's or the computer
+  analysis's) is never replaced. Its `[%eval]` and `[%clk]` stay too.
+- A game opened from a PGN file is saved into that file at once.
+- A game being played or watched is in no file yet, so its comments wait on
+  its moves. When it ends and is added to the game database (**Settings →
+  Database**), they are written into its entry there. This works even if
+  another file is open in the Games tab. **Copy** and **Save as…** include
+  them as well.
+- A move taken back takes its comment with it. A comment that arrives after
+  its move was taken back is not used.
+- **Remove the AI's annotations** (under **Annotate**) takes them off.
 
 **Read aloud** (Commentary view, or the card's speaker) speaks each comment.
 Choose the **voice** and **speed**; **Test** plays a sample. Moves are said
 as words. A comment is never cut off; the next one waits and covers all moves since.
 ▶ on a comment reads it again. With a computer
-voice nothing is sent anywhere. With **Speech server**, each comment's text
-is sent to the server set up in
-[Setting up the AI model](#setting-up-the-ai-model); if it can't be
-reached, the reason shows and the comment is skipped.
+voice nothing is sent anywhere. With the speech service as the voice
+(named after it, such as **OpenAI voice**), each comment's text is sent to
+the service set up in [Setting up the AI model](#setting-up-the-ai-model).
+If the service fails, the reason shows, the computer's own voice reads the
+comment instead, and the service is left alone for a minute before it is
+tried again.
+
+## Engine chat
+
+With **Engine chat** on (Commentary view, off at first), an engine playing a
+game answers its opponent's moves in the game chat, in character. The AI
+model set in Settings → AI writes each message. It is told what the engine
+itself thinks: the opponent's last move, the position (FEN), the engine's
+evaluation and search depth, the move it is playing, and the line it expects.
+It is asked not to give that line away, and not to give advice.
+
+- **Answer every** sets how often it speaks: every move, or every 2, 3, 5 or
+  8 of its opponent's moves, as for live commentary.
+- **Character** is who the engine is in the chat: a name, or a few words on
+  its personality ("Captain Gambit, a cheerful pirate"). Left empty, it is
+  the engine, by its own name.
+- **Your engine on Lichess:** the message is posted in both rooms of the
+  game's chat: the players' room, for its opponent, and the spectators'
+  room, for the people watching. If Lichess refuses it in one room, it is
+  still posted in the other, and the setting says which room missed it.
+  This works for every game the engine plays, whether it is on the board or
+  not.
+- **A game against an engine on this computer:** the message shows in the
+  game's chat card. Nothing is posted anywhere.
+
+The engine never waits for a message: one is asked for only after its move
+has been played. Messages are limited to one every 15 seconds in a game,
+and four a minute over all games. On Lichess each message is two posts, one
+in each room, so that is at most eight posts a minute. Its first move answers nothing, so it says
+nothing then.
+
+**Length.** Lichess takes chat messages of up to 140 characters. The model
+is asked to write within that, and its answer is capped at a small number of
+tokens.
+
+- If a message comes back too long, the model is shown its own message and
+  asked once more for a version of 140 characters or fewer.
+- If that is too long as well, the message is cut to fit as a last resort,
+  at the end of a sentence where one fits, else at a word, with an ellipsis.
+  It is never cut in the middle of a word.
+- Some models think before they answer, and their thinking counts against
+  the cap. If such a model uses the whole cap and writes nothing, it is asked
+  again without the cap, and not capped again while the app is open.
+
+If the AI fails, the reason shows under the setting, and the engine stays
+quiet for the rest of that game.
+
+Each message sends the model the moves of the game, the players' names and
+ratings, and the engine's evaluation and line. With a hosted provider, that
+leaves your computer.
 
 ## Announcer
 

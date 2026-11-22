@@ -20,6 +20,7 @@ const MENU_COMMANDS = {
     if (err) setStatus(err);
   },
   takeback: () => takeback(),
+  voice: () => window.voice?.toggle(),
   first: () => showPly(0),
   prev: () => stepBack(),
   next: () => stepForward(),

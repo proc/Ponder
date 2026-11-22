@@ -379,3 +379,109 @@ func TestSeekAlwaysSaysWhatItIsDoing(t *testing.T) {
 		t.Fatalf("the pause did not say what became of the challenge")
 	}
 }
+
+// The rating preference weighs the pick as lichess-bot's does: the far end
+// of the range about twice as likely as the near end.
+func TestSeekRatingPreference(t *testing.T) {
+	user := func(id string, r int) User {
+		u := User{ID: id}
+		u.Perfs = map[string]struct {
+			Rating int  `json:"rating"`
+			Games  int  `json:"games"`
+			Prov   bool `json:"prov"`
+			RD     int  `json:"rd,omitempty"`
+			Prog   int  `json:"prog,omitempty"`
+		}{"blitz": {Rating: r, Games: 10}}
+		return u
+	}
+	pool := []User{user("low", 1500), user("high", 1900)}
+	share := func(pref string) float64 {
+		n := 0
+		for i := 0; i < 6000; i++ {
+			if (SeekParams{Preference: pref}).pick(pool, "blitz", 1500, 1900).ID == "high" {
+				n++
+			}
+		}
+		return float64(n) / 6000
+	}
+	if s := share("high"); s < 0.62 || s > 0.71 {
+		t.Fatalf("high: the higher rated picked %.2f of the time, want about 2/3", s)
+	}
+	if s := share("low"); s < 0.29 || s > 0.38 {
+		t.Fatalf("low: the higher rated picked %.2f of the time, want about 1/3", s)
+	}
+	if s := share(""); s < 0.45 || s > 0.55 {
+		t.Fatalf("none: %.2f, want about 1/2", s)
+	}
+	if err := (SeekParams{Preference: "sideways"}).check(); err == nil {
+		t.Fatal("unknown preference allowed")
+	}
+}
+
+// The fine filter remembers what a bot declined: its speed for too fast,
+// rated or casual for those, the bot itself otherwise.
+func TestSeekDeclineAspects(t *testing.T) {
+	b := NewBot(Hooks{})
+	b.noteDecline("fine", "picky", "toofast", "blitz", false)
+	b.noteDecline("fine", "Moody", "rated", "blitz", true)
+	b.noteDecline("fine", "grumpy", "later", "blitz", false)
+	b.noteDecline("none", "nobody", "later", "blitz", false)
+	for _, c := range []struct {
+		bot, speed  string
+		rated, want bool
+	}{
+		{"picky", "blitz", false, true}, {"picky", "rapid", false, false},
+		{"moody", "blitz", true, true}, {"moody", "blitz", false, false},
+		{"grumpy", "rapid", true, true}, {"nobody", "blitz", false, false},
+	} {
+		if got := b.declinedFor("fine", c.bot, c.speed, c.rated); got != c.want {
+			t.Errorf("%s at %s rated=%v: passed over %v, want %v", c.bot, c.speed, c.rated, got, c.want)
+		}
+	}
+	// Coarse passes over every bot that declined, for anything.
+	b.noteDecline("coarse", "picky", "toofast", "blitz", false)
+	if !b.declinedFor("coarse", "picky", "rapid", true) {
+		t.Error("coarse: picky challenged again")
+	}
+	// A day later it counts no more.
+	defer func(d time.Duration) { seekDeclineFor = d }(seekDeclineFor)
+	seekDeclineFor = -time.Second
+	b.noteDecline("coarse", "brief", "later", "blitz", false)
+	if b.declinedFor("coarse", "brief", "blitz", false) {
+		t.Error("an expired decline still counts")
+	}
+}
+
+// With the fine filter, a bot that declined is not asked again while
+// another fits; with coarse, not at all; with none, it is asked again.
+func TestSeekDeclineFilter(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 150*time.Millisecond, 20*time.Millisecond, 100*time.Millisecond, 20*time.Millisecond
+	asks := func(filter string, online ...fake.OnlineBot) (picky, total int, s Status) {
+		h := newHarness(t, Policy{})
+		h.fake.Online = online
+		h.connect()
+		if err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Limit: 180, Increment: 2, Color: "random"}, Games: -1, Filter: filter}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(1500 * time.Millisecond)
+		s = h.bot.Status()
+		h.bot.StopSeek()
+		calls := strings.Join(h.fake.Calls(), "\n")
+		return strings.Count(calls, "POST /api/challenge/picky"), strings.Count(calls, "POST /api/challenge/"), s
+	}
+	two := []fake.OnlineBot{{Name: "picky", Rating: 1750}, {Name: "sleepy", Rating: 1650}}
+	if p, n, _ := asks("fine", two...); p != 1 || n < 3 {
+		t.Fatalf("fine: picky asked %d times of %d", p, n)
+	}
+	if p, _, _ := asks("none", two...); p < 2 {
+		t.Fatalf("none: picky asked %d times", p)
+	}
+	// Fine with no other bot: picky is asked again; coarse: never.
+	if p, _, _ := asks("fine", fake.OnlineBot{Name: "picky", Rating: 1750}); p < 2 {
+		t.Fatalf("fine, picky alone: asked %d times", p)
+	}
+	p, _, s := asks("coarse", fake.OnlineBot{Name: "picky", Rating: 1750})
+	if p != 1 || s.Seek == nil || !strings.Contains(s.Seek.Message, "declined a challenge today") {
+		t.Fatalf("coarse: picky asked %d times; seek %+v", p, s.Seek)
+	}
+}

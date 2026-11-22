@@ -3,6 +3,7 @@ package lichess
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"time"
@@ -215,6 +216,44 @@ func (b *Bot) Say(id, room, text string) error {
 	}
 	return r.post(c, room, text)
 }
+
+// Remark posts the engine's own chat message (written for it by the AI)
+// in one of its games, to its opponent and to the people watching: in the
+// players' room and in the spectators' room, one after the other. A room
+// that fails does not keep the message from the other; the error says
+// which failed.
+func (b *Bot) Remark(id, text string) error {
+	_, text, err := chatText("player", text)
+	if err != nil {
+		return err
+	}
+	c, err := b.connected()
+	if err != nil {
+		return err
+	}
+	b.mu.Lock()
+	r := b.games[id]
+	b.mu.Unlock()
+	if r == nil {
+		return errors.New("no such game")
+	}
+	var failed []string
+	var last error
+	for _, room := range []string{"player", "spectator"} {
+		if err := r.post(c, room, text); err != nil {
+			failed, last = append(failed, roomName[room]), err
+		}
+	}
+	switch len(failed) {
+	case 0:
+		return nil
+	case 1:
+		return fmt.Errorf("not posted in the %s' chat: %w", failed[0], last)
+	}
+	return fmt.Errorf("not posted: %w", last)
+}
+
+var roomName = map[string]string{"player": "players", "spectator": "spectators"}
 
 // post sends a message. The game's stream brings it back, until the game
 // is over: then it is added to the chat here.

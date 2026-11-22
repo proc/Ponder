@@ -70,6 +70,7 @@
           <button type="button" id="btn-flip" class="tool" title="Flip the board (F)" aria-label="Flip the board"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M5 13V3M5 3 2.5 5.5M5 3l2.5 2.5M11 3v10M11 13l-2.5-2.5M11 13l2.5-2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           <button type="button" id="btn-sound" class="tool" title="Sounds are on: click to mute (M)" aria-label="Sounds" aria-pressed="true"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path class="snd-on" d="M15.5 8.5a5 5 0 0 1 0 7M18.6 5.4a9 9 0 0 1 0 13.2"/><path class="snd-off" d="M22 9l-6 6M16 9l6 6"/></g></svg></button>
           <button type="button" id="btn-music" class="tool" title="Classical music: click to play in the background (U)" aria-label="Classical music" aria-pressed="false"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></g></svg></button>
+          <button type="button" id="btn-voice" class="tool" title="Voice commands are off: click to say your moves (T)" aria-label="Voice commands" aria-pressed="false"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3.5"/></g></svg></button>
           <button type="button" id="btn-zen" class="tool" title="Zen mode: only the board and the players (Z)" aria-label="Zen mode" aria-pressed="false"><svg class="zen-in" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5 9 7M6.5 13.5h-4v-4M2.5 13.5 7 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><svg class="zen-out" viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M13.5 6.5h-4v-4M9.5 6.5 14 2M2.5 9.5h4v4M6.5 9.5 2 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </span>
       </div>
@@ -173,10 +174,12 @@
               <button type="button" class="small" id="games-export" title="Write the games listed (all of them, or those matching the filter) to a new PGN file">Export…</button>
               <button type="button" class="small" id="games-binpack" title="Turn this file's games into training positions for an NNUE network (a Stockfish .binpack)">Binpack…</button>
               <span class="games-tools-gap"></span>
+              <button type="button" class="small" id="games-analyse" title="Computer analysis of the games chosen, or of the game on the board, the games listed, or those not analysed yet. Each is saved into the file as it is done.">Computer analysis…</button>
               <button type="button" class="small" id="games-edit" title="Change the players, result, event, date and other details of the game on the board">Edit info…</button>
               <button type="button" class="small danger" id="games-delete" title="Delete the game on the board from the file">Delete</button>
             </div>
-            <div id="games-list"></div>
+            <div class="games-sel" id="games-sel" hidden></div>
+            <div id="games-list" aria-multiselectable="true"></div>
             <p class="hint" id="games-note" hidden></p>
           </div>
           <div class="pane" id="pane-explorer" role="tabpanel" hidden>
@@ -441,6 +444,18 @@
                 </div>
                 <p class="lx-message" id="lx-me-message" hidden></p>
                 <div class="lx-me-body" id="lx-me-body" hidden>
+                  <div class="lx-card lx-profile" id="lx-profile"></div>
+                  <div class="lx-home-links" id="lx-home-links">
+                    <button type="button" class="small" id="lx-home-tv" title="Watch Lichess TV on the board">Lichess TV</button>
+                    <button type="button" class="small" id="lx-home-daily" title="Today's Lichess puzzle, on the board">Daily puzzle</button>
+                    <button type="button" class="small" id="lx-home-puzzles" title="Lichess puzzles by theme and difficulty">Puzzles</button>
+                    <span class="lx-home-featured" id="lx-home-featured"></span>
+                    <button type="button" class="small icon-btn lx-home-refresh" id="lx-home-refresh" title="Read your Lichess home again" aria-label="Refresh">↻</button>
+                  </div>
+                  <div id="lx-me-incoming" class="lx-list"></div>
+                  <h4 class="lx-group" id="lx-ongoing-h" hidden>Your games <span class="count" id="lx-ongoing-count"></span></h4>
+                  <div id="lx-ongoing" class="lx-list"></div>
+                  <div id="lx-me-games" class="lx-list"></div>
                   <h4 class="lx-group">Quick pairing</h4>
                   <div class="lx-card lx-pad">
                     <div class="lx-quick" id="lx-quick"></div>
@@ -454,6 +469,35 @@
                     </div>
                   </div>
                   <p class="lx-foot">Lichess lets apps pair rapid and slower games. For blitz, challenge someone.</p>
+                  <h4 class="lx-group">Create a seek</h4>
+                  <form class="lx-card lx-form" id="lx-cs" autocomplete="off">
+                    <div class="lx-form-row">
+                      <label>Game <select id="lx-cs-kind">
+                    <option value="clock">Real time</option><option value="days">Correspondence</option>
+                  </select></label>
+                      <label class="lx-cs-clock">Minutes <input type="number" id="lx-cs-time" min="1" max="180" step="1" value="10"></label>
+                      <label class="lx-cs-clock">+ <input type="number" id="lx-cs-inc" min="0" max="180" step="1" value="5"> s</label>
+                      <label class="lx-cs-days" hidden>Days a move <select id="lx-cs-days">
+                    <option value="1">1</option><option value="2">2</option><option value="3" selected>3</option><option value="5">5</option>
+                    <option value="7">7</option><option value="10">10</option><option value="14">14</option>
+                  </select></label>
+                    </div>
+                    <div class="lx-form-row">
+                      <label>Color <select id="lx-cs-color">
+                    <option value="random">Random</option><option value="white">White</option><option value="black">Black</option>
+                  </select></label>
+                      <label>Opponent <select id="lx-cs-range" title="Only players rated this close to you at the game's speed">
+                    <option value="">Any rating</option><option value="100">± 100</option><option value="200">± 200</option>
+                    <option value="300">± 300</option><option value="500">± 500</option>
+                  </select></label>
+                      <label class="check"><input type="checkbox" id="lx-cs-rated"> Rated</label>
+                      <button type="submit" class="primary small" id="lx-cs-go">Seek</button>
+                    </div>
+                    <span class="hint" id="lx-cs-note"></span>
+                  </form>
+                  <h4 class="lx-group">Lobby <span class="lx-group-sub">correspondence</span> <span class="count" id="lx-lobby-count"></span></h4>
+                  <div id="lx-lobby" class="lx-list"></div>
+                  <p class="lx-foot" id="lx-lobby-note"></p>
                   <h4 class="lx-group">Challenge a friend</h4>
                   <form class="lx-card lx-form" id="lx-me-challenge" autocomplete="off">
                     <input type="text" id="lx-me-user" placeholder="Username" aria-label="Username to challenge" spellcheck="false" required>
@@ -473,9 +517,13 @@
                       <button type="submit" class="primary small" id="lx-me-send">Challenge</button>
                     </div>
                   </form>
-                  <div id="lx-me-incoming" class="lx-list"></div>
                   <div id="lx-me-outgoing" class="lx-list"></div>
-                  <div id="lx-me-games" class="lx-list"></div>
+                  <div class="lx-group lx-group-row">
+                    <h4 class="lx-group">Following <span class="count" id="lx-friends-count"></span></h4>
+                    <label class="check"><input type="checkbox" id="lx-friends-online"> Online only</label>
+                  </div>
+                  <div id="lx-friends" class="lx-list"></div>
+                  <p class="lx-foot" id="lx-friends-note" hidden></p>
                 </div>
               </section>
             </div>
@@ -669,6 +717,22 @@
                     <div class="lx-card-row lx-set">
                       <label class="lx-set-label" for="lx-seek-mingames">At least <span class="lx-set-sub">games at this speed</span></label>
                       <span class="lx-set-ctl"><input type="number" id="lx-seek-mingames" min="0" max="100000" step="10" placeholder="any"></span>
+                    </div>
+                    <div class="lx-card-row lx-set">
+                      <label class="lx-set-label" for="lx-seek-prefer" title="Which bots that fit are more likely to be picked, as lichess-bot's rating_preference: the far end of the range about twice as likely as the near end">Prefer <span class="lx-set-sub">among the bots that fit</span></label>
+                      <span class="lx-set-ctl">
+                        <select id="lx-seek-prefer" aria-label="Which bots are more likely to be picked">
+                          <option value="none">Any rating</option><option value="high">Higher rated</option><option value="low">Lower rated</option>
+                        </select>
+                      </span>
+                    </div>
+                    <div class="lx-card-row lx-set">
+                      <label class="lx-set-label" for="lx-seek-filter" title="What a bot's decline does to later challenges, as lichess-bot's challenge_filter. For a day: Always skips the bot; Only what it declined skips it for that speed, or for rated or casual, while other bots fit (for any other reason, for everything). Until the app is closed">Skip bots that declined <span class="lx-set-sub">for a day</span></label>
+                      <span class="lx-set-ctl">
+                        <select id="lx-seek-filter" aria-label="Skip bots that declined">
+                          <option value="none">Never</option><option value="fine">Only what it declined</option><option value="coarse">Always</option>
+                        </select>
+                      </span>
                     </div>
                     <div class="lx-card-row lx-set lx-set-wide">
                       <label class="lx-set-label" for="lx-seek-exclude">Never challenge</label>
@@ -902,7 +966,6 @@
             <option value="1">move</option><option value="2">2 moves</option><option value="3">3 moves</option><option value="5">5 moves</option><option value="8">8 moves</option>
           </select></div>
           <label class="cm-row" for="cm-pip" title="A little pixel-art chess piece (chosen in Settings → AI) floats over the window and says each comment in a comic speech bubble, in place of the commentary card beside the board. Drag it anywhere; click it to show or put away the bubble"><span class="cm-row-text">Commentator character <span class="cm-row-sub">says it in a speech bubble over the window</span></span><input type="checkbox" class="lx-switch" id="cm-pip" role="switch"></label>
-          <label class="cm-row" for="cm-annotate" title="Each comment is put on the move it follows as an annotation, and the summary before the first move: they show in the moves list, can be edited under Annotate, and are saved with the game. Your own comments are left alone."><span class="cm-row-text">Annotate the game <span class="cm-row-sub">each comment on its move, saved with the game</span></span><input type="checkbox" class="lx-switch" id="cm-annotate" role="switch"></label>
           <label class="cm-row" for="cm-speak" title="Each comment and the summary are read aloud when they are complete, in a voice of this computer"><span class="cm-row-text">Read aloud</span><input type="checkbox" class="lx-switch" id="cm-speak" role="switch"></label>
           <div class="cm-row cm-voice">
             <select id="cm-voice" title="The voice that reads" aria-label="Voice"></select>
@@ -911,6 +974,14 @@
             </select>
             <button type="button" class="small" id="cm-test" title="Hear the voice">Test</button>
           </div>
+        </div>
+        <div class="cm-settings ec-settings">
+          <label class="cm-row" for="ec-on" title="In the games an engine plays, it answers its opponent’s moves in the game chat every few moves, in character. The AI model writes each message from what the engine itself thinks of the position: its evaluation, its move and the line it expects. Your engine’s games on Lichess: posted in the game’s chat for its opponent and for the spectators. A game against an engine on this computer: shown in the game’s chat beside the board."><span class="cm-row-text">Engine chat <span class="cm-row-sub">the engine answers its opponent’s moves in the game chat, in character</span></span><input type="checkbox" class="lx-switch" id="ec-on" role="switch"></label>
+          <div class="cm-row"><label class="cm-row-text" for="ec-every" title="How often the engine says something: after so many of its opponent’s moves">Answer every</label><select id="ec-every">
+            <option value="1">move</option><option value="2">2 moves</option><option value="3">3 moves</option><option value="5">5 moves</option><option value="8">8 moves</option>
+          </select></div>
+          <div class="cm-row"><label class="cm-row-text" for="ec-persona" title="Who the engine is in the chat: a name, or a few words on its character. Left empty, it is the engine, by its own name">Character</label><input type="text" id="ec-persona" maxlength="200" spellcheck="true" placeholder="The engine, by its own name"></div>
+          <p class="hint error ec-note" id="ec-note" hidden></p>
         </div>
         <div class="cm-feed" id="cm-feed" role="log" aria-live="polite" tabindex="0"></div>
         <p class="hint cm-note" id="cm-note"></p>
@@ -1194,21 +1265,23 @@
         </div>
         <h3 class="set-group">Commentary voice</h3>
         <div class="set-card">
-          <label class="set-row" for="tts-enabled"><span class="set-label">Use a speech server <span class="set-sub">to read the commentary aloud; the computer's own voices need none</span></span><input type="checkbox" class="lx-switch" id="tts-enabled" role="switch"></label>
+          <label class="set-row" for="tts-enabled"><span class="set-label">Use a speech service <span class="set-sub">OpenAI, Google AI or a server of your own reads the commentary aloud; the computer's own voices need none</span></span><input type="checkbox" class="lx-switch" id="tts-enabled" role="switch"></label>
         </div>
         <div id="tts-fields" hidden>
         <div class="set-card">
-        <label class="row" title="An OpenAI-compatible text-to-speech API (POST …/v1/audio/speech): OpenAI's, or a server of your own such as Kokoro-FastAPI, openedai-speech or LocalAI. localhost:8880 is enough for a local server.">Endpoint <input type="text" id="tts-url" spellcheck="false" autocomplete="off" placeholder="https://api.openai.com/v1"></label>
-        <label class="row" title="The speech model, from those the endpoint lists (its speech models, when it says which). Refresh asks again.">Model
+        <label class="row" title="Who makes the sound. OpenAI and Google AI use the key of the AI chat above when they have none of their own. Claude cannot be chosen: Anthropic offers no text-to-speech.">Service <select id="tts-provider" aria-label="Speech service"></select></label>
+        <p class="hint tts-claude" id="tts-claude-note">Claude is not offered: Anthropic has no text-to-speech. Claude can still write the commentary for another service to read.</p>
+        <label class="row" id="tts-url-row" title="An OpenAI-compatible text-to-speech API (POST …/v1/audio/speech) of your own, such as Kokoro-FastAPI, openedai-speech or LocalAI. localhost:8880 is enough for a local server.">Address <input type="text" id="tts-url" spellcheck="false" autocomplete="off" placeholder="localhost:8880"></label>
+        <label class="row" title="The speech model. Refresh asks the service again which models it has.">Model
           <span class="ai-model"><select id="tts-model" aria-label="Speech model"></select>
-            <button type="button" class="small" id="tts-check" title="Ask the endpoint again which models it has, and their voices">Refresh</button></span></label>
-        <label class="row" title="The voice, from those the endpoint lists for the model (OpenAI's are known: alloy, ash, coral, nova, …).">Voice
+            <button type="button" class="small" id="tts-check" title="Ask the service again which models it has, and their voices">Refresh</button></span></label>
+        <label class="row" title="The voice, from those of the service and model.">Voice
           <span class="ai-model"><select id="tts-voice" aria-label="Voice"></select>
-            <button type="button" class="small" id="tts-test" title="Hear the voice: a sentence is sent to the endpoint">Test</button></span></label>
-        <label class="row" title="How to speak, for models that take it (gpt-4o-mini-tts): e.g. “an excited sports commentator, quick and lively”. Leave empty for other models: some refuse it.">Style <input type="text" id="tts-style" spellcheck="false" autocomplete="off" placeholder="Optional, for gpt-4o-mini-tts"></label>
-        <label class="row" title="Kept encrypted on this computer, never shown again. OpenAI's endpoint uses the OpenAI key above when this is empty; local servers usually need none.">API key <input type="password" id="tts-key" autocomplete="off" placeholder="Not needed for most local servers"></label>
+            <button type="button" class="small" id="tts-test" title="Hear the voice: a sentence is sent to the service">Test voice</button></span></label>
+        <label class="row" id="tts-style-row" title="How to speak, for models that take it (OpenAI's gpt-4o-mini-tts and Google's Gemini speech models): for example “an excited sports commentator, quick and lively”. Leave it empty for the others.">Style <input type="text" id="tts-style" spellcheck="false" autocomplete="off" placeholder="Optional, for example “a lively sports commentator”"></label>
+        <label class="row" title="Kept encrypted on this computer, never shown again. OpenAI and Google AI use the key of the AI chat above when this is empty; local servers usually need none.">API key <input type="password" id="tts-key" autocomplete="off" placeholder="Not needed for most local servers"></label>
         </div>
-        <p class="hint" id="tts-note">To use it, choose <b>Speech server</b> as the voice in the AI panel's Commentary view, with <b>Read aloud</b> on. Each comment's words are then sent to this endpoint and the sound it answers with is played.</p>
+        <p class="hint" id="tts-note">To use it, choose the speech service as the voice in the AI panel's Commentary view, with <b>Read aloud</b> on. Each comment's words are then sent to the service and the sound it answers with is played.</p>
         </div>
         <h3 class="set-group ai-only">Commentator</h3>
         <div class="set-card ai-only">
@@ -1496,6 +1569,7 @@
         <tr><td><kbd>Z</kbd></td><td>Zen mode: only the board and the players</td></tr>
         <tr><td><kbd>M</kbd></td><td>Sounds on or off</td></tr>
         <tr><td><kbd>U</kbd></td><td>Classical music on or off</td></tr>
+        <tr><td><kbd>T</kbd></td><td>Voice commands on or off: say your moves</td></tr>
         <tr><td><kbd>L</kbd></td><td>Analysis on / off</td></tr>
         <tr><td><kbd>P</kbd></td><td>Pause / resume the analysis</td></tr>
         <tr><td><kbd>B</kbd></td><td>Takeback</td></tr>
@@ -1529,12 +1603,17 @@
   <div id="opening-pop" class="opening-pop" role="tooltip" hidden></div>
   <script src="option-help.js"></script>
   <script src="renderer.js"></script>
+  <script src="voice-parse.js"></script>
+  <script src="voice.js"></script>
   <script src="openings-info.js"></script>
   <script src="review.js"></script>
+  <script src="games-select.js"></script>
   <script src="explorer.js"></script>
   <script src="puzzles.js"></script>
   <script src="flags.js"></script>
   <script src="lichess.js"></script>
+  <script src="lichess-home-data.js"></script>
+  <script src="lichess-home.js"></script>
   <script src="watch-tiles.js"></script>
   <script src="challenge-float.js"></script>
   <script src="float-window.js"></script>
@@ -1550,6 +1629,8 @@
   <script src="annotate.js"></script>
   <script src="ai-chat.js"></script>
   <script src="commentary.js"></script>
+  <script src="engine-chat-data.js"></script>
+  <script src="engine-chat.js"></script>
   <script src="commentator.js"></script>
   <script src="announcer.js"></script>
   <script src="easter.js"></script>

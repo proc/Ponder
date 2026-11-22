@@ -10,6 +10,9 @@ npm start        # builds the Go backend into ./bin, then opens the app
 npm test         # the Go tests: move generation (perft), clocks, full games
 ```
 
+The voice-command parser has tests of its own, which read legal moves from
+the built backend: `npm run build:backend`, then `node --test test/`.
+
 ## Packaging
 
 ```sh
@@ -38,7 +41,8 @@ Settings, engines and the game database stay where they were.
 
 ```
 app/                 Electron main process, preload and renderer (plain JS)
-  renderer/vendor/   three.js (the 3D board) and the Windows flag font
+  renderer/vendor/   three.js (the 3D board), the Windows flag font and Vosk
+                     (speech recognition for voice commands)
 backend/             Go module
   chess/             rules: move generation, FEN, SAN, draw detection
   uci/               UCI engine process driver
@@ -52,6 +56,7 @@ backend/             Go module
   main.go            JSON-lines server on stdin/stdout
 svg/<theme>/         piece sets, one folder per theme: <color>-<name>.svg
 scripts/             build helpers
+test/                JavaScript tests (the voice-command parser)
 ```
 
 The renderer talks to the backend through Electron IPC. The main process
@@ -78,6 +83,11 @@ curl 'http://127.0.0.1:8765/_fake/challenge?from=Alice&limit=180&inc=2'   # chal
 curl 'http://127.0.0.1:8765/_fake/autogame?white=maia1&black=SlowBot'     # a game to watch
 curl 'http://127.0.0.1:8765/_fake/chat?game=ID&from=Kibitzer&text=Hello'  # say something (room=player for the players' room)
 ```
+
+With `-notbot`, the Lichess home (Play) shows the fake account's ratings, the
+games it has going, four players it follows (two online) and two
+correspondence seeks in the lobby (`/lobby/seeks`). Correspondence seeks you
+post are accepted and kept, but no game starts from them.
 
 ## Formerly "Board"
 

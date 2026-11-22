@@ -1529,7 +1529,7 @@ button.link:hover:not(:disabled) { text-decoration: underline; }
 #games-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -0.6rem; padding: 0 0.4rem 0.4rem; scrollbar-gutter: stable; }
 .game-row {
   position: relative; display: grid; align-items: center; gap: 0 0.6rem; width: 100%; text-align: left;
-  grid-template-columns: 2.6rem minmax(6rem, 1.7fr) minmax(6rem, 1.7fr) 3.4rem minmax(4rem, 1fr) 5.2rem 3.4rem 3.6rem;
+  grid-template-columns: 2.6rem minmax(6rem, 1.7fr) minmax(6rem, 1.7fr) 3.4rem minmax(4rem, 1fr) 5.2rem 4.4rem 3.6rem;
   background: none; border: 0; border-radius: 0.6rem; padding: 0.5rem 0.6rem 0.5rem 0.5rem; margin: 1px 0; font-weight: 400;
   white-space: nowrap; font-size: 0.92rem; line-height: 1.25; color: var(--text);
   transition: background-color 0.12s ease;
@@ -1560,9 +1560,12 @@ button.link:hover:not(:disabled) { text-decoration: underline; }
 .game-row.head .sort:hover, .game-row.head .sort.on { color: var(--text); }
 .game-row.head .sort.on::after { content: " ▲"; font-size: 0.6rem; }
 .game-row.head .sort.on.desc::after { content: " ▼"; }
-.game-row.head .sort.c-num, .game-row.head .sort.c-plies, .game-row.head .sort.c-round { text-align: right; }
-.game-row.head .sort.c-result { text-align: center; }
-.game-row .c-num, .game-row .c-plies, .game-row .c-round { text-align: right; font-variant-numeric: tabular-nums; }
+.game-row.head .sort.c-num, .game-row.head .sort.c-plies { text-align: right; }
+.game-row.head .sort.c-result, .game-row .c-analysed { text-align: center; }
+.game-row .c-num, .game-row .c-plies { text-align: right; font-variant-numeric: tabular-nums; }
+/* Analysed: a tick for a game the computer analysis has covered completely. */
+.game-row.head .c-analysed { cursor: default; }
+.game-row:not(.head) .c-analysed { color: var(--accent); font-weight: 700; }
 .game-row:not(.head) .c-num { color: var(--muted); font-size: 0.8rem; }
 /* The players, each with the colour they had; the winner in bold. */
 .game-row .c-white, .game-row .c-black { font-weight: 500; }
@@ -1582,14 +1585,17 @@ button.link:hover:not(:disabled) { text-decoration: underline; }
 .game-row .res.black { background: #26262a; color: #f4f2ec; border-color: #55535a; }
 .game-row .res.draw { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--text); }
 .game-row .res.open { color: var(--muted); border: 1px dashed var(--line); }
-.game-row:not(.head) .c-event, .game-row:not(.head) .c-date, .game-row:not(.head) .c-round, .game-row:not(.head) .c-plies { color: var(--muted); font-size: 0.85rem; }
+.game-row:not(.head) .c-event, .game-row:not(.head) .c-date, .game-row:not(.head) .c-plies { color: var(--muted); font-size: 0.85rem; }
 .game-row .c-date { font-variant-numeric: tabular-nums; }
 .game-row .c-error { grid-column: 2 / -1; color: var(--danger); font-size: 0.82rem; white-space: normal; margin-top: 0.15rem; }
 .game-row.broken .c-white, .game-row.broken .c-black { opacity: .6; }
 #games-note { flex: none; padding: 0.3rem 0; }
 @container (max-width: 42rem) {
-  .game-row { grid-template-columns: 2.6rem minmax(4rem, 1fr) minmax(4rem, 1fr) 3.4rem 5.2rem; }
-  .game-row .c-event, .game-row .c-round, .game-row .c-plies { display: none; }
+  .game-row { grid-template-columns: 2.6rem minmax(4rem, 1fr) minmax(4rem, 1fr) 3.4rem 5.2rem 1.2rem; }
+  .game-row .c-event, .game-row .c-plies { display: none; }
+  /* Analysed stays, as a tick under a tick. */
+  .game-row.head .c-analysed { font-size: 0; }
+  .game-row.head .c-analysed::after { content: "✓"; font-size: 0.8rem; }
 }
 
 /* ---- info column ---- */
@@ -1945,6 +1951,11 @@ body.zen .float-win { display: none; }
 @media (prefers-reduced-motion: reduce) { .chf-next.busy::before { animation: none; } }
 .chf-list:empty + .chf-next { border-top: 0; }
 .float-win.folded > .chf-next:not([hidden]) { display: flex; }
+/* Your engine is playing: a click shows its game on the board. */
+.chf-next.link, .chf-row.link { cursor: pointer; }
+.chf-next.link:hover, .chf-row.link:hover { background: var(--fill); }
+.chf-next.link:focus-visible, .chf-row.link:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.chf-go { color: var(--accent); font-weight: 600; white-space: nowrap; }
 /* Auto challenge, to turn off without going to the Lichess tab; it stays
    when the window is folded. */
 .chf-auto {
@@ -2676,6 +2687,16 @@ td.tn-name .tn-swatch { margin-right: 0.45rem; }
 #btn-sound.muted .snd-on { display: none; }
 #btn-sound.muted .snd-off { display: block; }
 #btn-sound.muted { color: var(--danger); }
+/* Voice commands: red while the microphone listens, with a slow pulse. */
+#btn-voice[aria-pressed="true"] { color: var(--danger); }
+#btn-voice.listening { animation: voice-listen 1.6s ease-in-out infinite; }
+#btn-voice.loading svg { animation: music-wait 1.2s ease-in-out infinite; }
+@keyframes voice-listen {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger) 45%, transparent); }
+  50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 0%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) { #btn-voice.listening, #btn-voice.loading svg { animation: none; } }
+.toast.is-voice { border-left-color: var(--accent); }
 #btn-zen .zen-out, body.zen #btn-zen .zen-in { display: none; }
 body.zen #btn-zen .zen-out { display: inline; }
 body.zen main.app { grid-template-columns: minmax(0, 1fr); justify-items: center; }
@@ -2869,6 +2890,47 @@ body.puzzling .player { visibility: hidden; }
 @keyframes lx-spin { to { transform: rotate(360deg); } }
 .lx-row .lx-label { font-size: 0.8rem; color: var(--muted); }
 .lx-row.myturn .lx-status { color: var(--highlight); font-weight: 700; }
+
+/* ---- Lichess home (Play, signed in) ---- */
+.lx-profile { margin-bottom: 0.5rem; }
+.lx-profile .error { color: var(--danger); }
+.lx-profile-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.3rem 0.6rem; }
+.lx-profile-head .lx-who { font-size: 1.05rem; }
+.lx-patron { color: var(--highlight); }
+.lx-perfs { display: grid; grid-template-columns: repeat(auto-fill, minmax(5.6rem, 1fr)); gap: 0.35rem; }
+.lx-perf { display: flex; flex-direction: column; padding: 0.35rem 0.5rem; border-radius: var(--r-s); background: var(--tint); line-height: 1.2; min-width: 0; }
+.lx-perf.none { opacity: .55; }
+.lx-perf-name { font-size: 0.72rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lx-perf b { font-size: 1.05rem; font-variant-numeric: tabular-nums; }
+.lx-perf-sub { display: flex; gap: 0.35rem; font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lx-prog.up { color: var(--good); }
+.lx-prog.down { color: var(--danger); }
+.lx-record { display: flex; align-items: center; flex-wrap: wrap; gap: 0.3rem 0.6rem; }
+.lx-wdl { display: flex; flex: 1 1 6rem; height: 0.4rem; border-radius: 0.2rem; overflow: hidden; min-width: 5rem; }
+.lx-wdl i { display: block; min-width: 1px; }
+.lx-wdl .w { background: var(--good); }
+.lx-wdl .d { background: var(--muted); opacity: .6; }
+.lx-wdl .l { background: var(--danger); }
+.lx-home-links { display: flex; align-items: center; flex-wrap: wrap; gap: 0.35rem 0.4rem; margin: 0.1rem 0 0.2rem; }
+.lx-home-featured { flex: 1 1 auto; min-width: 0; font-size: 0.82rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lx-home-featured a { font-size: 0.82rem; }
+.lx-home-refresh { margin-left: auto; }
+.lx-home-refresh.spinning { animation: lx-spin 0.9s linear infinite; }
+.lx-ongoing-row { flex-wrap: nowrap; align-items: center; }
+.lx-thumb { width: 3.4rem; flex: none; container-type: inline-size; }
+.lx-thumb .ws-board { width: 100%; border-radius: 0.25rem; overflow: hidden; display: grid; grid-template-columns: repeat(8, 1fr); }
+.lx-ongoing-main { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+.lx-ongoing-line { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.lx-ongoing-row .lx-actions { flex-direction: column; align-items: flex-end; }
+.lx-group-sub { font-weight: 500; opacity: .8; }
+.lx-group.lx-group-row { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+.lx-group.lx-group-row h4.lx-group { margin: 0; }
+.lx-group.lx-group-row label.check { font-weight: 500; color: var(--text); }
+.lx-friend.offline .lx-who { opacity: .7; }
+.lx-foot.error, .hint.error { color: var(--danger); }
+.lx-foot button { margin-left: 0.3rem; }
+#lx-cs input[type="number"] { width: 4rem; }
+#lx-cs .hint { font-size: 0.78rem; color: var(--muted); line-height: 1.4; }
 
 /* Draw offers and takeback proposals on the player bar. */
 .player .offer { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.85rem; font-weight: 600; }
@@ -3794,6 +3856,8 @@ label.cm-row { cursor: pointer; }
 .cm-settings .cm-voice { justify-content: flex-end; flex: none; padding-top: 0.2rem; }
 .cm-settings .cm-row:has(#cm-speak) + .cm-voice { border-top: 0; padding-top: 0; min-height: 0; padding-bottom: 0.55rem; }
 .cm-settings #cm-voice { flex: 1 1 8rem; max-width: none; }
+.ec-settings #ec-persona { flex: 1 1 8rem; max-width: 15rem; min-width: 0; }
+.ec-settings .ec-note { margin: 0; padding: 0 0 0.55rem; font-size: 0.78rem; }
 #pane-ai .cm-item:not(.summary) {
   padding: 0.65rem 0.8rem; border-radius: var(--r-l); background: var(--glass);
   box-shadow: inset 0 0 0 0.5px var(--glass-edge), var(--glass-shadow);
@@ -3940,3 +4004,23 @@ body.ai-off #btn-ai, body.ai-off #ai-handle, body.ai-off #ai-panel, body.ai-off 
 #bp-engine { max-width: 14rem; }
 .bp-progress { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.88rem; margin: 0.4rem 0; }
 .bp-progress .tp-progress-bar { flex: none; }
+
+/* Several games chosen in the Games list (games-select.js): the rows are
+   marked, and a bar above the list acts on them. */
+.games-sel {
+  display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; flex: none;
+  margin: 0.35rem 0 0.15rem; padding: 0.35rem 0.5rem; border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.games-sel[hidden] { display: none; }
+.games-sel-text { font-weight: 600; font-size: 0.88rem; margin-right: 0.2rem; }
+.games-sel .review-bar { flex: 1; min-width: 4rem; }
+.game-row.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.game-row.selected:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 24%, transparent); }
+.game-row.selected.current { box-shadow: inset 3px 0 0 var(--accent); }
+/* The settings Computer analysis runs with, on a line of their own. */
+.games-sel-settings { flex-basis: 100%; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; font-size: 0.85rem; }
+.games-sel-settings select { font-size: 0.82rem; }
+/* The Games tab's Computer analysis… while its bar is open. */
+#pane-games #games-analyse[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }

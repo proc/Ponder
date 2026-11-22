@@ -6,6 +6,8 @@
 
 const rv = {
   cache: new Map(), // key → result
+  unsaved: new Set(), // keys of results not yet written into the game's PGN
+  waiting: new Map(), // key → functions to call when its run ends (reviewEnded)
   running: null,    // { key, done, total }
   error: '',
   errorKey: '',
@@ -14,8 +16,27 @@ const REVIEW_TIMES = [[200, 'Fast'], [600, 'Normal'], [1500, 'Deep']];
 
 const reviewKey = () => (state ? `${state.startFen}|${state.moves.map((m) => m.uci).join(' ')}` : '');
 const reviewable = () => Boolean(state?.players && state.moves.length > 0 && !state.active && !state.external?.live);
+// A promise of how the run for key ends: done, stopped or error.
+function reviewEnded(key) {
+  return new Promise((resolve) => {
+    if (!rv.waiting.has(key)) rv.waiting.set(key, []);
+    rv.waiting.get(key).push(resolve);
+  });
+}
+
+// The game on the board has an analysis its PGN does not have yet.
+window.reviewNeedsSave = () => Boolean(state) && rv.unsaved.has(reviewKey());
+window.reviewSaved = () => { if (state) rv.unsaved.delete(reviewKey()); };
 function currentReview() { return state ? rv.cache.get(reviewKey()) ?? null : null; }
 function reviewRunning() { return Boolean(rv.running); }
+
+// Swarm: how many copies of the engine analyse the game at once, each
+// taking the next position no other has; 1 is one engine on its own.
+const SWARM_MAX = 32;
+function reviewSwarm() {
+  const n = Math.round(+localStorage.getItem('reviewSwarm'));
+  return n >= 1 ? Math.min(n, SWARM_MAX) : 1;
+}
 
 function reviewMoveTime() {
   const saved = +localStorage.getItem('reviewMoveTime');
@@ -65,11 +86,11 @@ function removeReviewComments() {
 // it, and one that already has a mark keeps that, wherever they came from
 // (you, the file, the AI, an earlier analysis). Nothing is taken off first;
 // "Remove its comments" does that when asked.
-function applyReviewComments(result) {
+function applyReviewComments(result, draw = {}) {
   const NAG = { inaccuracy: 6, mistake: 2, blunder: 4 };
   let n = 0;
   for (const j of result.judgments ?? []) {
-    if (!j.kind) continue;
+    if (!j?.kind) continue;
     const a = notes.moves.get(j.ply) ?? annBlank();
     let used = false;
     if (!a.comment) { a.comment = reviewCommentText(result, j); a.auto = true; used = true; }
@@ -77,54 +98,118 @@ function applyReviewComments(result) {
     if (used) { notes.moves.set(j.ply, a); n++; }
   }
   if (n) notes.dirty = true;
-  renderMoves();
+  renderMoves(draw);
   return n;
 }
 
-// resume: a stopped analysis of this game to carry on from.
-async function startReview(resume = null) {
+// A new analysis of the game on the board: the marks and comments an
+// earlier analysis left on the moves it has judged (in this session, or
+// saved in the file) give way to its own. Yours and the AI's stay.
+function refreshReviewNotes(draw = {}) {
+  const result = currentReview();
+  if (!result || result.live) return;
+  const judged = (result.judgments ?? []).length; // a stopped one: its moves only
+  for (const [ply, a] of [...notes.moves]) {
+    if (ply > judged || (!a.auto && !a.autoNag)) continue;
+    if (a.auto) { a.comment = ''; a.auto = false; }
+    if (a.autoNag) { a.nag = 0; a.autoNag = false; }
+    if (annEmpty(a)) notes.moves.delete(ply);
+  }
+  if (reviewComments()) applyReviewComments(result, draw);
+  else renderMoves(draw);
+}
+// (Global: annotate.js calls it when a game is opened.)
+
+// Positions analysed before (with this engine and at least this much time
+// a move) are not searched again: the backend keeps them, so carrying on
+// after a stop, adding moves or changing one searches only what is new.
+async function startReview() {
   const s = analysisSettings();
   const engine = engines.find((e) => e.id === s.engineId) ?? engines[0];
   if (!engine) return;
   const key = reviewKey();
   rv.error = '';
-  const kept = resume?.partial ? resume.positions : null;
-  rv.running = { key, done: kept?.length ?? 0, total: state.moves.length + 1 };
+  rv.running = { key, done: 0, total: state.moves.length + 1, swarm: reviewSwarm() };
+  // The analysis so far, filled in move by move as it runs (onReviewEvent)
+  // and shown in the moves list meanwhile; the finished result replaces it.
+  rv.cache.set(key, {
+    key, engine: engine.name, live: true, partial: true, moveTimeMs: reviewMoveTime(), prev: rv.cache.get(key),
+    positions: [], judgments: [],
+  });
   renderReview();
   syncAnalysis();
   try {
     await api.backend('reviewStart', {
-      key, startFen: state.startFen, moves: state.moves.map((m) => m.uci), moveTimeMs: reviewMoveTime(),
-      ...(kept ? { resume: kept } : {}),
+      key, startFen: state.startFen, moves: state.moves.map((m) => m.uci), moveTimeMs: reviewMoveTime(), swarm: reviewSwarm(),
       engine: { name: engine.name, path: engine.path, args: engine.args ?? [], options: engine.options ?? {} },
     });
   } catch (err) {
     rv.running = null;
+    dropLiveReview(key);
     rv.error = errorText(err);
     rv.errorKey = key;
     renderReview();
   }
 }
 
+// A run that left nothing to keep: what was there before it comes back.
+function dropLiveReview(key) {
+  const live = rv.cache.get(key);
+  if (!live?.live) return;
+  if (live.prev) rv.cache.set(key, live.prev); else rv.cache.delete(key);
+  if (key === reviewKey()) renderMoves();
+}
+
+// Moves judged while the analysis runs are drawn in batches, as the
+// engines' own scores are, not at every position.
+let reviewDrawTimer = null;
+function scheduleReviewDraw() {
+  if (reviewDrawTimer) return;
+  reviewDrawTimer = setTimeout(() => {
+    reviewDrawTimer = null;
+    const live = currentReview();
+    if (!live?.live) return;
+    if (reviewComments()) applyReviewComments(live, { steady: true }); else renderMoves({ steady: true });
+  }, 400);
+}
+
 function onReviewEvent(p) {
   if (p.state === 'running') {
-    rv.running = { key: p.key, done: p.done, total: p.total };
+    rv.running = { key: p.key, done: p.done, total: p.total, reused: p.reused ?? 0, searched: p.searched ?? 0, swarm: rv.running?.swarm ?? 1 };
+    const live = rv.cache.get(p.key);
+    if (p.position && live?.live) {
+      // With a swarm they come in any order: each in its place.
+      live.positions[p.ply ?? p.done - 1] = p.position;
+      for (const j of p.moveJudgments ?? []) live.judgments[j.ply - 1] = j;
+      if (p.key === reviewKey()) scheduleReviewDraw();
+    }
   } else {
     if (rv.running?.key === p.key) rv.running = null;
+    for (const f of rv.waiting.get(p.key) ?? []) f(p.state);
+    rv.waiting.delete(p.key);
+    clearTimeout(reviewDrawTimer);
+    reviewDrawTimer = null;
     if (p.state === 'done' || (p.state === 'stopped' && p.positions?.length >= 2)) {
       // Stopped early: the moves analysed so far are kept and shown.
       const partial = p.state === 'stopped' && p.positions.length < p.total;
       rv.cache.set(p.key, { ...p, partial, moveTimeMs: reviewMoveTime() });
+      // Its evaluations and marks go into the game's PGN, as any annotation
+      // does: saved by themselves now, or when the game is next on the board.
+      rv.unsaved.add(p.key);
       if (p.key === reviewKey()) {
-        if (reviewComments()) applyReviewComments(rv.cache.get(p.key));
-        else renderMoves();
+        notes.dirty = true;
+        refreshReviewNotes({ steady: true });
       }
-    } else if (p.state === 'error') {
-      rv.error = p.error;
-      rv.errorKey = p.key;
+    } else {
+      dropLiveReview(p.key);
+      if (p.state === 'error') {
+        rv.error = p.error;
+        rv.errorKey = p.key;
+      }
     }
     syncAnalysis();
     renderAnalysis();
+    window.refreshGamesAnalysed?.(); // the game may be one of the list's
   }
   if (p.key === reviewKey()) renderReview();
 }
@@ -144,6 +229,51 @@ function evalText(pos) {
   return (v > 0 ? '+' : '') + v.toFixed(1);
 }
 
+// The settings of Computer analysis, as controls: time a move, swarm,
+// Comment the moves, and which engine (chosen in Settings → Analysis).
+// Shown in the Moves tab and, for the games chosen, in the Games tab; both
+// keep them in the same place, so a change in one holds for the other.
+function reviewSettingsControls(where = 'moves') {
+  const time = el('select', { className: 'review-time', title: 'Time the engine spends on each position' },
+    REVIEW_TIMES.map(([ms, name]) => el('option', { value: ms, textContent: `${name} · ${ms / 1000}s a move` })));
+  time.value = reviewMoveTime();
+  time.onchange = () => { localStorage.setItem('reviewMoveTime', time.value); reviewSettingsChanged(where); };
+  // Swarm: up to one engine per processor core is offered (more is allowed
+  // by hand, up to the most the backend runs).
+  const cores = Math.max(1, Math.min(SWARM_MAX, navigator.hardwareConcurrency || 4));
+  const counts = [...new Set([1, 2, 4, 6, 8, 12, 16, 24, 32].filter((n) => n <= cores).concat(cores, reviewSwarm()))].sort((a, b) => a - b);
+  const swarm = el('select', {
+    className: 'review-swarm',
+    title: 'Swarm: how many copies of the engine analyse the game at once, each taking the next position not yet taken. '
+      + `Each runs with the engine's own options, Threads included, so the threads in use are this times its Threads. This computer has ${navigator.hardwareConcurrency || '?'} cores.`,
+  }, counts.map((n) => el('option', { value: n, textContent: n === 1 ? '1 engine' : `Swarm · ${n} engines` })));
+  swarm.value = reviewSwarm();
+  swarm.onchange = () => { localStorage.setItem('reviewSwarm', swarm.value); reviewSettingsChanged(where); };
+  const box = el('input', { type: 'checkbox', checked: reviewComments() });
+  box.onchange = () => { localStorage.setItem('reviewComments', box.checked ? '1' : ''); reviewSettingsChanged(where); };
+  const comments = el('label', { className: 'check review-comments', title: 'Write a comment on each inaccuracy, mistake and blunder: the better move and line, and how the evaluation moved. They become annotations you can edit and save.' }, [box, ' Comment the moves']);
+  const engine = el('span', { className: 'hint review-engine', textContent: `with ${reviewEngineName()}`, title: 'The analysis engine: chosen in Settings → Analysis' });
+  return [time, swarm, comments, engine];
+}
+
+const reviewEngineName = () => {
+  const s = analysisSettings();
+  return (engines.find((e) => e.id === s.engineId) ?? engines[0])?.name ?? 'the analysis engine';
+};
+
+// The same settings in words, for while a run goes on.
+function reviewSettingsText() {
+  const n = reviewSwarm();
+  return `${reviewEngineName()} · ${reviewMoveTime() / 1000}s a move${n > 1 ? ` · ${n} engines` : ''}${reviewComments() ? ' · commenting the moves' : ''}`;
+}
+
+// A setting changed in one tab: the other shows it too (the one in use is
+// left as it is, keeping the keyboard where it was).
+function reviewSettingsChanged(where) {
+  if (where !== 'moves') renderReview();
+  if (where !== 'games') window.renderGamesSelection?.();
+}
+
 function renderReview() {
   const box = $('#review');
   if (!box) return;
@@ -152,10 +282,17 @@ function renderReview() {
   if (!state?.players || !state.moves.length) { box.replaceChildren(); box.hidden = true; return; }
   if (rv.running?.key === key) {
     const pct = Math.round((rv.running.done / rv.running.total) * 100);
+    // Positions analysed before (with this engine and at least this much
+    // time) are not searched again: the count is of the ones left.
+    const { reused = 0, searched = 0, total } = rv.running;
+    const swarm = rv.running.swarm > 1 ? ` · ${rv.running.swarm} engines` : '';
+    const text = reused
+      ? `Computer analysis… ${searched} of ${total - reused} positions (${reused} already analysed)${swarm}`
+      : `Computer analysis… ${rv.running.done} / ${total}${swarm}`;
     const stop = el('button', { type: 'button', className: 'small', textContent: 'Stop' });
     stop.onclick = () => api.backend('reviewStop');
     box.replaceChildren(el('div', { className: 'review-run' }, [
-      el('span', { textContent: `Computer analysis… ${rv.running.done} / ${rv.running.total}` }),
+      el('span', { textContent: text }),
       el('div', { className: 'review-bar' }, [el('div', { style: `width:${pct}%` })]),
       stop,
     ]));
@@ -168,18 +305,9 @@ function renderReview() {
     return;
   }
   if (!reviewable()) { box.replaceChildren(); box.hidden = true; return; }
-  const time = el('select', { title: 'Time the engine spends on each position' },
-    REVIEW_TIMES.map(([ms, name]) => el('option', { value: ms, textContent: `${name} · ${ms / 1000}s a move` })));
-  time.value = reviewMoveTime();
-  time.onchange = () => localStorage.setItem('reviewMoveTime', time.value);
   const go = el('button', { type: 'button', className: 'small primary', textContent: 'Computer analysis' });
-  go.onclick = startReview;
-  const s = analysisSettings();
-  const engine = engines.find((e) => e.id === s.engineId) ?? engines[0];
-  const box2 = el('input', { type: 'checkbox', checked: reviewComments() });
-  box2.onchange = () => localStorage.setItem('reviewComments', box2.checked ? '1' : '');
-  const comments = el('label', { className: 'check review-comments', title: 'Write a comment on each inaccuracy, mistake and blunder: the better move and line, and how the evaluation moved. They become annotations you can edit and save.' }, [box2, ' Comment the moves']);
-  const parts = [go, time, comments, el('span', { className: 'hint', textContent: `with ${engine?.name ?? 'the analysis engine'}` })];
+  go.onclick = () => startReview();
+  const parts = [go, ...reviewSettingsControls()];
   box.replaceChildren(el('div', { className: 'review-ask' }, parts));
   if (rv.error && rv.errorKey === key) box.append(el('p', { className: 'error', textContent: rv.error }));
   box.hidden = false;
@@ -264,12 +392,14 @@ function reviewSummary(result) {
     className: i ? 'n' : '', textContent: t,
     title: ['', 'Inaccuracies', 'Mistakes', 'Blunders', 'Average centipawn loss', 'Accuracy'][i],
   })));
-  const again = el('button', { type: 'button', className: 'link', textContent: result.partial ? 'Start over' : 'Analyse again' });
-  again.onclick = () => { rv.cache.delete(reviewKey()); startReview(); };
+  // Back to the choice of time a move: a longer one searches again.
+  const again = el('button', { type: 'button', className: 'link', textContent: 'Analyse again…' });
+  again.title = 'Choose the time a move and run it again. Positions already analysed with at least that much time are not searched again.';
+  again.onclick = () => { rv.cache.delete(reviewKey()); renderMoves({ steady: true }); renderReview(); };
   // A stopped analysis carries on after the moves it has.
   const go = el('button', { type: 'button', className: 'small primary', textContent: 'Continue' });
   go.title = 'Analyse the rest of the game, keeping what is done';
-  go.onclick = () => startReview(result);
+  go.onclick = () => startReview();
   const done = result.positions.length - 1;
   const commented = hasReviewComments();
   const comment = el('button', { type: 'button', className: 'link', textContent: commented ? 'Remove its comments' : 'Comment the moves' });

@@ -24,6 +24,8 @@ Packaging for other systems, signing and the code layout are in
 - Human vs human, human vs computer or computer vs computer, with clocks
   and time controls.
 - Premoves, takebacks, arrows and circles on the board, keyboard shortcuts.
+- Voice commands: say your moves ("knight f3", "castle kingside") and
+  commands, recognised on your computer.
 - Swap or reload an engine in the middle of a game.
 - Versus and result screens, sounds, music, and opening and saving PGN files.
 
@@ -35,8 +37,10 @@ Packaging for other systems, signing and the code layout are in
   puzzles, test positions, and annotating games.
 
 **Lichess** – [Lichess](docs/lichess.md) and [Your engine on Lichess](docs/lichess-bot.md)
-- Play on Lichess yourself, follow any player or Lichess TV, and watch
-  several games at once as tiles.
+- Play on Lichess yourself from a Lichess home: your ratings, ongoing games
+  (correspondence too) to resume, quick pairing, custom and correspondence
+  seeks, the lobby, challenges, and who you follow is online.
+- Follow any player or Lichess TV, and watch several games at once as tiles.
 - Run your engine as a Lichess bot: accept challenges by your rules,
   challenge random bots, and watch its games with its search live.
 

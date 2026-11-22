@@ -48,12 +48,13 @@ function chfSeekChallenge(sc) {
   if (!it) {
     for (const [k, old] of chf.items) if (old.who === 'engine' && old.held) { clearTimeout(old.timer); chf.items.delete(k); }
     const c = { id: sc.id || key, user: sc.user, title: sc.title ?? '', rating: sc.rating ?? 0, tc: chfClock(sc.limit, sc.increment ?? 0),
-      rated: Boolean(sc.rated), speed: sc.speed ?? '', color: 'random', expiresAt: sc.answerBy || 0 };
+      rated: Boolean(sc.rated), speed: sc.speed ?? '', color: 'random', expiresAt: sc.answerBy || 0, picked: Boolean(sc.random) };
     it = { who: 'engine', c, state: 'waiting', text: '' };
     chf.items.set(key, it);
   }
   // How long it waits for an answer, when the outgoing list does not say.
   if (it.state === 'waiting' && sc.answerBy && !it.c.expiresAt) it.c = { ...it.c, expiresAt: sc.answerBy };
+  if (sc.random && !it.c.picked) it.c = { ...it.c, picked: true };
   if (sc.state === 'waiting') return;
   // Its end, unless already known: a row the outgoing list took to be
   // withdrawn learns here that it was declined, or had no answer.
@@ -144,7 +145,7 @@ function chfNow() {
     case 'limited':
       return { text: left ? `${msg.replace(/\.$/, '')} (in ${chfSpan(left)}).` : 'Lichess allows challenges again: looking for an opponent…', kind: 'idle' };
     case 'playing':
-      return { text: msg, kind: 'idle' };
+      return { text: msg, kind: 'idle', game: chfGameToShow() };
     default:
       break;
   }
@@ -152,13 +153,54 @@ function chfNow() {
   return { text: msg || 'Looking for an opponent…', kind: 'busy' };
 }
 
+// Your engine's game on the board, or null.
+const chfOnBoard = (id) => typeof state !== 'undefined' && state?.external?.kind === 'bot' && state.external.id === id;
+
+// The game in progress that a click on "your engine is playing" puts on the
+// board: one not shown there yet (its move first), or with several, the
+// next one after the game shown. Null when the only one is already shown.
+function chfGameToShow() {
+  const going = (lx.status.games ?? []).filter((g) => !g.finished && g.playing);
+  const shown = going.findIndex((g) => chfOnBoard(g.id));
+  if (shown < 0) return going.find((g) => g.myTurn) ?? going[0] ?? null;
+  return going.length > 1 ? going[(shown + 1) % going.length] : null;
+}
+
+// Puts your engine's game on the board (asking first if a game of yours
+// here would be abandoned).
+function chfShowGame(id) {
+  if (typeof lxWatch === 'function') lxWatch(id);
+  else lichessCommand('lichessWatch', { id });
+}
+
 function chfNowText() {
   const n = $('#ch-float-next');
   const now = chfNow();
   n.hidden = !now;
-  n.textContent = now?.text ?? '';
-  n.title = now?.text ?? '';
-  n.className = 'chf-next' + (now ? ' ' + now.kind : '');
+  const g = now?.game;
+  // With another of its games shown, say which one this click brings.
+  const go = !g ? '' : (lx.status.games ?? []).some((x) => chfOnBoard(x.id)) ? `Show the game against ${g.opponent}` : 'Show the game';
+  const label = g ? `${now.text} ${go} on the board.` : now?.text ?? '';
+  // Rebuilt only when it changes, so a click is never lost to the ticking.
+  if (n.dataset.text !== label) {
+    n.dataset.text = label;
+    // One flex item, so the link follows the sentence instead of taking a column.
+    n.replaceChildren(g ? el('span', {}, [now.text, ' ', el('span', { className: 'chf-go', textContent: `${go} ›` })]) : now?.text ?? '');
+  }
+  n.title = g ? `Click to put your engine's game against ${g.opponent} on the board` : now?.text ?? '';
+  n.className = 'chf-next' + (now ? ' ' + now.kind : '') + (g ? ' link' : '');
+  if (g) {
+    n.tabIndex = 0;
+    n.setAttribute('role', 'button');
+    n.setAttribute('aria-label', label);
+    n.onclick = () => chfShowGame(g.id);
+    n.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chfShowGame(g.id); } };
+  } else {
+    n.removeAttribute('tabindex');
+    n.removeAttribute('role');
+    n.removeAttribute('aria-label');
+    n.onclick = n.onkeydown = null;
+  }
   return now;
 }
 setInterval(() => { if (!$('#ch-float').hidden) chfNowText(); }, 500);
@@ -176,7 +218,7 @@ function trackChallenges(who, prev, next) {
       for (const [k, old] of chf.items) if (old.who === who && old.held) { clearTimeout(old.timer); chf.items.delete(k); }
       chf.items.set(key, { who, c, state: 'waiting', text: '' });
     }
-    else if (it.state === 'waiting') it.c = { ...c, expiresAt: c.expiresAt || it.c.expiresAt }; // its time to wait may have been set since
+    else if (it.state === 'waiting') it.c = { ...c, expiresAt: c.expiresAt || it.c.expiresAt, picked: it.c.picked }; // its time to wait may have been set since
   }
   const games = new Set((next.games ?? []).map((g) => g.id));
   for (const [key, it] of chf.items) {
@@ -280,7 +322,11 @@ function renderChallengeFloat() {
     if (close) { close.title = `Dismiss: take it off the list here; Lichess is not asked again. It said: ${failed}`; close.setAttribute('aria-label', 'Dismiss'); }
     const detail = state === 'waiting' ? expiryNote(c)
       : el('span', { className: 'lx-meta chf-detail', textContent: state === 'accepted' ? chfGameText(c.id, who) : it.text, title: it.text });
-    return el('div', { className: 'chf-row ' + state }, [
+    // An accepted challenge whose game your engine is playing: a click puts
+    // that game on the board.
+    const game = who === 'engine' && state === 'accepted' ? (lx.status.games ?? []).find((g) => g.id === c.id && !g.finished) : null;
+    const showable = game && !chfOnBoard(game.id);
+    const row = el('div', { className: 'chf-row ' + state + (showable ? ' link' : '') }, [
       el('div', { className: 'chf-line' }, [
         el('span', { className: 'lx-meta', textContent: who === 'engine' ? 'Your engine →' : 'You →' }),
         lxWho(c.user, c.title, c.rating),
@@ -288,8 +334,21 @@ function renderChallengeFloat() {
       ]),
       el('div', { className: 'chf-line' }, [status, detail]),
       ...(failed ? [el('div', { className: 'chf-detail chf-failed', textContent: `Could not cancel: ${failed}` })] : []),
-      el('div', { className: 'lx-meta chf-meta', textContent: challengeMeta(c) }),
+      el('div', { className: 'lx-meta chf-meta', textContent: challengeMeta(c) + (c.picked ? ' · picked at random' : ''),
+        title: c.picked ? 'The clock, and rated or casual, were picked at random from the choices in the challenge settings' : '' }),
     ]);
+    if (game) {
+      const detailEl = row.querySelector('.chf-detail');
+      if (detailEl) detailEl.textContent = showable ? 'Playing now · show it on the board ›' : 'Playing now · on the board';
+    }
+    if (showable) {
+      row.title = `Click to put the game against ${c.user} on the board`;
+      row.tabIndex = 0;
+      row.setAttribute('role', 'button');
+      row.onclick = (e) => { if (!e.target.closest('button, a')) chfShowGame(game.id); };
+      row.onkeydown = (e) => { if (e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); chfShowGame(game.id); } };
+    }
+    return row;
   }));
   chfPlace();
 }

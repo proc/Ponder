@@ -71,6 +71,42 @@ windows go below the tabs. Text grows with the screen.
   start, the previous one returns. In your engine's [Lichess](lichess.md) game
   only **↻ Reload** is offered.
 
+## Voice commands
+
+Click the microphone at the board's bottom right, or press **T**, and say your
+moves. The microphone turns red and pulses while Ponder listens; click it
+again, press **T**, or say "stop listening" to stop. Voice commands are off
+each time Ponder starts.
+
+Speech is recognised on your computer, so no sound leaves it. The first time
+you turn voice commands on, Ponder asks to download its speech model (Vosk's
+small English model, about 40 MB, from alphacephei.com) and keeps it in its
+data folder. Your system may also ask to let Ponder use the microphone. On
+macOS, if you said no, allow it under **System Settings → Privacy & Security →
+Microphone**.
+
+You can say:
+
+- **A move**, as it is written: "e4", "knight f3", "knight takes e5", "queen
+  takes d7 check", "e takes d5".
+- **From one square to another**: "e2 e4", "g1 to f3".
+- **Where the piece comes from**, when two pieces can go to the same square:
+  "rook a d1", "knight b1 d2".
+- **Castling**: "castle kingside" or "short castle", "castle queenside" or
+  "long castle".
+- **A promotion**: "e8 queen", "e8 promote to knight", "takes d8 queen".
+- **Undo** or **take back**, **flip board**, **new game**, **resign**, **offer
+  draw** and **stop listening**. Resigning and draws still ask before they
+  act.
+
+Each time, a note in the top right corner and the status line show what was
+heard and what was done. If the words fit no legal move, or more than one,
+nothing is played and the note says why, for example *More than one piece fits
+"rook d1": from a1 or f1*. Saying "check" is fine but not needed, and a
+promotion needs the piece. Voice works for the moves in a game, a puzzle or
+while exploring a position, but only on your turn: it does not premove. While
+the announcer or commentary is speaking, Ponder doesn't act on what it hears.
+
 ## Game card
 
 Beside the moves, the Game card shows the event, result, players, time control,
@@ -121,7 +157,7 @@ See also [Game database](database.md).
 
 ← → move by move, ↑ ↓ / Home End go to the start and end, **F** flips, **Z**
 zen mode (board and players only), **L** analysis, **P** pauses it, **B**
-takeback, **U** classical music, **?** lists shortcuts. Flip and zen mode are
+takeback, **U** classical music, **T** voice commands, **?** lists shortcuts. Flip and zen mode are
 also icons at the board's bottom right.
 
 The application menu has:
@@ -129,7 +165,7 @@ The application menu has:
 - **File** – New Game ⌘N, Open PGN ⌘O, Open Game Database ⇧⌘O, Test
   Positions, Save Game ⌘S, Copy Game as PGN ⇧⌘C, Copy Position as FEN ⌥⌘C,
   Paste Game or Position ⇧⌘V.
-- **Game** – takeback, move by move, flip, annotate.
+- **Game** – takeback, voice commands, move by move, flip, annotate.
 - **Analysis** – analyse, pause, explorer, AI chat ⌘J, engine and analysis
   settings.
 - **Lichess** – play, TV, your bot, puzzles.

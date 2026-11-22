@@ -10,9 +10,11 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -124,6 +126,7 @@ func main() {
 		},
 	})
 	reviewer = review.New(emit)
+	reviewer.UseCacheFile(os.Getenv("PONDER_REVIEW_CACHE")) // set by the app: its data folder
 	epdRunner = epdtest.NewRunner(emit)
 	binpackRunner = binpack.NewRunner(emit)
 	defer binpackRunner.Stop()
@@ -320,6 +323,50 @@ func findGame(c *pgn.Collection, st game.State) int {
 	return -1
 }
 
+// annotateEntry writes text (the game on the board, annotated) over its
+// entry in c: entry st.Index for a game opened from c, else the entry that
+// is the same game (its tags as written there are kept). It returns the
+// entry's index.
+func annotateEntry(c *pgn.Collection, st game.State, text string, fromFile bool) (int, error) {
+	index := st.Index
+	if !fromFile {
+		index = findGame(c, st)
+		if index < 0 {
+			return -1, errNotInFile
+		}
+		raw, err := c.Raw(index)
+		if err != nil {
+			return -1, err
+		}
+		text = withTagsOf(raw, text)
+	}
+	if games, err := pgn.Parse(text); err != nil || len(games) != 1 {
+		return -1, fmt.Errorf("the game could not be written with these annotations")
+	}
+	text += "\n" // the blank line before the next game
+	return index, c.Rewrite(map[int]*string{index: &text})
+}
+
+// annotateInDatabase writes the game on the board, annotated, over its
+// entry in the game database file, which need not be open. It returns the
+// file's name and the entry's index.
+func annotateInDatabase(st game.State, text string) (string, int, error) {
+	database.mu.Lock()
+	defer database.mu.Unlock()
+	if database.path == "" {
+		return "", -1, errNotInFile
+	}
+	c, err := pgn.Open(database.path, nil)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", -1, errNotInFile
+		}
+		return "", -1, err
+	}
+	index, err := annotateEntry(c, st, text, false)
+	return filepath.Base(database.path), index, err
+}
+
 // withTagsOf is the game in text with the tag section of raw (the entry as
 // it stands in the file) in place of its own.
 func withTagsOf(raw, text string) string {
@@ -370,6 +417,39 @@ func loadFromCollection(mgr *game.Manager, i int) error {
 		return err
 	}
 	return mgr.LoadGame(g, collection.name, i)
+}
+
+// gameFENs are the positions the computer analysis searches in game i of
+// the file, worked out once per game while the file stays the same.
+var fensMemo struct {
+	sync.Mutex
+	of   *pgn.Collection
+	fens map[int][]string
+}
+
+func gameFENs(c *pgn.Collection, i int) []string {
+	fensMemo.Lock()
+	if fensMemo.of != c {
+		fensMemo.of, fensMemo.fens = c, map[int][]string{}
+	}
+	f, ok := fensMemo.fens[i]
+	fensMemo.Unlock()
+	if ok {
+		return f
+	}
+	g, err := c.Read(i)
+	if err != nil {
+		return nil // e.g. the file changed: not kept, it may read later
+	}
+	if start, moves, err := g.Replay(); err == nil {
+		f = review.SearchFENs(start, moves)
+	}
+	fensMemo.Lock()
+	if fensMemo.of == c {
+		fensMemo.fens[i] = f
+	}
+	fensMemo.Unlock()
+	return f
 }
 
 // emit sends an event to the UI; set in main.
@@ -643,6 +723,23 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		a.Query.Words = strings.Fields(a.Filter)
 		matched, rows := collection.c.Search(a.Query, a.Sort, a.Desc, a.Limit)
 		return map[string]any{"total": collection.c.Len(), "matched": matched, "games": rows}, nil
+	case "gamesAnalysed":
+		// Which of these games of the open file the computer analysis has
+		// covered completely: index → the engine's name.
+		var a struct{ Indices []int }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		out := map[int]string{}
+		if collection.c == nil {
+			return out, nil
+		}
+		for _, i := range a.Indices {
+			if name := reviewer.AnalysedBy(gameFENs(collection.c, i)); name != "" {
+				out[i] = name
+			}
+		}
+		return out, nil
 	case "selectGame":
 		var a struct{ Index int }
 		if err := decode(&a); err != nil {
@@ -727,50 +824,46 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		return pgn.Annotations(text)
 	case "pgnAnnotate":
 		// Write the game on the board, with its annotations, over itself in
-		// the open PGN file: the file it was opened from, or, for a game
-		// played or watched here, its entry in the open file (the game
-		// database it was added to when it ended).
+		// a PGN file: the file it was opened from, or, for a game played or
+		// watched here, its entry in the open file, else in the game
+		// database (where it was added when it ended), open or not.
 		var a struct{ Annotations *game.Annotations }
 		if err := decode(&a); err != nil {
 			return nil, err
 		}
 		st := mgr.State()
-		if collection.c == nil {
-			return nil, fmt.Errorf("this game is not in the open PGN file")
-		}
-		fromFile := st.Loaded && st.Index >= 0 && st.Source == collection.name
+		fromFile := collection.c != nil && st.Loaded && st.Index >= 0 && st.Source == collection.name
 		if st.Loaded && !fromFile {
-			return nil, fmt.Errorf("this game is not in the open PGN file")
+			return nil, errNotInFile
 		}
 		text, err := mgr.AnnotatedPGN(a.Annotations)
 		if err != nil {
 			return nil, err
 		}
 		index := st.Index
-		err = changeCollection(func(c *pgn.Collection) error {
-			if !fromFile {
-				// Its entry in the file: the tags stay as they were written
-				// there, the moves are written again with the annotations.
-				index = findGame(c, st)
-				if index < 0 {
-					return errNotInFile
-				}
-				raw, err := c.Raw(index)
-				if err != nil {
-					return err
-				}
-				text = withTagsOf(raw, text)
+		err = errNotInFile
+		if collection.c != nil {
+			err = changeCollection(func(c *pgn.Collection) error {
+				i, e := annotateEntry(c, st, text, fromFile)
+				index = i
+				return e
+			})
+			if err == nil {
+				return map[string]any{"total": collection.c.Len(), "file": collection.name, "index": index}, nil
 			}
-			if games, err := pgn.Parse(text); err != nil || len(games) != 1 {
-				return fmt.Errorf("the game could not be written with these annotations")
-			}
-			text += "\n" // the blank line before the next game
-			return c.Rewrite(map[int]*string{index: &text})
-		})
+		}
+		if !errors.Is(err, errNotInFile) || st.Loaded {
+			return nil, err
+		}
+		// Not in the open file: its entry in the game database.
+		file, index, err := annotateInDatabase(st, text)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"total": collection.c.Len(), "file": collection.name, "index": index}, nil
+		if collection.c != nil && samePath(collection.path, database.path) {
+			_ = reopenCollection()
+		}
+		return map[string]any{"file": file, "index": index, "database": true}, nil
 	case "pgnDelete":
 		// Take games out of the file.
 		var a struct{ Indices []int }
@@ -836,10 +929,11 @@ func handle(mgr *game.Manager, req request) (any, error) {
 		return map[string]any{"total": collection.c.Len(), "imported": src.Len()}, nil
 	case "pgnExport":
 		// Write the games matching the filter and the search (all of them
-		// without either) to a new PGN file.
+		// without either), or the games chosen (Indices), to a new PGN file.
 		var a struct {
 			Path, Filter string
 			Query        pgn.Query
+			Indices      []int
 		}
 		if err := decode(&a); err != nil {
 			return nil, err
@@ -851,7 +945,20 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			return nil, fmt.Errorf("choose another file: that is the one open")
 		}
 		a.Query.Words = strings.Fields(a.Filter)
-		indices := collection.c.Select(a.Query)
+		var indices []int
+		if len(a.Indices) > 0 {
+			// The chosen games, once each, in file order.
+			seen := map[int]bool{}
+			for _, i := range a.Indices {
+				if i >= 0 && i < collection.c.Len() && !seen[i] {
+					seen[i] = true
+					indices = append(indices, i)
+				}
+			}
+			sort.Ints(indices)
+		} else {
+			indices = collection.c.Select(a.Query)
+		}
 		if len(indices) == 0 {
 			return nil, fmt.Errorf("no games to export")
 		}
@@ -1038,6 +1145,15 @@ func handle(mgr *game.Manager, req request) (any, error) {
 	case "lichessAcctSeekStop":
 		player.StopSeek()
 		return nil, nil
+	case "lichessAcctHome":
+		// The Lichess home: profile, ongoing games, players followed, lobby.
+		return player.Home()
+	case "lichessAcctResume":
+		var a struct{ ID string }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		return nil, player.Resume(a.ID)
 	case "lichessAcctChallenge":
 		var a lichess.ChallengeParams
 		if err := decode(&a); err != nil {
@@ -1336,6 +1452,14 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			return nil, player.Say(a.ID, a.Room, a.Text)
 		}
 		return nil, bot.Say(a.ID, a.Room, a.Text)
+	case "lichessBotRemark":
+		// The engine's chat message in one of its games, to its opponent
+		// and to the spectators.
+		var a struct{ ID, Text string }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		return nil, bot.Remark(a.ID, a.Text)
 	case "probe":
 		var a struct {
 			Path string

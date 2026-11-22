@@ -43,6 +43,137 @@ type SeekParams struct {
 	Times      []int  `json:"times,omitempty"`
 	Increments []int  `json:"increments,omitempty"`
 	RatedMode  string `json:"ratedMode,omitempty"`
+	// Filter is what a bot's decline does to later challenges, as
+	// lichess-bot's challenge_filter: "none" (or ""), nothing; "coarse",
+	// the bot is not challenged again for a day; "fine", the bot is passed
+	// over for a day for what it declined (the speed, for too fast, too
+	// slow or time control; rated or casual, for those; anything, for the
+	// other reasons), unless no other bot fits.
+	Filter string `json:"filter,omitempty"`
+	// Preference weighs the pick among the bots that fit, as lichess-bot's
+	// rating_preference: "none" (or ""), each as likely; "high", the higher
+	// rated more likely; "low", the lower rated (the far end of the range
+	// about twice as likely as the near end).
+	Preference string `json:"preference,omitempty"`
+}
+
+// seekDeclineFor is how long a bot's decline counts for the filter.
+var seekDeclineFor = 24 * time.Hour
+
+// declineAspect is what a decline reason was about, for the fine filter:
+// "speed", "mode", or "" for the bot itself.
+func declineAspect(reason string) string {
+	switch strings.ToLower(reason) {
+	case "toofast", "tooslow", "timecontrol":
+		return "speed"
+	case "rated", "casual":
+		return "mode"
+	}
+	return ""
+}
+
+// noteDecline records a bot's decline for the filter.
+func (b *Bot) noteDecline(filter, bot, reason, speed string, rated bool) {
+	key := strings.ToLower(bot) + "/"
+	switch filter {
+	case "coarse":
+	case "fine":
+		switch declineAspect(reason) {
+		case "speed":
+			key += "speed:" + speed
+		case "mode":
+			key += "mode:" + modeName(rated)
+		}
+	default:
+		return
+	}
+	b.mu.Lock()
+	if b.seekDeclined == nil {
+		b.seekDeclined = map[string]time.Time{}
+	}
+	b.seekDeclined[key] = time.Now().Add(seekDeclineFor)
+	b.mu.Unlock()
+}
+
+// declinedFor reports whether the filter passes the bot over for a
+// challenge at speed, rated or casual.
+func (b *Bot) declinedFor(filter, bot, speed string, rated bool) bool {
+	if filter != "coarse" && filter != "fine" {
+		return false
+	}
+	id := strings.ToLower(bot) + "/"
+	keys := []string{id}
+	if filter == "fine" {
+		keys = append(keys, id+"speed:"+speed, id+"mode:"+modeName(rated))
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	for _, k := range keys {
+		if until, ok := b.seekDeclined[k]; ok {
+			if now.Before(until) {
+				return true
+			}
+			delete(b.seekDeclined, k)
+		}
+	}
+	return false
+}
+
+func modeName(rated bool) string {
+	if rated {
+		return "rated"
+	}
+	return "casual"
+}
+
+// pick chooses a bot from the pool, weighted by the rating preference
+// as lichess-bot does: with the range lo–hi (the pool's own when open),
+// a bot at the far end is about twice as likely as one at the near end.
+func (p SeekParams) pick(pool []User, speed string, lo, hi int) User {
+	if len(pool) == 1 || (p.Preference != "high" && p.Preference != "low") {
+		return pool[rand.Intn(len(pool))]
+	}
+	if lo <= 0 || hi <= 0 {
+		lo, hi = poolRange(pool, speed)
+	}
+	weights := make([]float64, len(pool))
+	total := 0.0
+	for i, u := range pool {
+		r := float64(u.RatingFor(speed))
+		w := 1.0
+		if p.Preference == "high" {
+			reduce := min(float64(lo-(hi-lo)), float64(lo-1))
+			w = r - reduce
+		} else {
+			reduce := max(float64(hi+(hi-lo)), float64(hi+1))
+			w = reduce - r
+		}
+		weights[i] = max(w, 1)
+		total += weights[i]
+	}
+	x := rand.Float64() * total
+	for i, w := range weights {
+		if x < w {
+			return pool[i]
+		}
+		x -= w
+	}
+	return pool[len(pool)-1]
+}
+
+// poolRange is the lowest and highest rating at speed among the pool.
+func poolRange(pool []User, speed string) (lo, hi int) {
+	for i, u := range pool {
+		r := u.RatingFor(speed)
+		if i == 0 || r < lo {
+			lo = r
+		}
+		if i == 0 || r > hi {
+			hi = r
+		}
+	}
+	return lo, hi
 }
 
 // check reports settings the search cannot use.
@@ -67,6 +198,16 @@ func (p SeekParams) check() error {
 	case "", "rated", "casual", "random":
 	default:
 		return fmt.Errorf("unknown rated mode %q", p.RatedMode)
+	}
+	switch p.Filter {
+	case "", "none", "coarse", "fine":
+	default:
+		return fmt.Errorf("unknown decline filter %q", p.Filter)
+	}
+	switch p.Preference {
+	case "", "none", "high", "low":
+	default:
+		return fmt.Errorf("unknown rating preference %q", p.Preference)
 	}
 	return nil
 }
@@ -232,6 +373,9 @@ type SeekChallenge struct {
 	State     string `json:"state"`
 	Reason    string `json:"reason,omitempty"`   // why it was declined, or the error
 	AnswerBy  int64  `json:"answerBy,omitempty"` // while waiting: when it is withdrawn if not answered (Unix ms)
+	// Random: its clock, or rated or casual, was picked at random from the
+	// choices in the settings (as lichess-bot's matchmaking picks them).
+	Random bool `json:"random,omitempty"`
 }
 
 // SeekFailure is a challenge Lichess refused to send.
@@ -609,6 +753,10 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			lo, hi  int
 			unrated []string // speeds your bot has no rating at, for Around
 			asked   bool     // some bot was passed over for being asked already
+			// Rated or casual is picked first, so the decline filter can
+			// pass over the bots that declined that.
+			rated    = params.rated()
+			filtered int // bots passed over for the decline filter
 		)
 		for _, c := range params.clocks() {
 			l, h, ok := rangeAt(c.speed)
@@ -616,7 +764,7 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 				unrated = append(unrated, c.speed)
 				continue
 			}
-			var fit []User
+			var fit, declined []User
 			for _, u := range bots {
 				id := strings.ToLower(u.ID)
 				if id == "" || id == me || !params.fits(u, c.speed, l, h, exclude) {
@@ -625,11 +773,22 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 				if until, ok := sk.resting[id]; ok && time.Now().Before(until) {
 					continue
 				}
+				// The decline filter: coarse passes these bots over; fine
+				// only while another bot fits (lichess-bot's "ready_bots or
+				// online_bots"), asked already or not.
+				if b.declinedFor(params.Filter, u.ID, c.speed, rated) {
+					declined = append(declined, u)
+					continue
+				}
 				if tried[id+"/"+c.speed] {
 					asked = true
 					continue
 				}
 				fit = append(fit, u)
+			}
+			filtered += len(declined)
+			if len(fit) == 0 && !asked && params.Filter == "fine" {
+				fit = declined
 			}
 			if len(fit) > 0 {
 				pool, clock, lo, hi = fit, c, l, h
@@ -640,6 +799,8 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			speeds := params.speeds()
 			msg := fmt.Sprintf("No bot online fits your settings at %s right now (%d online).", speeds, len(bots))
 			switch {
+			case filtered > 0 && !asked:
+				msg = fmt.Sprintf("Every bot online that fits your settings declined a challenge today (%d), so they are passed over (Skip bots that declined).", filtered)
 			case asked:
 				msg = fmt.Sprintf("Every matching bot online has been asked (%d); they will be asked again.", len(tried))
 				tried = map[string]bool{}
@@ -673,11 +834,11 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			}
 			continue // the bots online may have changed meanwhile
 		}
-		u := pool[rand.Intn(len(pool))]
+		u := params.pick(pool, clock.speed, lo, hi)
 		tried[strings.ToLower(u.ID)+"/"+clock.speed] = true
 		lastSent = time.Now()
 		cp := params.ChallengeParams
-		cp.Limit, cp.Increment, cp.Rated = clock.limit, clock.inc, params.rated()
+		cp.Limit, cp.Increment, cp.Rated = clock.limit, clock.inc, rated
 		random := len(params.Times) > 1 || len(params.Increments) > 1 || params.RatedMode == "random"
 		if !b.seekUpdate(sk, func(st *SeekStatus) {
 			st.MinRating, st.MaxRating = lo, hi
@@ -771,7 +932,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 	sent := time.Now().UnixMilli()
 	current := func(st *SeekStatus, id, state, reason string) {
 		st.Challenge = &SeekChallenge{ID: id, At: sent, User: name, Title: u.Title, Rating: rating,
-			Limit: p.Limit, Increment: p.Increment, Rated: p.Rated, Speed: speed, State: state, Reason: reason}
+			Limit: p.Limit, Increment: p.Increment, Rated: p.Rated, Speed: speed, State: state, Reason: reason, Random: random}
 	}
 	failed := func(st *SeekStatus, why string) {
 		st.Failed = &SeekFailure{At: sent, User: name, Title: u.Title, Rating: rating,
@@ -868,6 +1029,10 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 	if got != "timeout" {
 		why = "declined" + reasonText(got)
 		state, reason = "declined", strings.TrimPrefix(reasonText(got), ": ")
+		b.mu.Lock()
+		filter := sk.params.Filter
+		b.mu.Unlock()
+		b.noteDecline(filter, u.ID, got, speed, p.Rated)
 	}
 	b.seekUpdate(sk, func(st *SeekStatus) {
 		st.set("pause", fmt.Sprintf("%s %s.", name, why), seekPause)

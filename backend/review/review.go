@@ -31,6 +31,10 @@ type Request struct {
 	StartFEN   string   `json:"startFen"`
 	Moves      []string `json:"moves"` // UCI
 	MoveTimeMs int      `json:"moveTimeMs"`
+	// Swarm is how many engines work on the game at once, each on its own
+	// positions (1 when not set; at most MaxSwarm). Each runs with the
+	// engine's own options, Threads included.
+	Swarm int `json:"swarm,omitempty"`
 	// Resume holds the positions an analysis stopped early got through:
 	// the new one starts after them and reports them with its own.
 	Resume []Position `json:"resume,omitempty"`
@@ -88,6 +92,19 @@ type Progress struct {
 	Done  int    `json:"done"`
 	Total int    `json:"total"`
 	Error string `json:"error,omitempty"`
+	// Reused: positions of the game that need no search, analysed before
+	// with this engine and at least as much time; Searched: how many of the
+	// rest have been searched so far.
+	Reused   int `json:"reused"`
+	Searched int `json:"searched"`
+	// While running: the position just analysed, its index (ply; 0 is
+	// the start) and the judgments of the moves next to it that both of
+	// whose positions are now known, so each move can be shown as soon as
+	// it is judged. Positions come in any order when a swarm of engines
+	// works on the game. The final Result judges every move the same way.
+	Ply           *int       `json:"ply,omitempty"`
+	Position      *Position  `json:"position,omitempty"`
+	MoveJudgments []Judgment `json:"moveJudgments,omitempty"` // not "judgments": the Result's
 	*Result
 }
 
@@ -97,9 +114,38 @@ type Reviewer struct {
 	emit   func(string, any)
 	cancel context.CancelFunc
 	key    string
+	cache  *Cache
 }
 
-func New(emit func(string, any)) *Reviewer { return &Reviewer{emit: emit} }
+func New(emit func(string, any)) *Reviewer { return &Reviewer{emit: emit, cache: newCache()} }
+
+// UseCacheFile keeps the positions analysed in file, across runs of the
+// app; without it they are kept while it runs.
+func (r *Reviewer) UseCacheFile(file string) { r.cache.Load(file) }
+
+// SearchFENs are the positions of a game that its analysis searches: all
+// but one that ends it on the board. None for a game with no moves.
+func SearchFENs(start chess.Position, moves []chess.Move) []string {
+	if len(moves) == 0 {
+		return nil
+	}
+	var fens []string
+	pos := start
+	for i := 0; i <= len(moves); i++ {
+		if i > 0 {
+			pos = pos.Make(moves[i-1])
+		}
+		if len(pos.LegalMoves()) > 0 {
+			fens = append(fens, pos.FEN())
+		}
+	}
+	return fens
+}
+
+// AnalysedBy is the name of an engine that has analysed every one of the
+// positions (SearchFENs of a game), with any time a move, or "" if none
+// has: the game's computer analysis is complete with it.
+func (r *Reviewer) AnalysedBy(fens []string) string { return r.cache.Covered(fens) }
 
 // Running is the key of the analysis running, or "".
 func (r *Reviewer) Running() string {
@@ -141,9 +187,17 @@ func (r *Reviewer) Start(req Request) error {
 	r.cancel, r.key = cancel, req.Key
 	r.mu.Unlock()
 	go func() {
-		res, err := run(ctx, req, start, func(done int) {
-			r.emit("review", Progress{Key: req.Key, State: "running", Done: done, Total: len(req.Moves) + 1})
+		var reused, searched int
+		res, err := run(ctx, req, start, r.cache, func(done, re, se, ply int, p *Position, js []Judgment) {
+			reused, searched = re, se
+			ev := Progress{Key: req.Key, State: "running", Done: done, Total: len(req.Moves) + 1, Reused: re, Searched: se, Position: p, MoveJudgments: js}
+			if p != nil {
+				ev.Ply = &ply
+			}
+			r.emit("review", ev)
 		})
+		r.cache.Save() // what was searched, even if it stopped
+
 		r.mu.Lock()
 		if r.key == req.Key {
 			r.key, r.cancel = "", nil
@@ -152,7 +206,7 @@ func (r *Reviewer) Start(req Request) error {
 		switch {
 		case ctx.Err() != nil:
 			// Stopped early: what was analysed so far still counts.
-			p := Progress{Key: req.Key, State: "stopped", Done: len(res.Positions), Total: len(req.Moves) + 1}
+			p := Progress{Key: req.Key, State: "stopped", Done: len(res.Positions), Total: len(req.Moves) + 1, Reused: reused, Searched: searched}
 			if len(res.Positions) >= 2 {
 				p.Result = &res
 			}
@@ -160,7 +214,7 @@ func (r *Reviewer) Start(req Request) error {
 		case err != nil:
 			r.emit("review", Progress{Key: req.Key, State: "error", Error: err.Error()})
 		default:
-			r.emit("review", Progress{Key: req.Key, State: "done", Done: len(req.Moves) + 1, Total: len(req.Moves) + 1, Result: &res})
+			r.emit("review", Progress{Key: req.Key, State: "done", Done: len(req.Moves) + 1, Total: len(req.Moves) + 1, Reused: reused, Searched: searched, Result: &res})
 		}
 	}()
 	return nil
@@ -177,63 +231,89 @@ func (r *Reviewer) Stop() {
 	}
 }
 
-func run(ctx context.Context, req Request, start chess.Position, progress func(int)) (Result, error) {
-	best := make(chan string, 4)
-	var mu sync.Mutex
-	var last uci.Info
-	dead := make(chan struct{})
-	var once sync.Once
-	eng, err := uci.Start(req.Engine.Path, req.Engine.Args, uci.Handlers{
-		OnInfo: func(in uci.Info) {
-			if in.MultiPV > 1 {
-				return
-			}
-			mu.Lock()
-			if in.HasScore || len(last.PV) == 0 {
-				last = in
-			} else if len(in.PV) > 0 {
-				last.PV, last.Depth = in.PV, in.Depth
-			}
-			mu.Unlock()
-		},
-		OnBestMove: func(m string) {
-			select {
-			case best <- m:
-			default:
-			}
-		},
-		OnExit: func() { once.Do(func() { close(dead) }) },
-	})
-	if err != nil {
-		return Result{}, err
-	}
-	defer eng.Quit()
-	if err := eng.ApplyOptions(req.Engine.Options, "MultiPV"); err != nil {
-		return Result{}, err
-	}
-	if err := eng.NewGame(); err != nil {
-		return Result{}, err
-	}
-	res := Result{Key: req.Key, Engine: req.Engine.Name, Positions: append([]Position(nil), req.Resume...)}
-	if len(res.Positions) > 0 {
-		progress(len(res.Positions))
-	}
+// progress reports how many positions are done and, for each new one, its
+// index (ply) and the position, with the judgments of the moves it lets be
+// judged: the one leading to it and the one leaving it, whichever have both
+// their positions now. With a swarm, positions come in any order. reused is
+// how many of the game's positions need no search (kept from a stopped
+// analysis or in the cache); searched, how many have been searched so far.
+type progressFunc func(done, reused, searched, ply int, p *Position, js []Judgment)
+
+// MaxSwarm is the most engines one analysis runs at once.
+const MaxSwarm = 32
+
+func run(ctx context.Context, req Request, start chess.Position, cache *Cache, progress progressFunc) (Result, error) {
+	n := len(req.Moves) + 1
+	// The positions of the game, and which are known already.
+	fens := make([]string, 0, n)
+	positions := make([]chess.Position, 0, n)
 	pos := start
-	startFEN := start.FEN()
-	for ply := 0; ply <= len(req.Moves); ply++ {
+	for ply := 0; ply < n; ply++ {
 		if ply > 0 {
 			mv, _ := pos.ParseUCIMove(req.Moves[ply-1])
 			pos = pos.Make(mv)
 		}
-		if ply < len(res.Positions) {
-			continue // analysed before the stop
+		positions = append(positions, pos)
+		fens = append(fens, pos.FEN())
+	}
+	ek := engineKey(req.Engine)
+	got := make([]*Position, n)
+	var reused, searched, done int
+	var todo []int // to search, in order
+	for ply := range positions {
+		switch {
+		case ply < len(req.Resume):
+			p := req.Resume[ply]
+			got[ply] = &p
+			reused++
+			done++
+		case len(positions[ply].LegalMoves()) == 0:
+			// Nothing to search: the game is over on the board. Reported
+			// in order with the rest, below.
+		default:
+			if p, ok := cache.Get(ek, fens[ply], req.MoveTimeMs); ok {
+				got[ply] = &p
+				reused++
+			} else {
+				todo = append(todo, ply)
+			}
 		}
-		var p Position
-		if len(pos.LegalMoves()) == 0 {
-			// Nothing to search: the game is over on the board.
+	}
+	if len(req.Resume) > 0 {
+		progress(done, reused, searched, -1, nil, nil)
+	}
+	judgeAt := func(ply int) (Judgment, bool) { // the move leading to ply
+		if ply < 1 || ply >= n || got[ply-1] == nil || got[ply] == nil {
+			return Judgment{}, false
+		}
+		j, _ := judgeMove(*got[ply-1], *got[ply], req.Moves[ply-1], ply, whiteMoves(start, ply))
+		return j, true
+	}
+	// A position now known: kept, and reported.
+	set := func(ply int, p Position) {
+		got[ply] = &p
+		done++
+		var js []Judgment
+		for _, k := range []int{ply, ply + 1} {
+			if j, ok := judgeAt(k); ok {
+				js = append(js, j)
+			}
+		}
+		progress(done, reused, searched, ply, &p, js)
+	}
+	// What needs no engine first, in order: what was known, and the end of
+	// the game on the board.
+	for ply := len(req.Resume); ply < n; ply++ {
+		pos := positions[ply]
+		switch {
+		case got[ply] != nil:
+			p := *got[ply]
+			got[ply] = nil
+			set(ply, p)
+		case len(pos.LegalMoves()) == 0:
+			var p Position
 			if pos.InCheck() {
 				p.Final = "checkmate"
-				p.Mate = 0
 				p.CP = 10000
 				if pos.Turn == chess.White {
 					p.CP = -10000
@@ -241,78 +321,223 @@ func run(ctx context.Context, req Request, start chess.Position, progress func(i
 			} else {
 				p.Final = "stalemate"
 			}
-			res.Positions = append(res.Positions, p)
-			progress(ply + 1)
+			set(ply, p)
+		}
+	}
+
+	// The rest, by a swarm of engines: each takes the next position not
+	// yet taken, so what is done stays close to a run from the start.
+	finish := func() Result {
+		res := Result{Key: req.Key, Engine: req.Engine.Name}
+		for _, p := range got {
+			if p == nil {
+				break // stopped: the moves up to the first gap are judged
+			}
+			res.Positions = append(res.Positions, *p)
+		}
+		if k := len(res.Positions); k == n {
+			judge(&res, start, req.Moves)
+		} else if k >= 2 {
+			judge(&res, start, req.Moves[:k-1])
+		}
+		return res
+	}
+	if len(todo) == 0 {
+		return finish(), ctx.Err()
+	}
+	swarm := req.Swarm
+	if swarm < 1 {
+		swarm = 1
+	}
+	if swarm > MaxSwarm {
+		swarm = MaxSwarm
+	}
+	if swarm > len(todo) {
+		swarm = len(todo)
+	}
+	wctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type found struct {
+		ply int
+		p   Position
+		err error
+	}
+	queue := make(chan int, len(todo))
+	for _, ply := range todo {
+		queue <- ply
+	}
+	close(queue)
+	results := make(chan found)
+	var wg sync.WaitGroup
+	startFEN := start.FEN()
+	for w := 0; w < swarm; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := startSearcher(req.Engine)
+			if err != nil {
+				select {
+				case results <- found{err: err}:
+				case <-wctx.Done():
+				}
+				return
+			}
+			defer s.quit()
+			for ply := range queue {
+				if wctx.Err() != nil {
+					return
+				}
+				p, err := s.search(wctx, startFEN, req.Moves[:ply], positions[ply], req.MoveTimeMs)
+				if err != nil && wctx.Err() != nil {
+					return
+				}
+				select {
+				case results <- found{ply: ply, p: p, err: err}:
+				case <-wctx.Done():
+					return
+				}
+				if err != nil {
+					return
+				}
+			}
+		}()
+	}
+	go func() { wg.Wait(); close(results) }()
+	var failed error
+	for f := range results {
+		if f.err != nil {
+			if failed == nil {
+				failed = f.err
+			}
+			cancel()
 			continue
 		}
-		mu.Lock()
-		last = uci.Info{}
-		mu.Unlock()
-		cmd := "position fen " + startFEN
-		if ply > 0 {
-			cmd += " moves " + strings.Join(req.Moves[:ply], " ")
-		}
-		eng.Go(cmd, fmt.Sprintf("go movetime %d", req.MoveTimeMs))
-		limit := time.Duration(req.MoveTimeMs)*time.Millisecond + 10*time.Second
-		var bm string
-		select {
-		case bm = <-best:
-		case <-dead:
-			return Result{}, errors.New("the engine stopped unexpectedly")
-		case <-time.After(limit):
-			eng.Stop()
-			select {
-			case bm = <-best:
-			case <-time.After(2 * time.Second):
-				return Result{}, errors.New("the engine did not answer")
-			}
-		case <-ctx.Done():
-			eng.Stop()
-			// The moves analysed so far are judged as a game that ended there.
-			if n := len(res.Positions); n >= 2 {
-				judge(&res, start, req.Moves[:n-1])
-			}
-			return res, ctx.Err()
-		}
-		mu.Lock()
-		in := last
-		mu.Unlock()
-		if in.HasScore {
-			sign := 1
-			if pos.Turn == chess.Black {
-				sign = -1
-			}
-			if in.IsMate {
-				p.Mate = in.Mate * sign
-				p.CP = sign * (10000 - abs(in.Mate))
-				if in.Mate < 0 {
-					p.CP = -p.CP
-				}
-			} else {
-				p.CP = in.ScoreCP * sign
-			}
-		}
-		p.Depth = in.Depth
-		if mv, err := pos.ParseUCIMove(bm); err == nil {
-			p.Best, p.BestS = mv.UCI(), pos.SAN(mv)
-		}
-		q := pos
-		for i, s := range in.PV {
-			if i == 8 {
-				break
-			}
-			mv, err := q.ParseUCIMove(s)
-			if err != nil {
-				break
-			}
-			p.PV = append(p.PV, q.SAN(mv))
-			q = q.Make(mv)
-		}
-		res.Positions = append(res.Positions, p)
-		progress(ply + 1)
+		cache.Put(ek, req.Engine.Name, fens[f.ply], req.MoveTimeMs, f.p)
+		searched++
+		set(f.ply, f.p)
 	}
-	judge(&res, start, req.Moves)
-	return res, nil
+	if ctx.Err() != nil {
+		return finish(), ctx.Err()
+	}
+	if failed != nil {
+		return Result{}, failed
+	}
+	return finish(), nil
+}
+
+// searcher is one engine of an analysis, searching one position at a time.
+type searcher struct {
+	eng  *uci.Engine
+	best chan string
+	mu   sync.Mutex
+	last uci.Info
+	dead chan struct{}
+}
+
+func startSearcher(e Engine) (*searcher, error) {
+	s := &searcher{best: make(chan string, 4), dead: make(chan struct{})}
+	var once sync.Once
+	eng, err := uci.Start(e.Path, e.Args, uci.Handlers{
+		OnInfo: func(in uci.Info) {
+			if in.MultiPV > 1 {
+				return
+			}
+			s.mu.Lock()
+			if in.HasScore || len(s.last.PV) == 0 {
+				s.last = in
+			} else if len(in.PV) > 0 {
+				s.last.PV, s.last.Depth = in.PV, in.Depth
+			}
+			s.mu.Unlock()
+		},
+		OnBestMove: func(m string) {
+			select {
+			case s.best <- m:
+			default:
+			}
+		},
+		OnExit: func() { once.Do(func() { close(s.dead) }) },
+	})
+	if err != nil {
+		return nil, err
+	}
+	s.eng = eng
+	if err := eng.ApplyOptions(e.Options, "MultiPV"); err != nil {
+		eng.Quit()
+		return nil, err
+	}
+	if err := eng.NewGame(); err != nil {
+		eng.Quit()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *searcher) quit() { s.eng.Quit() }
+
+// search analyses the position after moves from startFEN.
+func (s *searcher) search(ctx context.Context, startFEN string, moves []string, pos chess.Position, moveTimeMs int) (Position, error) {
+	var p Position
+	s.mu.Lock()
+	s.last = uci.Info{}
+	s.mu.Unlock()
+	cmd := "position fen " + startFEN
+	if len(moves) > 0 {
+		cmd += " moves " + strings.Join(moves, " ")
+	}
+	s.eng.Go(cmd, fmt.Sprintf("go movetime %d", moveTimeMs))
+	limit := time.Duration(moveTimeMs)*time.Millisecond + 10*time.Second
+	var bm string
+	select {
+	case bm = <-s.best:
+	case <-s.dead:
+		return p, errors.New("the engine stopped unexpectedly")
+	case <-time.After(limit):
+		s.eng.Stop()
+		select {
+		case bm = <-s.best:
+		case <-time.After(2 * time.Second):
+			return p, errors.New("the engine did not answer")
+		}
+	case <-ctx.Done():
+		s.eng.Stop()
+		return p, ctx.Err()
+	}
+	s.mu.Lock()
+	in := s.last
+	s.mu.Unlock()
+	if in.HasScore {
+		sign := 1
+		if pos.Turn == chess.Black {
+			sign = -1
+		}
+		if in.IsMate {
+			p.Mate = in.Mate * sign
+			p.CP = sign * (10000 - abs(in.Mate))
+			if in.Mate < 0 {
+				p.CP = -p.CP
+			}
+		} else {
+			p.CP = in.ScoreCP * sign
+		}
+	}
+	p.Depth = in.Depth
+	if mv, err := pos.ParseUCIMove(bm); err == nil {
+		p.Best, p.BestS = mv.UCI(), pos.SAN(mv)
+	}
+	q := pos
+	for i, m := range in.PV {
+		if i == 8 {
+			break
+		}
+		mv, err := q.ParseUCIMove(m)
+		if err != nil {
+			break
+		}
+		p.PV = append(p.PV, q.SAN(mv))
+		q = q.Make(mv)
+	}
+	return p, nil
 }
 
 func abs(x int) int {
@@ -338,6 +563,46 @@ func winningChances(p Position) float64 {
 
 func winPercent(p Position) float64 { return 50 + 50*winningChances(p) }
 
+// judgeMove judges the move (UCI) played at ply, from the positions before
+// and after it: it needs only those two, so a move can be judged as soon as
+// the position after it is analysed.
+// white: White made the move. Also returns the centipawns lost, unrounded.
+func judgeMove(before, after Position, move string, ply int, white bool) (Judgment, float64) {
+	mover := 1.0
+	if !white {
+		mover = -1
+	}
+	// Losses from the mover's side.
+	loss := mover * (winningChances(before) - winningChances(after))
+	cpBefore := math.Max(-1000, math.Min(1000, float64(before.CP))) * mover
+	cpAfter := math.Max(-1000, math.Min(1000, float64(after.CP))) * mover
+	cpLoss := math.Max(0, cpBefore-cpAfter)
+	winLoss := math.Max(0, mover*(winPercent(before)-winPercent(after)))
+	a := 103.1668*math.Exp(-0.04354*winLoss) - 3.1669 + 1
+	a = math.Max(0, math.Min(100, a))
+	j := Judgment{Ply: ply, Loss: math.Max(0, loss), CPLoss: int(cpLoss), Accuracy: a}
+	switch {
+	case loss >= 0.3:
+		j.Kind, j.Glyph = "blunder", "??"
+	case loss >= 0.2:
+		j.Kind, j.Glyph = "mistake", "?"
+	case loss >= 0.1:
+		j.Kind, j.Glyph = "inaccuracy", "?!"
+	}
+	// The move played was the best one: nothing to suggest.
+	if j.Kind != "" && before.Best != "" && before.Best != move {
+		j.Best = before.BestS
+	} else if j.Kind != "" && before.Best == move {
+		j.Kind, j.Glyph = "", ""
+	}
+	return j, cpLoss
+}
+
+// whiteMoves: White makes the move at ply (1 for the first move).
+func whiteMoves(start chess.Position, ply int) bool {
+	return (ply%2 == 1) == (start.Turn == chess.White)
+}
+
 // judge classifies each move by the winning chances it gave away, and sums
 // up accuracy and average centipawn loss per side, as Lichess does.
 func judge(res *Result, start chess.Position, moves []string) {
@@ -345,7 +610,6 @@ func judge(res *Result, start chess.Position, moves []string) {
 	if len(res.Positions) != n+1 {
 		return
 	}
-	whiteFirst := start.Turn == chess.White
 	wins := make([]float64, n+1)
 	for i, p := range res.Positions {
 		wins[i] = winPercent(p)
@@ -383,43 +647,23 @@ func judge(res *Result, start chess.Position, moves []string) {
 		return math.Max(0.5, math.Min(12, math.Sqrt(sq/cnt)))
 	}
 	for i := 1; i <= n; i++ {
-		white := (i%2 == 1) == whiteFirst
-		before, after := res.Positions[i-1], res.Positions[i]
-		mover := 1.0
+		white := whiteMoves(start, i)
 		s := &sides[0]
 		if !white {
-			mover = -1
 			s = &sides[1]
 		}
-		// Losses from the mover's side.
-		loss := mover * (winningChances(before) - winningChances(after))
-		cpBefore := math.Max(-1000, math.Min(1000, float64(before.CP))) * mover
-		cpAfter := math.Max(-1000, math.Min(1000, float64(after.CP))) * mover
-		cpLoss := math.Max(0, cpBefore-cpAfter)
-		winLoss := math.Max(0, mover*(wins[i-1]-wins[i]))
-		a := 103.1668*math.Exp(-0.04354*winLoss) - 3.1669 + 1
-		a = math.Max(0, math.Min(100, a))
-		j := Judgment{Ply: i, Loss: math.Max(0, loss), CPLoss: int(cpLoss), Accuracy: a}
-		switch {
-		case loss >= 0.3:
-			j.Kind, j.Glyph = "blunder", "??"
+		j, cpLoss := judgeMove(res.Positions[i-1], res.Positions[i], moves[i-1], i, white)
+		switch j.Kind {
+		case "blunder":
 			s.judgment[2]++
-		case loss >= 0.2:
-			j.Kind, j.Glyph = "mistake", "?"
+		case "mistake":
 			s.judgment[1]++
-		case loss >= 0.1:
-			j.Kind, j.Glyph = "inaccuracy", "?!"
+		case "inaccuracy":
 			s.judgment[0]++
-		}
-		// The move played was the best one: nothing to suggest.
-		if j.Kind != "" && before.Best != "" && before.Best != moves[i-1] {
-			j.Best = before.BestS
-		} else if j.Kind != "" && before.Best == moves[i-1] {
-			j.Kind, j.Glyph = "", ""
 		}
 		res.Judgments = append(res.Judgments, j)
 		s.cpl += cpLoss
-		s.accs = append(s.accs, a)
+		s.accs = append(s.accs, j.Accuracy)
 		s.weights = append(s.weights, weightAt(i))
 	}
 	for k, s := range sides {

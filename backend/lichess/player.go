@@ -78,6 +78,9 @@ type Player struct {
 	seek       *PlaySeek
 	sending    bool // a challenge request is on its way
 	seekCancel context.CancelFunc
+
+	runCtx  context.Context     // while signed in: games follow under it
+	playing map[string]GameInfo // ongoing games last read for the home
 }
 
 func NewPlayer(h PlayHooks) *Player {
@@ -166,7 +169,7 @@ func (p *Player) Connect(baseURL, token string) (PlayStatus, error) {
 		return p.Status(), nil
 	}
 	runCtx, runCancel := context.WithCancel(context.Background())
-	p.cancel = runCancel
+	p.cancel, p.runCtx = runCancel, runCtx
 	p.state, p.message = "connected", ""
 	p.mu.Unlock()
 	go p.follow(runCtx, gen)
@@ -193,6 +196,7 @@ func (p *Player) Disconnect() {
 	was := p.state != "off"
 	p.gen++
 	p.state, p.message, p.account, p.client = "off", "", nil, nil
+	p.runCtx, p.playing = nil, nil
 	p.incoming, p.outgoing, p.games, p.order, p.current, p.seek = map[string]*Challenge{}, map[string]*Challenge{}, map[string]*pgame{}, nil, "", nil
 	p.mu.Unlock()
 	if was {
@@ -326,20 +330,8 @@ func (p *Player) onEvent(ctx context.Context, gen int, e Event) {
 			}
 			p.seek = nil
 		}
-		g := &pgame{p: p, id: id, info: info, color: chess.White}
-		if info.Color == "black" {
-			g.color = chess.Black
-		}
-		p.games[id] = g
-		p.order = append(p.order, id)
-		p.trimLocked()
-		// A new game takes over the board.
-		p.current = id
-		p.message = ""
-		gctx, cancel := context.WithCancel(ctx)
-		g.cancel = cancel
+		p.addGameLocked(ctx, info)
 		p.mu.Unlock()
-		go g.run(gctx)
 		p.emit()
 		return
 	case "gameFinish":
@@ -347,6 +339,23 @@ func (p *Player) onEvent(ctx context.Context, gen int, e Event) {
 	}
 	p.mu.Unlock()
 	p.emit()
+}
+
+// addGameLocked starts following a game, which takes over the board.
+func (p *Player) addGameLocked(ctx context.Context, info *GameInfo) {
+	id := info.Key()
+	g := &pgame{p: p, id: id, info: info, color: chess.White}
+	if info.Color == "black" {
+		g.color = chess.Black
+	}
+	p.games[id] = g
+	p.order = append(p.order, id)
+	p.trimLocked()
+	p.current = id
+	p.message = ""
+	gctx, cancel := context.WithCancel(ctx)
+	g.cancel = cancel
+	go g.run(gctx)
 }
 
 func declineSuffix(reason string) string {
@@ -398,6 +407,9 @@ func (p *Player) call(f func(ctx context.Context, c *Client) error) error {
 // Seek looks for an opponent in the lobby until one is found or StopSeek.
 // The Board API allows rapid, classical and correspondence seeks only.
 func (p *Player) Seek(s LobbySeek) error {
+	if s.Days > 0 {
+		return p.seekCorrespondence(s)
+	}
 	if s.Limit <= 0 {
 		return errors.New("choose a time control")
 	}
@@ -437,6 +449,34 @@ func (p *Player) Seek(s LobbySeek) error {
 		cancel()
 		p.emit()
 	}()
+	return nil
+}
+
+// seekCorrespondence puts a correspondence seek in the lobby. Lichess
+// keeps it there until someone accepts it (the game then starts as a
+// gameStart event) or it expires; the Board API cannot withdraw it.
+func (p *Player) seekCorrespondence(s LobbySeek) error {
+	switch s.Days {
+	case 1, 2, 3, 5, 7, 10, 14:
+	default:
+		return errors.New("choose 1, 2, 3, 5, 7, 10 or 14 days a move")
+	}
+	err := p.call(func(ctx context.Context, c *Client) error { return c.Seek(ctx, s) })
+	if err != nil {
+		return err
+	}
+	p.mu.Lock()
+	days := "days"
+	if s.Days == 1 {
+		days = "day"
+	}
+	mode := "casual"
+	if s.Rated {
+		mode = "rated"
+	}
+	p.message = fmt.Sprintf("Your %s correspondence seek (%d %s a move) is in the Lichess lobby; the game starts when someone accepts it.", mode, s.Days, days)
+	p.mu.Unlock()
+	p.emit()
 	return nil
 }
 

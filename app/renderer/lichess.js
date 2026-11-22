@@ -340,8 +340,9 @@ function renderLichess() {
   }));
 }
 
-// A game already going when connecting (or started elsewhere) waits until
-// it is handed to the engine.
+// A game started elsewhere while connected (or one the engine cannot play)
+// waits until it is handed to the engine; games already going when
+// connecting are taken over by themselves.
 async function lxPlay(g) {
   const ok = await confirmDialog(`Let your engine play the game against ${g.opponent}? It moves at once if it is its turn.`, 'Play with engine');
   if (ok) lichessCommand('lichessPlay', { id: g.id });
@@ -802,7 +803,7 @@ function lxSpeed() {
 const SEEK_FIELDS = { time: '#lx-seek-time', inc: '#lx-seek-inc', color: '#lx-seek-color', rated: '#lx-seek-rated',
   mode: '#lx-seek-mode', min: '#lx-seek-min', max: '#lx-seek-max', around: '#lx-seek-around',
   noProv: '#lx-seek-noprov', minGames: '#lx-seek-mingames', exclude: '#lx-seek-exclude', games: '#lx-seek-games',
-  randClock: '#lx-seek-randclock' };
+  randClock: '#lx-seek-randclock', prefer: '#lx-seek-prefer', filter: '#lx-seek-filter' };
 const speedOf = (limit, inc) => {
   const t = limit + 40 * inc;
   return t < 30 ? 'ultraBullet' : t < 180 ? 'bullet' : t < 480 ? 'blitz' : t < 1500 ? 'rapid' : 'classical';
@@ -906,6 +907,7 @@ function seekParams() {
     times: random ? seekChips('times') : [], increments: random ? seekChips('incs') : [],
     noProvisional: $('#lx-seek-noprov').checked, minGames: Math.max(0, Math.round(+$('#lx-seek-mingames').value || 0)),
     exclude: $('#lx-seek-exclude').value.split(/[,\s]+/).map((n) => n.trim()).filter(Boolean),
+    preference: $('#lx-seek-prefer').value, filter: $('#lx-seek-filter').value,
   };
 }
 async function startSeek(games) {
@@ -2115,7 +2117,7 @@ function renderMe() {
   $('#lichess-count').textContent = count ? String(count) : '';
   $('#tab-lichess').classList.toggle('live', lxLiveGames().length > 0 || (s.games ?? []).some((g) => !g.finished));
   renderChallengeLocks();
-  if (!online) return;
+  if (!online) { window.renderLichessHome?.(); return; }
 
   // Quick pairing.
   const seek = s.seek;
@@ -2156,7 +2158,8 @@ function renderMe() {
     expiryNote(c),
     el('span', { className: 'lx-actions' }, [lxButton('Cancel', () => meCommand('lichessAcctCancel', { id: c.id })), ...chDismissButton(c.id, 'you')]),
   ])));
-  $('#lx-me-games').replaceChildren(...s.games.map((g) => {
+  // Games the home lists under Your games (with a small board) are left out here.
+  $('#lx-me-games').replaceChildren(...s.games.filter((g) => !window.homeListsGame?.(g)).map((g) => {
     const onBoard = state?.external?.id === g.id;
     const actions = [];
     if (onBoard) actions.push(el('span', { className: 'lx-onboard', textContent: 'On the board' }));
@@ -2181,6 +2184,7 @@ function renderMe() {
     if (g.message) r.append(el('span', { className: 'lx-note', textContent: g.message }));
     return r;
   }));
+  window.renderLichessHome?.();
 }
 
 function renderSeekTime() {
@@ -2268,7 +2272,7 @@ $('#lx-token-toggle').onclick = (e) => {
 $('#lx-acct-token-link').onclick = (e) => {
   e.preventDefault();
   const base = (lx.settings?.baseUrl || 'https://lichess.org').replace(/\/+$/, '');
-  const scopes = ['board:play', 'challenge:read', 'challenge:write'].map((sc) => `scopes[]=${encodeURIComponent(sc)}`).join('&');
+  const scopes = ['board:play', 'challenge:read', 'challenge:write', 'follow:read'].map((sc) => `scopes[]=${encodeURIComponent(sc)}`).join('&');
   api.openExternal(`${base}/account/oauth/token/create?${scopes}&description=Ponder`).catch((err) => meSetNote(errorText(err)));
 };
 $('#lx-token-form').onsubmit = async (e) => {

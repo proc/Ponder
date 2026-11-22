@@ -193,6 +193,9 @@ function usageOf(u) {
 }
 // Servers that refused stream_options: not sent to them again.
 const noUsageOption = new Set();
+// Models that write nothing within a small cap on their answer (they think
+// first, and the thinking counts): asked without one. "provider|base|model"
+const uncapped = new Set();
 
 // Settings for the request: OpenAI's newer models take no temperature but
 // their own; other servers are given one.
@@ -258,9 +261,15 @@ async function anthropicChat(settings, messages, opts = {}) {
   const { Anthropic, client } = anthropicClient(settings, opts.Anthropic);
   const model = String(settings.model ?? '').trim() || PROVIDERS.anthropic.defaultModel;
   const conv = anthropicMessages(messages);
-  const params = { model, max_tokens: 64000, messages: conv.messages };
+  // A short answer asked for (maxTokens): a small cap, and no thinking asked
+  // for. A model that thinks all the same may use the cap up before it
+  // writes: it is then asked again without one (and not capped again).
+  const capKey = `anthropic|${model}`;
+  const cap = opts.maxTokens > 0 && !uncapped.has(capKey) ? Math.round(opts.maxTokens) : 0;
+  const params = { model, max_tokens: cap || 64000, messages: conv.messages };
   if (conv.system) params.system = conv.system;
-  if (anthropicAdaptive(model)) params.thinking = { type: 'adaptive', display: 'summarized' };
+  if (anthropicAdaptive(model) && !cap) params.thinking = { type: 'adaptive', display: 'summarized' };
+  let stopReason = '';
   let text = '';
   let thinking = '';
   let usage = null;
@@ -281,6 +290,7 @@ async function anthropicChat(settings, messages, opts = {}) {
     }
     const final = await stream.finalMessage();
     usage = usageOf(final.usage);
+    stopReason = final.stop_reason ?? '';
     if (final.stop_reason === 'refusal' && !text.trim()) throw new Error('Claude declined to answer this request');
   } catch (err) {
     if (signal?.aborted) {
@@ -290,8 +300,13 @@ async function anthropicChat(settings, messages, opts = {}) {
     }
     throw anthropicError(Anthropic, err, model);
   }
+  if (!text.trim() && cap && stopReason === 'max_tokens') {
+    uncapped.add(capKey);
+    return anthropicChat(settings, messages, { ...opts, maxTokens: 0 });
+  }
   if (!text.trim()) throw new Error('The model gave an empty answer');
-  return { text: text.trim(), thinking: thinking.trim(), model, usage };
+  // truncated: the cap ended the answer before the model did.
+  return { text: text.trim(), thinking: thinking.trim(), model, usage, truncated: stopReason === 'max_tokens' };
 }
 
 // Asks for commentary on the game: { summary, comments, model }.
@@ -327,8 +342,17 @@ async function chat(settings, messages, opts = {}) {
   // (stream_options); a server that does not know the option is asked again
   // without it, and remembered.
   const askUsage = !noUsageOption.has(base);
+  // A short answer asked for (maxTokens): a cap on the tokens of the answer,
+  // as OpenAI names it (max_completion_tokens) or as other servers do
+  // (max_tokens). A server that refuses the option, or a model that thinks
+  // the cap away before it writes anything, is asked again without it, and
+  // remembered.
+  const capKey = `${providerOf(settings)}|${base}|${model}`;
+  let cap = opts.maxTokens > 0 && !uncapped.has(capKey) ? Math.round(opts.maxTokens) : 0;
+  const capParam = providerOf(settings) === 'openai' ? 'max_completion_tokens' : 'max_tokens';
+  let finish = '';
   const request = (withUsage) => {
-    const payload = JSON.stringify({ model, messages, ...temperatureFor(settings, 0.5), stream: true, ...(withUsage ? { stream_options: { include_usage: true } } : {}) });
+    const payload = JSON.stringify({ model, messages, ...temperatureFor(settings, 0.5), ...(cap ? { [capParam]: cap } : {}), stream: true, ...(withUsage ? { stream_options: { include_usage: true } } : {}) });
     const headers = { Accept: 'text/event-stream, application/json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) };
     if (settings.key) headers.Authorization = `Bearer ${settings.key}`;
     return sendImpl(`${base}/chat/completions`, { method: 'POST', headers, body: payload, signal, onData });
@@ -365,6 +389,7 @@ async function chat(settings, messages, opts = {}) {
       try {
         const json = JSON.parse(data);
         if (json.usage) usage = usageOf(json.usage) ?? usage;
+        if (json.choices?.[0]?.finish_reason) finish = json.choices[0].finish_reason;
         const delta = json.choices?.[0]?.delta;
         const think = delta?.reasoning_content ?? delta?.reasoning;
         if (typeof think === 'string' && think) { reasoning += think; feed(''); }
@@ -378,6 +403,11 @@ async function chat(settings, messages, opts = {}) {
     if (askUsage && (res.status === 400 || res.status === 422) && /stream_options|include_usage/i.test(res.text)) {
       noUsageOption.add(base);
       res = await request(false);
+    }
+    if (cap && (res.status === 400 || res.status === 422) && /max_(completion_)?tokens/i.test(res.text)) {
+      uncapped.add(capKey);
+      cap = 0;
+      res = await request(askUsage && !noUsageOption.has(base));
     }
   } catch (err) {
     if (signal?.aborted) {
@@ -396,6 +426,7 @@ async function chat(settings, messages, opts = {}) {
     try {
       const whole = JSON.parse(res.text);
       const msg = whole.choices?.[0]?.message;
+      finish = whole.choices?.[0]?.finish_reason ?? finish;
       const text = typeof msg?.content === 'string' ? msg.content : Array.isArray(msg?.content) ? msg.content.map((p) => p.text ?? '').join('') : '';
       const think = msg?.reasoning_content ?? msg?.reasoning;
       if (typeof think === 'string') reasoning += think;
@@ -403,8 +434,13 @@ async function chat(settings, messages, opts = {}) {
       feed(text);
     } catch { throw new Error(`${name} did not answer in a form this app reads; is it an OpenAI-compatible API?`); }
   }
+  if (!shown.trim() && cap && finish === 'length') {
+    uncapped.add(capKey);
+    return chat(settings, messages, { ...opts, maxTokens: 0 });
+  }
   if (!shown.trim()) throw new Error('The model gave an empty answer');
-  return { text: shown.trim(), thinking: thought.trim(), model, usage };
+  // truncated: the cap ended the answer before the model did.
+  return { text: shown.trim(), thinking: thought.trim(), model, usage, truncated: finish === 'length' };
 }
 
 // --- The model's context window --------------------------------------------
@@ -454,11 +490,44 @@ async function contextWindow(settings, model, opts = {}) {
   return num(run?.context_length);
 }
 
-// Text to speech from an OpenAI-compatible endpoint (POST /audio/speech),
-// for reading the live commentary aloud. Returns the audio as bytes and
-// its type. OpenAI, and servers that copy its API (Kokoro-FastAPI,
-// openedai-speech, LocalAI, …), answer with the sound itself.
-const TTS_DEFAULTS = { baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini-tts', voice: 'alloy' };
+// Text to speech, for reading the live commentary and the announcer aloud.
+// The sound comes from one of these services, each with its own address,
+// models, voices and API key:
+// - OpenAI: POST /v1/audio/speech.
+// - Google AI: Gemini's speech models through the Gemini API
+//   (POST /v1beta/interactions), with the same kind of key as the AI chat's
+//   Google AI (sent in the x-goog-api-key header, never in the address).
+// - Claude: Anthropic offers no text-to-speech, so it is listed as
+//   unavailable and never asked.
+// - A server of your own that copies OpenAI's API (Kokoro-FastAPI,
+//   openedai-speech, LocalAI, oMLX, …).
+// Each returns the sound as bytes and its type, and the speed the sound is
+// to be played at (1 when the service has made it at the speed asked for).
+const OPENAI_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'];
+const GEMINI_VOICES = ['Achernar', 'Achird', 'Algenib', 'Algieba', 'Alnilam', 'Aoede', 'Autonoe', 'Callirrhoe', 'Charon', 'Despina', 'Enceladus', 'Erinome', 'Fenrir', 'Gacrux', 'Iapetus', 'Kore', 'Laomedeia', 'Leda', 'Orus', 'Puck', 'Pulcherrima', 'Rasalgethi', 'Sadachbia', 'Sadaltager', 'Schedar', 'Sulafat', 'Umbriel', 'Vindemiatrix', 'Zephyr', 'Zubenelgenubi'];
+const TTS_PROVIDERS = {
+  openai: {
+    name: 'OpenAI', kind: 'openai', baseUrl: 'https://api.openai.com/v1', aiProvider: 'openai',
+    model: 'gpt-4o-mini-tts', models: ['gpt-4o-mini-tts', 'tts-1', 'tts-1-hd'], voice: 'alloy', voices: OPENAI_VOICES,
+  },
+  google: {
+    name: 'Google AI (Gemini)', kind: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', aiProvider: 'google',
+    model: 'gemini-3.8-flash-lite-tts', models: ['gemini-3.8-flash-lite-tts', 'gemini-3.8-flash-tts'], voice: 'Kore', voices: GEMINI_VOICES,
+  },
+  anthropic: {
+    name: 'Claude (Anthropic)', unavailable: true,
+    note: 'Anthropic offers no text-to-speech, so Claude cannot read aloud. Claude can still write the commentary, and OpenAI, Google AI or the computer’s own voice can read it.',
+  },
+  custom: { name: 'Your own server (OpenAI-compatible)', kind: 'openai' },
+};
+const TTS_DEFAULTS = { provider: 'openai', baseUrl: TTS_PROVIDERS.openai.baseUrl, model: TTS_PROVIDERS.openai.model, voice: TTS_PROVIDERS.openai.voice };
+// The service of the settings. Settings from before there was a choice
+// had only an address: OpenAI's (or none) is OpenAI, any other a server
+// of your own.
+function ttsProviderOf(t) {
+  if (TTS_PROVIDERS[t?.provider]) return t.provider;
+  return !t?.baseUrl || /api\.openai\.com/i.test(t.baseUrl) ? 'openai' : 'custom';
+}
 function speechBase(url) {
   let u = String(url ?? '').trim() || TTS_DEFAULTS.baseUrl;
   if (!/^https?:\/\//i.test(u)) u = 'http://' + u;
@@ -468,57 +537,156 @@ function speechBase(url) {
   if (parsed.pathname === '' || parsed.pathname === '/') u += '/v1';
   return u.replace(/\/audio\/speech$/, '');
 }
-async function speech({ baseUrl, model, voice, key, instructions }, text, { speed = 1, signal, fetchImpl = fetch } = {}) {
-  const base = speechBase(baseUrl);
+// The address asked: the service's own, or (for tests, and for a server of
+// your own) the one given.
+const ttsBase = (p, baseUrl) => (p === 'custom' || baseUrl ? speechBase(baseUrl) : TTS_PROVIDERS[p].baseUrl);
+const ttsName = (p) => (p === 'custom' ? 'The speech server' : TTS_PROVIDERS[p].name.replace(/ \(.*\)$/, ''));
+
+// What a service's refusal means, in words: the key, the quota, or the
+// service itself.
+function speechStatusError(name, status, detail) {
+  const why = status === 401 || status === 403 ? `${name} refused the API key (${status}). Check the key in Settings → AI.`
+    : status === 429 ? `${name} says there have been too many requests, or the account's quota is used up (429). Wait a little, or check the plan and billing of the account.`
+      : status === 404 ? `${name} does not know this model or address (404). Choose another model in Settings → AI.`
+        : status >= 500 ? `${name} had a problem of its own (${status}). Try again in a moment.`
+          : `${name} answered ${status}.`;
+  return new Error(detail ? `${why} It said: ${detail}` : why);
+}
+async function speechFetch(name, url, init, signal, fetchImpl) {
+  try {
+    return await fetchImpl(url, { ...init, signal });
+  } catch (err) {
+    if (signal?.aborted) throw new Error(signal.reason?.name === 'TimeoutError' ? `${name} took too long to answer.` : 'Stopped');
+    throw new Error(`Could not reach ${name === 'The speech server' ? 'the speech server' : name} at ${new URL(url).origin} (${err.cause?.code ?? err.message}). Check the internet connection${name === 'The speech server' ? ', or whether the server is running' : ''}.`);
+  }
+}
+
+async function speech(opts, text, { speed = 1, signal, fetchImpl = fetch } = {}) {
+  const p = ttsProviderOf(opts);
+  if (TTS_PROVIDERS[p].unavailable) throw new Error(TTS_PROVIDERS[p].note);
+  if (TTS_PROVIDERS[p].kind === 'gemini') return geminiSpeech(opts, text, { speed, signal, fetchImpl });
+  return openaiSpeech({ ...opts, provider: p }, text, { speed, signal, fetchImpl });
+}
+
+// OpenAI, and servers that copy its API: POST /audio/speech, answered with
+// the sound itself.
+async function openaiSpeech({ provider, baseUrl, model, voice, key, instructions }, text, { speed, signal, fetchImpl }) {
+  const base = ttsBase(provider, baseUrl);
   const url = `${base}/audio/speech`;
-  const openai = /api\.openai\.com/i.test(base);
-  // None chosen: OpenAI's defaults at OpenAI; elsewhere the endpoint's first
+  const name = ttsName(provider);
+  const openai = provider === 'openai' || /api\.openai\.com/i.test(base);
+  // None chosen: OpenAI's defaults at OpenAI; elsewhere the server's first
   // speech model, and its own default voice.
   if (!model && !openai) {
-    model = (await speechModels({ baseUrl: base, key }, { signal }).catch(() => ({ models: [] }))).models[0];
-    if (!model) throw new Error('No speech model is chosen, and the speech endpoint lists none: choose one in Settings → AI');
+    model = (await speechModels({ provider, baseUrl: base, key }, { signal }).catch(() => ({ models: [] }))).models[0];
+    if (!model) throw new Error('No speech model is chosen, and the speech server lists none: choose one in Settings → AI.');
   }
-  const body = { model: model || TTS_DEFAULTS.model, input: String(text).slice(0, 4096), response_format: 'mp3' };
-  if (voice || openai) body.voice = voice || TTS_DEFAULTS.voice;
+  model ||= TTS_PROVIDERS.openai.model;
+  const body = { model, input: String(text).slice(0, 4096), response_format: 'mp3' };
+  if (voice || openai) body.voice = voice || TTS_PROVIDERS.openai.voice;
   if (Number.isFinite(speed) && speed !== 1) body.speed = Math.min(4, Math.max(0.25, speed));
-  if (instructions) body.instructions = String(instructions);
+  // OpenAI's older models (tts-1, tts-1-hd) take no speaking style.
+  if (instructions && !(openai && /^tts-1/.test(model))) body.instructions = String(instructions);
   const headers = { 'Content-Type': 'application/json', Accept: 'audio/*' };
   if (key) headers.Authorization = `Bearer ${key}`;
-  const ask = async () => {
-    try {
-      return await fetchImpl(url, { method: 'POST', headers, body: JSON.stringify(body), signal });
-    } catch (err) {
-      if (signal?.aborted) throw new Error(signal.reason?.name === 'TimeoutError' ? 'The speech endpoint took too long to answer' : 'Stopped');
-      throw new Error(`Could not reach the speech endpoint at ${new URL(url).origin} (${err.cause?.code ?? err.message}). Is the server running?`);
-    }
-  };
+  const ask = () => speechFetch(name, url, { method: 'POST', headers, body: JSON.stringify(body) }, signal, fetchImpl);
   let res = await ask();
   // A server that cannot make MP3 is asked for WAV, which every one makes.
   if (res.status === 400 || res.status === 422 || res.status === 500) {
     const detail = await res.clone().text().catch(() => '');
     if (/mp3|format|codec|ffmpeg|encod/i.test(detail)) { body.response_format = 'wav'; res = await ask(); }
   }
-  if (!res.ok) {
-    const detail = errorDetail(await res.text().catch(() => ''));
-    throw new Error(`The speech endpoint answered ${res.status}${res.status === 401 || res.status === 403 ? ' (check its API key in Settings → AI)' : ''}${detail ? `: ${detail}` : ''}`);
-  }
+  if (!res.ok) throw speechStatusError(name, res.status, errorDetail(await res.text().catch(() => '')));
   const type = (res.headers.get('content-type') || 'audio/mpeg').split(';')[0].trim();
   if (!/^audio\/|^application\/octet-stream$/.test(type)) {
-    throw new Error(`The speech endpoint answered with ${type}, not sound; is it an OpenAI-compatible speech API (…/v1/audio/speech)?`);
+    throw new Error(`${name} answered with ${type}, not sound. Is it an OpenAI-compatible speech API (…/v1/audio/speech)?`);
   }
   const data = new Uint8Array(await res.arrayBuffer());
-  if (!data.length) throw new Error('The speech endpoint answered with no sound');
-  return { type: type === 'application/octet-stream' ? 'audio/mpeg' : type, data };
+  if (!data.length) throw new Error(`${name} answered with no sound.`);
+  return { type: type === 'application/octet-stream' ? 'audio/mpeg' : type, data, playbackRate: 1 };
 }
 
-// The speech endpoint's models (GET /models), the speech ones first when
-// it says which; and its voices where it lists them (Kokoro-FastAPI and
-// others: GET /audio/voices). OpenAI does not list its voices: they are
-// known.
-const OPENAI_VOICES = ['alloy', 'ash', 'ballad', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer', 'verse'];
-async function speechModels({ baseUrl, key, model }, { signal, sendImpl } = {}) {
-  const base = speechBase(baseUrl);
-  const opts = { key, signal, name: 'The speech endpoint', ...(sendImpl ? { sendImpl } : {}) };
+// Google AI: a Gemini speech model through the Interactions API. It
+// answers in JSON with the sound in base64, WAV by default. It has no
+// speed setting: the sound is played faster or slower instead. The
+// speaking style goes in the style annotation.
+async function geminiSpeech({ baseUrl, model, voice, key, instructions }, text, { speed, signal, fetchImpl }) {
+  const g = TTS_PROVIDERS.google;
+  const name = ttsName('google');
+  if (!key) throw new Error('Google AI needs an API key: add one in Settings → AI.');
+  const url = `${ttsBase('google', baseUrl)}/interactions`;
+  const content = { type: 'text', text: String(text).slice(0, 4096) };
+  if (instructions) content.annotations = [{ type: 'speech_metadata', style: String(instructions) }];
+  const body = {
+    model: model || g.model,
+    input: [{ type: 'user_input', content: [content] }],
+    response_format: { type: 'audio', mime_type: 'audio/wav' },
+    generation_config: { speech_config: [{ voice: voice || g.voice }] },
+  };
+  const headers = { 'Content-Type': 'application/json', Accept: 'application/json', 'x-goog-api-key': key };
+  const res = await speechFetch(name, url, { method: 'POST', headers, body: JSON.stringify(body) }, signal, fetchImpl);
+  const raw = await res.text().catch(() => '');
+  if (!res.ok) throw speechStatusError(name, res.status, errorDetail(raw));
+  let j;
+  try { j = JSON.parse(raw); } catch { throw new Error(`${name} did not answer in JSON.`); }
+  const audio = geminiAudioOf(j);
+  if (!audio?.data) throw new Error(`${name} answered with no sound. Is the model a speech (TTS) model?`);
+  let data = new Uint8Array(Buffer.from(audio.data, 'base64'));
+  let type = String(audio.mime_type ?? audio.mimeType ?? 'audio/wav').toLowerCase();
+  // Raw PCM (the older preview models' default) is given a WAV header.
+  if (/^audio\/(l16|pcm)/.test(type)) {
+    const rate = Number(/rate=(\d+)/.exec(type)?.[1]) || 24000;
+    data = wavOf(data, rate);
+    type = 'audio/wav';
+  }
+  if (!data.length) throw new Error(`${name} answered with no sound.`);
+  return { type: type.split(';')[0], data, playbackRate: Number.isFinite(speed) && speed > 0 ? Math.min(4, Math.max(0.25, speed)) : 1 };
+}
+// The last sound in an interaction: in its model output steps, or as
+// output_audio.
+function geminiAudioOf(j) {
+  if (j?.output_audio?.data) return j.output_audio;
+  const parts = [];
+  for (const s of j?.steps ?? j?.outputs ?? []) {
+    if (s?.type === 'audio') parts.push(s);
+    for (const c of s?.content ?? []) if (c?.type === 'audio') parts.push(c);
+  }
+  return parts.at(-1);
+}
+// 16-bit mono PCM, little-endian, as a WAV file.
+function wavOf(pcm, rate) {
+  const out = new Uint8Array(44 + pcm.length);
+  const v = new DataView(out.buffer);
+  const str = (o, s) => { for (let i = 0; i < s.length; i++) out[o + i] = s.charCodeAt(i); };
+  str(0, 'RIFF'); v.setUint32(4, 36 + pcm.length, true); str(8, 'WAVE');
+  str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, 'data'); v.setUint32(40, pcm.length, true);
+  out.set(pcm, 44);
+  return out;
+}
+
+// The service's speech models and the chosen model's voices. OpenAI's are
+// known. Google AI is asked which of its models are speech models (the
+// known ones when it lists none). A server of your own is asked
+// (GET /models), its speech ones first when it says which, and its
+// voices where it lists them (GET /audio/voices).
+async function speechModels({ provider, baseUrl, key, model }, { signal, sendImpl, fetchImpl = fetch } = {}) {
+  const p = ttsProviderOf({ provider, baseUrl });
+  const known = TTS_PROVIDERS[p];
+  if (known.unavailable) throw new Error(known.note);
+  if (p === 'openai' && !baseUrl) return { models: known.models, voices: known.voices };
+  if (p === 'google') {
+    if (!key) throw new Error('Google AI needs an API key: add one in Settings → AI.');
+    const res = await speechFetch('Google AI', `${ttsBase('google', baseUrl)}/models?pageSize=1000`, { headers: { Accept: 'application/json', 'x-goog-api-key': key } }, signal, fetchImpl);
+    const raw = await res.text().catch(() => '');
+    if (!res.ok) throw speechStatusError('Google AI', res.status, errorDetail(raw));
+    let listed = [];
+    try { listed = (JSON.parse(raw).models ?? []).map((m) => String(m.name ?? '').replace(/^models\//, '')).filter((id) => /tts/i.test(id)); } catch { /* none */ }
+    return { models: [...new Set([...known.models, ...listed])], voices: known.voices };
+  }
+  const base = ttsBase(p, baseUrl);
+  const opts = { key, signal, name: 'The speech server', ...(sendImpl ? { sendImpl } : {}) };
   const data = await call(`${base}/models`, opts);
   const entries = (Array.isArray(data) ? data : data.data ?? data.models ?? []).map((m) => (typeof m === 'string' ? { id: m } : m)).filter((m) => m.id ?? m.name);
   const idOf = (m) => String(m.id ?? m.name);
@@ -528,14 +696,16 @@ async function speechModels({ baseUrl, key, model }, { signal, sendImpl } = {}) 
   let speechy = told.length ? entries.filter((m) => /tts|speech|audio_out|text-to-speech|text_to_speech/.test(kindOf(m)) && !/stt|transcri/.test(kindOf(m))) : [];
   if (!speechy.length) speechy = entries.filter((m) => /tts|speech|kokoro|voice|piper|xtts|orpheus|bark|f5|melo|parler|chatterbox|dia\b|csm|sesame|marvis|spark|outetts|vibevoice|zonos|fish/i.test(idOf(m)) && !/transcri|whisper|stt\b|parakeet/i.test(idOf(m)));
   const models = [...new Set((speechy.length ? speechy : entries).map(idOf))].sort();
-  return { models, voices: await speechVoices({ baseUrl: base, key, model: model || models[0] }, { signal, sendImpl }) };
+  return { models, voices: await speechVoices({ provider: p, baseUrl: base, key, model: model || models[0] }, { signal, sendImpl }) };
 }
-// The voices of a speech model, where the server lists them (some, like
-// oMLX, by model: ?model=…). OpenAI does not list its voices: they are known.
-async function speechVoices({ baseUrl, key, model }, { signal, sendImpl } = {}) {
-  const base = speechBase(baseUrl);
+// The voices of a speech model: the known ones of OpenAI and Google AI, or
+// those a server of your own lists (some, like oMLX, by model: ?model=…).
+async function speechVoices({ provider, baseUrl, key, model }, { signal, sendImpl } = {}) {
+  const p = ttsProviderOf({ provider, baseUrl });
+  if (p === 'google' || (p === 'openai' && !baseUrl)) return TTS_PROVIDERS[p].voices;
+  const base = ttsBase(p, baseUrl);
   if (/api\.openai\.com/i.test(base)) return OPENAI_VOICES;
-  const opts = { key, signal, name: 'The speech endpoint', ...(sendImpl ? { sendImpl } : {}) };
+  const opts = { key, signal, name: 'The speech server', ...(sendImpl ? { sendImpl } : {}) };
   for (const url of [model ? `${base}/audio/voices?model=${encodeURIComponent(model)}` : null, `${base}/audio/voices`].filter(Boolean)) {
     try {
       const v = await call(url, opts);
@@ -546,4 +716,4 @@ async function speechVoices({ baseUrl, key, model }, { signal, sendImpl } = {}) 
   return [];
 }
 
-module.exports = { speechVoices, speechModels, speech, speechBase, TTS_DEFAULTS, chat, DEFAULTS, PROVIDERS, normalizeBase, buildMessages, parseReply, listModels, annotate, anthropicMessages, contextWindow, usageOf };
+module.exports = { speechVoices, speechModels, speech, speechBase, TTS_DEFAULTS, TTS_PROVIDERS, ttsProviderOf, wavOf, chat, DEFAULTS, PROVIDERS, normalizeBase, buildMessages, parseReply, listModels, annotate, anthropicMessages, contextWindow, usageOf };

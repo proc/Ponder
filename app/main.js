@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, clipboard, safeStorage, shell, Menu, protocol, net, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, clipboard, safeStorage, shell, Menu, protocol, net, powerSaveBlocker, session, systemPreferences } = require('electron');
 const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -60,7 +60,9 @@ const backend = {
       app.exit(1);
       return;
     }
-    this.proc = spawn(bin, [], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+    // The computer analysis keeps the positions it has analysed here.
+    const env = { ...process.env, PONDER_REVIEW_CACHE: path.join(app.getPath('userData'), 'review-cache.json') };
+    this.proc = spawn(bin, [], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true, env });
     readline.createInterface({ input: this.proc.stdout }).on('line', (line) => {
       let msg;
       try { msg = JSON.parse(line); } catch { return; }
@@ -398,6 +400,25 @@ ipcMain.handle('power:keepAwake', (_e, on) => {
   if (on && awakeId == null) awakeId = powerSaveBlocker.start('prevent-display-sleep');
   else if (!on && awakeId != null) { powerSaveBlocker.stop(awakeId); awakeId = null; }
   return awakeId != null;
+});
+// Voice commands (renderer/voice.js): the speech model, and the microphone.
+const voiceModel = require('./voice-model');
+let voiceInstalling = null;
+ipcMain.handle('voice:status', () => voiceModel.status(app.getPath('userData')));
+ipcMain.handle('voice:install', (e) => {
+  voiceInstalling ??= voiceModel.install(app.getPath('userData'), (url, opts) => net.fetch(url, opts),
+    (p) => { if (!e.sender.isDestroyed()) e.sender.send('voice:progress', p); })
+    .finally(() => { voiceInstalling = null; });
+  return voiceInstalling;
+});
+ipcMain.handle('voice:model', () => voiceModel.read(app.getPath('userData')));
+// macOS asks once, in its own dialog; the answer is kept in System Settings.
+ipcMain.handle('voice:micAccess', async () => {
+  if (process.platform !== 'darwin') return true;
+  const now = systemPreferences.getMediaAccessStatus('microphone');
+  if (now === 'granted') return true;
+  if (now === 'not-determined') return systemPreferences.askForMediaAccess('microphone');
+  return false;
 });
 ipcMain.handle('clipboard:write', (_e, text) => clipboard.writeText(String(text)));
 ipcMain.handle('clipboard:read', () => clipboard.readText());
@@ -983,7 +1004,7 @@ ipcMain.handle('ai:contextWindow', async (_e, model) => {
 // one does not cut the other off: a new request ends the one before it on
 // the same channel only.
 const aiChatRuns = new Map(); // channel -> its request in flight
-ipcMain.handle('ai:chat', async (_e, id, messages, channel = 'chat') => {
+ipcMain.handle('ai:chat', async (_e, id, messages, channel = 'chat', options = {}) => {
   const s = loadAi();
   channel = String(channel);
   aiChatRuns.get(channel)?.abort();
@@ -993,8 +1014,10 @@ ipcMain.handle('ai:chat', async (_e, id, messages, channel = 'chat') => {
     .filter((m) => ['system', 'user', 'assistant'].includes(m?.role) && typeof m.content === 'string')
     .map((m) => ({ role: m.role, content: m.content }));
   try {
+    // maxTokens: a cap on the answer, for short ones (the engine's chat).
+    const maxTokens = Number.isFinite(+options?.maxTokens) ? Math.min(4000, Math.max(0, Math.round(+options.maxTokens))) : 0;
     return await ai.chat(await aiRequestWithKey(s), list, {
-      signal: run.signal,
+      signal: run.signal, maxTokens,
       onDelta: (delta) => { if (win && !win.isDestroyed()) win.webContents.send('backend-event', 'aiChat', { id, delta }); },
       onThinking: (thinking) => { if (win && !win.isDestroyed()) win.webContents.send('backend-event', 'aiChat', { id, thinking }); },
     });
@@ -1004,15 +1027,40 @@ ipcMain.handle('ai:chat', async (_e, id, messages, channel = 'chat') => {
 });
 ipcMain.handle('ai:chatCancel', (_e, channel = 'chat') => { aiChatRuns.get(String(channel))?.abort(); });
 
-// Speech for the live commentary from an OpenAI-compatible text-to-speech
-// endpoint, kept under "tts" in the AI settings: its address, model, voice,
-// speaking style and key (encrypted like the AI keys, never sent back to
-// the window). With no key of its own, OpenAI's endpoint uses the OpenAI
-// key of Settings → AI. Nothing is sent until a comment is read aloud with
-// "Speech server" as the voice, or Test is pressed.
-// The address defaults to OpenAI's; the model and voice are only what was
-// chosen ('' for the endpoint's own choice).
-const ttsOf = (s) => ({ baseUrl: ai.TTS_DEFAULTS.baseUrl, model: '', voice: '', ...(s.tts ?? {}) });
+// Speech for the live commentary and the announcer, kept under "tts" in
+// the AI settings. The service is chosen: OpenAI, Google AI, or a server of
+// your own (Claude is listed, but Anthropic offers no speech). Each service
+// keeps its own model, voice, speaking style and key, under
+// "tts.providers", so that switching keeps them; a server of your own keeps
+// its address and the rest at the top of "tts", as before there was a
+// choice. Keys are encrypted like the AI keys and never sent back to the
+// window. With no key of its own, OpenAI and Google AI use the key of the
+// AI chat's OpenAI or Google AI. Nothing is sent until a comment is read
+// aloud with the speech service as the voice, or Test voice is pressed.
+// Settings from before the choice (an address, model, voice and key at the
+// top) are moved to OpenAI's place when the address was OpenAI's.
+function ttsSettings(s) {
+  s.tts ??= {};
+  const t = s.tts;
+  if (!ai.TTS_PROVIDERS[t.provider]) {
+    // On or off as it was, before the fields it is judged by are moved.
+    if (typeof t.enabled !== 'boolean') t.enabled = ttsEnabled(s);
+    t.provider = ai.ttsProviderOf(t);
+    if (t.provider === 'openai') {
+      const slot = (t.providers ??= {}).openai ??= {};
+      for (const k of ['model', 'voice', 'instructions', 'key', 'plainKey']) if (t[k] !== undefined) { slot[k] ??= t[k]; delete t[k]; }
+      delete t.baseUrl;
+    }
+  }
+  return t;
+}
+// The part of the speech settings of one service.
+function ttsSlot(s, p = ttsSettings(s).provider) {
+  const t = ttsSettings(s);
+  if (p === 'custom') return t;
+  t.providers ??= {};
+  return (t.providers[p] ??= {});
+}
 // Off until turned on; settings saved before the switch count as on when
 // a model, voice, key or address of their own was set.
 function ttsEnabled(s) {
@@ -1020,60 +1068,81 @@ function ttsEnabled(s) {
   if (typeof t.enabled === 'boolean') return t.enabled;
   return Boolean(t.model || t.voice || t.key || t.plainKey || (t.baseUrl && t.baseUrl !== ai.TTS_DEFAULTS.baseUrl));
 }
+const ttsHasOwnKey = (slot) => Boolean(slot.key || slot.plainKey);
+// The AI chat's key that a service may use when it has none of its own.
+const ttsAiSlot = (s, p) => (ai.TTS_PROVIDERS[p]?.aiProvider ? aiSlot(s, ai.TTS_PROVIDERS[p].aiProvider) : null);
 const publicTts = (s) => {
-  const t = ttsOf(s);
+  const t = ttsSettings(s);
+  const p = t.provider;
+  const slot = ttsSlot(s, p);
+  const usesAiKey = (id) => !ttsHasOwnKey(ttsSlot(s, id)) && Boolean(ttsAiSlot(s, id) && ttsHasOwnKey(ttsAiSlot(s, id)));
   return {
-    enabled: ttsEnabled(s),
-    baseUrl: t.baseUrl, model: t.model, voice: t.voice, instructions: t.instructions ?? '',
-    hasKey: Boolean(t.key || t.plainKey), defaults: ai.TTS_DEFAULTS,
-    usesAiKey: !(t.key || t.plainKey) && /api\.openai\.com/i.test(t.baseUrl) && Boolean(aiSlot(s, 'openai').key || aiSlot(s, 'openai').plainKey),
+    enabled: ttsEnabled(s), provider: p,
+    baseUrl: p === 'custom' ? (t.baseUrl ?? '') : '', model: slot.model ?? '', voice: slot.voice ?? '', instructions: slot.instructions ?? '',
+    hasKey: ttsHasOwnKey(slot), usesAiKey: usesAiKey(p),
+    providers: Object.entries(ai.TTS_PROVIDERS).map(([id, x]) => ({
+      id, name: x.name, unavailable: Boolean(x.unavailable), note: x.note ?? '',
+      defaultModel: x.model ?? '', defaultVoice: x.voice ?? '', models: x.models ?? [], voices: x.voices ?? [],
+    })),
   };
 };
 ipcMain.handle('tts:settings', () => publicTts(loadAi()));
 ipcMain.handle('tts:save', async (_e, patch) => {
   const s = loadAi();
-  s.tts ??= {};
+  const t = ttsSettings(s);
   patch = patch ?? {};
-  if (typeof patch.enabled === 'boolean') s.tts.enabled = patch.enabled;
-  if (typeof patch.baseUrl === 'string') s.tts.baseUrl = ai.speechBase(patch.baseUrl);
+  if (typeof patch.enabled === 'boolean') t.enabled = patch.enabled;
+  if (typeof patch.provider === 'string') {
+    const x = ai.TTS_PROVIDERS[patch.provider];
+    if (!x) throw new Error('There is no such speech service.');
+    if (x.unavailable) throw new Error(x.note);
+    t.provider = patch.provider;
+  }
+  if (typeof patch.baseUrl === 'string' && t.provider === 'custom') t.baseUrl = ai.speechBase(patch.baseUrl);
+  const slot = ttsSlot(s, t.provider);
   for (const k of ['model', 'voice', 'instructions']) {
-    if (typeof patch[k] === 'string') { const v = patch[k].trim(); if (v) s.tts[k] = v; else delete s.tts[k]; }
+    if (typeof patch[k] === 'string') { const v = patch[k].trim(); if (v) slot[k] = v; else delete slot[k]; }
   }
   if (typeof patch.key === 'string') {
-    delete s.tts.key;
-    delete s.tts.plainKey;
+    delete slot.key;
+    delete slot.plainKey;
     const key = patch.key.trim();
-    if (key && await canEncrypt()) s.tts.key = await encryptSecret(key);
-    else if (key) s.tts.plainKey = key;
+    if (key && await canEncrypt()) slot.key = await encryptSecret(key);
+    else if (key) slot.plainKey = key;
   }
   saveAi(s);
   return publicTts(s);
 });
-// The speech endpoint's key, or OpenAI's from Settings → AI for OpenAI.
-// With no key, a hosted endpoint is not asked (one on this computer or
+// What ai.js is given for the chosen service: its model, voice, style,
+// address (a server of your own) and key: its own, or the AI chat's.
+// With no key, a hosted service is not asked (a server on this computer or
 // network may need none).
-async function ttsKey(s, t) {
-  if (!ttsEnabled(s)) throw new Error('The speech server is off: turn it on in Settings → AI.');
-  const key = (await aiKey(t)) || (/api\.openai\.com/i.test(t.baseUrl) ? await aiKey(aiSlot(s, 'openai')) : '');
-  if (!key && !isLocalAddress(t.baseUrl)) throw new Error('No API key for the speech server: add one in Settings → AI (a server on this computer or network needs none).');
-  return key;
+async function ttsRequest(s) {
+  if (!ttsEnabled(s)) throw new Error('The speech service is off: turn it on in Settings → AI.');
+  const t = ttsSettings(s);
+  const p = t.provider;
+  const x = ai.TTS_PROVIDERS[p];
+  if (x.unavailable) throw new Error(x.note);
+  const slot = ttsSlot(s, p);
+  const key = (await aiKey(slot)) || (ttsAiSlot(s, p) ? await aiKey(ttsAiSlot(s, p)) : '');
+  const req = { provider: p, model: slot.model ?? '', voice: slot.voice ?? '', instructions: slot.instructions ?? '', key };
+  if (p === 'custom') {
+    req.baseUrl = ai.speechBase(t.baseUrl);
+    if (!key && !isLocalAddress(req.baseUrl)) throw new Error('No API key for the speech server: add one in Settings → AI (a server on this computer or network needs none).');
+  } else if (!key) throw new Error(`No API key for ${x.name}: add one under Commentary voice in Settings → AI, or for ${x.name} as the AI provider.`);
+  return req;
 }
 ipcMain.handle('tts:speak', async (_e, text, opts) => {
-  const s = loadAi();
-  const t = ttsOf(s);
-  return ai.speech({ ...t, key: await ttsKey(s, t) }, String(text ?? ''), { speed: Number(opts?.speed) || 1, signal: AbortSignal.timeout(60000) });
+  return ai.speech(await ttsRequest(loadAi()), String(text ?? ''), { speed: Number(opts?.speed) || 1, signal: AbortSignal.timeout(60000) });
 });
-// Its models and voices, for Check in Settings → AI.
+// Its models and voices, for Refresh in Settings → AI.
 ipcMain.handle('tts:models', async () => {
-  const s = loadAi();
-  const t = ttsOf(s);
-  return ai.speechModels({ ...t, key: await ttsKey(s, t) }, { signal: AbortSignal.timeout(15000) });
+  return ai.speechModels(await ttsRequest(loadAi()), { signal: AbortSignal.timeout(15000) });
 });
 // The voices of one model (the voices follow the model chosen).
 ipcMain.handle('tts:voices', async (_e, model) => {
-  const s = loadAi();
-  const t = ttsOf(s);
-  return ai.speechVoices({ ...t, key: await ttsKey(s, t), model: String(model ?? '') || t.model }, { signal: AbortSignal.timeout(15000) });
+  const req = await ttsRequest(loadAi());
+  return ai.speechVoices({ ...req, model: String(model ?? '') || req.model }, { signal: AbortSignal.timeout(15000) });
 });
 
 ipcMain.handle('lichess:save', async (_e, patch) => {
@@ -1144,9 +1213,10 @@ ipcMain.handle('lichess:save', async (_e, patch) => {
 
 // Sign in with Lichess: OAuth with PKCE, which needs no registered app. The
 // browser comes back to a one-off local server with a code, swapped for a
-// token that may play games (board:play) and send and answer challenges.
+// token that may play games (board:play), send and answer challenges, and
+// read the players followed (follow:read) for the Lichess home.
 const OAUTH_CLIENT = 'ponder-chess-gui';
-const OAUTH_SCOPES = 'board:play challenge:read challenge:write';
+const OAUTH_SCOPES = 'board:play challenge:read challenge:write follow:read';
 let signIn = null; // the sign-in in progress: { server, reject }
 
 ipcMain.handle('lichess:signIn', async () => {
@@ -1427,6 +1497,7 @@ function buildMenu() {
       label: 'Game',
       submenu: [
         item('Takeback', 'takeback', { key: 'B' }),
+        item('Voice Commands', 'voice', { key: 'T' }),
         sep,
         item('First Move', 'first', { key: 'Home' }),
         item('Previous Move', 'prev', { key: 'Left' }),
@@ -1509,6 +1580,14 @@ app.whenReady().then(() => {
   });
   buildMenu();
   handleRadioProtocol();
+  // The microphone is for voice commands only: the app's own pages may use
+  // it, for sound alone (never the camera). Other requests are answered as
+  // Electron always has.
+  session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+    if (permission !== 'media') return callback(true);
+    const audioOnly = (details.mediaTypes ?? []).every((t) => t === 'audio');
+    callback(audioOnly && String(details.requestingUrl ?? wc.getURL()).startsWith('file:'));
+  });
   backend.start();
   applyDatabase(loadDatabase()).catch(() => {});
   createWindow();

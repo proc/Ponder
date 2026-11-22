@@ -25,16 +25,28 @@ contextBridge.exposeInMainWorld('board', {
     annotate: (game) => ipcRenderer.invoke('ai:annotate', game),
     cancel: () => ipcRenderer.invoke('ai:cancel'),
     contextWindow: (model) => ipcRenderer.invoke('ai:contextWindow', model),
-    chat: (id, messages, channel) => ipcRenderer.invoke('ai:chat', id, messages, channel),
+    chat: (id, messages, channel, options) => ipcRenderer.invoke('ai:chat', id, messages, channel, options),
     chatCancel: (channel) => ipcRenderer.invoke('ai:chatCancel', channel),
   },
-  // Text to speech for the live commentary (an OpenAI-compatible endpoint).
+  // Text to speech for the live commentary: OpenAI, Google AI or a server of your own.
   tts: {
     settings: () => ipcRenderer.invoke('tts:settings'),
     save: (patch) => ipcRenderer.invoke('tts:save', patch),
     speak: (text, opts) => ipcRenderer.invoke('tts:speak', text, opts),
     models: () => ipcRenderer.invoke('tts:models'),
     voices: (model) => ipcRenderer.invoke('tts:voices', model),
+  },
+  // Voice commands: the speech model (downloaded once) and the microphone.
+  voice: {
+    status: () => ipcRenderer.invoke('voice:status'),
+    install: () => ipcRenderer.invoke('voice:install'),
+    model: () => ipcRenderer.invoke('voice:model'),
+    micAccess: () => ipcRenderer.invoke('voice:micAccess'),
+    onProgress: (handler) => {
+      const f = (_e, p) => handler(p);
+      ipcRenderer.on('voice:progress', f);
+      return () => ipcRenderer.removeListener('voice:progress', f);
+    },
   },
   loadThemes: () => ipcRenderer.invoke('themes:load'),
   music: {

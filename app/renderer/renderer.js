@@ -963,6 +963,12 @@ async function tryMove(from, to) {
     if (!promo) return;
     move = from + to + promo;
   }
+  await playMove(move);
+}
+
+// Play a legal move (UCI) on the board: in the game, the puzzle, or as a
+// variation while exploring. Voice commands (voice.js) come here too.
+async function playMove(move) {
   if (puzzleView) { puzzleMove(move); return; }
   if (exploring()) { explore(move); return; }
   try {
@@ -1281,8 +1287,11 @@ async function fillRecentGames(card) {
   card.hidden = false;
 }
 
-function renderMoves() {
+// steady: drawn again for what came in meanwhile (the computer
+// analysis as it runs): the list stays where it is scrolled to.
+function renderMoves({ steady = false } = {}) {
   const box = $('#moves');
+  const top = box.scrollTop;
   const [, turn, , , , fullmove] = state.startFen.split(' ');
   let number = +fullmove || 1;
   let whiteNext = turn === 'w';
@@ -1359,7 +1368,8 @@ function renderMoves() {
   box.classList.toggle('start', blank);
   if (blank) nodes.push(startScreen());
   box.replaceChildren(...nodes);
-  if (!blank) (box.querySelector('.move.current, .vmove.current') ?? box.lastElementChild)?.scrollIntoView({ block: 'nearest' });
+  if (steady) box.scrollTop = top;
+  else if (!blank) (box.querySelector('.move.current, .vmove.current') ?? box.lastElementChild)?.scrollIntoView({ block: 'nearest' });
   $('#nav-first').disabled = $('#nav-prev').disabled = ply === 0 && !varNode;
   $('#nav-next').disabled = varNode ? !varNode.children.length : ply === livePly();
   $('#nav-last').disabled = ply === livePly() && !varNode;
@@ -1624,6 +1634,7 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'm' || e.key === 'M') toggleSounds();
   else if (e.key === 'l' || e.key === 'L') $('#btn-analysis').click();
   else if (e.key === 'b' || e.key === 'B') takeback();
+  else if (e.key === 't' || e.key === 'T') window.voice?.toggle();
   else if (e.key === '?') $('#dlg-keys').showModal();
   else return;
   e.preventDefault();
@@ -2747,8 +2758,10 @@ function applyState(next) {
     tree = { branches: new Map() }; varNode = null; if (puzzleView) window.leavePuzzle?.();
     notes = { before: null, moves: new Map(), dirty: false };
   }
-  // A takeback takes the notes on the moves it removed.
-  for (const ply of [...notes.moves.keys()]) if (ply > next.moves.length) notes.moves.delete(ply);
+  // A takeback takes the notes on the moves it removed, and on any move
+  // played in place of one taken back.
+  const replaced = (ply) => !newGame && prev?.moves?.[ply - 1] && prev.moves[ply - 1].uci !== next.moves[ply - 1]?.uci;
+  for (const ply of [...notes.moves.keys()]) if (ply > next.moves.length || replaced(ply)) notes.moves.delete(ply);
   // Watching a game (someone's on Lichess, your engine's, a tournament's):
   // the analysis rests when the game ends and takes up again with the next
   // one. Not if you paused it yourself, and not once you have turned it off.
@@ -2791,6 +2804,7 @@ function applyState(next) {
   if (newGame && typeof renderWatchStrip === 'function') renderWatchStrip();
   if (newGame) window.maybeVersus?.(prev);
   window.renderPositionBar?.();
+  window.syncEngineChat?.(); // before the chat: a game against an engine may have one
   window.syncChat?.();
   window.syncMatchHistory?.();
   window.syncCommentary?.();
@@ -2895,6 +2909,8 @@ api.onEvent((event, data) => {
     lichessStatus(data);
   } else if (event === 'lichessAccount') {
     window.lichessAccountStatus?.(data);
+  } else if (event === 'lichessBotMove') {
+    window.engineChatBotMove?.(data); // your engine's move on Lichess: its chat message, if due
   } else if (event === 'lichessChat') {
     window.lichessChatEvent?.(data);
   } else if (event === 'lichessWatch') {
@@ -3066,14 +3082,22 @@ function pgnAnnotations({ kept = false } = {}) {
   for (let ply = 1; ply <= state.moves.length; ply++) {
     const a = notes.moves.get(ply);
     const it = auto[ply];
-    const nags = [a?.nag || it?.nag, a?.pos, ...(a?.other ?? [])].filter(Boolean);
+    // The analysis's mark, unless you made one: a mark an earlier analysis
+    // left gives way to this one's, where this one judged the move.
+    const autoNag = !a?.nag || Boolean(a.autoNag && it);
+    const nag = autoNag ? (it ? it.nag : a?.nag) : a.nag;
+    const nags = [nag, a?.pos, ...(a?.other ?? [])].filter(Boolean);
     if (nags.length) ann.nags[ply] = nags;
-    // An evaluation the game already carries (from its file) is kept: the
-    // analysis adds its own only where there is none.
-    const hasEval = /\[%eval[^\]]*\]/.test(a?.cmds ?? '');
+    const comment = a?.comment || it?.text;
+    // "[%auto]" and "[%autonag]" mark the comment and the mark as the
+    // analysis's, so that a new analysis can replace them.
+    const ours = [comment && (a?.comment ? a.auto : true) ? '[%auto]' : '', nag && (autoNag || a?.autoNag) ? '[%autonag]' : ''];
+    // The evaluation saved is the one shown: this analysis's, in place of
+    // one the game carried (from its file, perhaps an earlier analysis).
+    const cmds = it?.ev ? (a?.cmds ?? '').replace(/\[%eval[^\]]*\]/g, '').replace(/\s+/g, ' ').trim() : a?.cmds;
     // "[%ai]" marks a comment as the AI's in the file, so that it is known
     // as such when the game is opened again (PGN readers pass over such tags).
-    const text = [a?.cmds, a?.ai && a.comment ? '[%ai]' : '', hasEval ? '' : it?.ev, a?.comment || it?.text].filter(Boolean).join(' ').trim();
+    const text = [cmds, a?.ai && a.comment ? '[%ai]' : '', ...ours, it?.ev, comment].filter(Boolean).join(' ').trim();
     if (text) ann.comments[ply] = text;
   }
   if (notes.before?.comment) ann.before = `${notes.before.ai ? '[%ai] ' : ''}${notes.before.comment}`;
@@ -3170,12 +3194,14 @@ const currentIndex = () => (state?.loaded && collection && state.source === coll
 const GAME_COLUMNS = [
   ['index', 'c-num', '#', 'Place in the file'], ['white', 'c-white', 'White'], ['black', 'c-black', 'Black'],
   ['result', 'c-result', 'Result'], ['event', 'c-event', 'Event'], ['date', 'c-date', 'Date'],
-  ['round', 'c-round', 'Round'], ['moves', 'c-plies', 'Moves'],
+  // Not a sort: the backend works it out for the rows shown only.
+  ['analysed', 'c-analysed', 'Analysed', 'Whether the computer analysis has gone through the whole game', false],
+  ['moves', 'c-plies', 'Moves'],
 ];
 const gamesSort = (() => {
   try {
     const saved = JSON.parse(localStorage.getItem('gamesSort') ?? '{}') ?? {};
-    if (GAME_COLUMNS.some(([by]) => by === saved.by)) return { by: saved.by, desc: Boolean(saved.desc) };
+    if (GAME_COLUMNS.some(([by, , , , sorts]) => by === saved.by && sorts !== false)) return { by: saved.by, desc: Boolean(saved.desc) };
   } catch { /* file order */ }
   return { by: 'index', desc: false };
 })();
@@ -3234,6 +3260,32 @@ async function fetchGames() {
   if (id !== listRequest || !collection || !list) return; // superseded
   collection.list = list;
   renderGames();
+  fetchAnalysed();
+}
+
+// Which of the games listed the computer analysis has covered completely
+// (every position, by one engine): index → the engine's name. Asked after
+// the rows are drawn, since the backend reads each game's moves for it.
+let analysedRequest = 0;
+async function fetchAnalysed() {
+  const games = collection?.list?.games;
+  if (!games?.length) return;
+  const id = ++analysedRequest;
+  const found = await command('gamesAnalysed', { indices: games.map((g) => g.index) });
+  if (id !== analysedRequest || !found || collection?.list?.games !== games) return;
+  collection.analysed = new Map(Object.entries(found).map(([i, name]) => [+i, name]));
+  for (const row of $('#games-list').querySelectorAll('.game-row[data-index]')) fillAnalysed(row);
+  window.renderGamesSelection?.(); // its count of games not analysed yet
+}
+window.refreshGamesAnalysed = fetchAnalysed;
+
+function fillAnalysed(row) {
+  const name = collection?.analysed?.get(+row.dataset.index);
+  const cell = row.querySelector('.c-analysed');
+  if (!cell) return;
+  cell.textContent = name ? '✓' : '';
+  cell.title = name ? `Computer analysis complete (${name})` : '';
+  cell.setAttribute('aria-label', name ? 'Analysed' : 'Not analysed');
 }
 
 function renderGames() {
@@ -3258,7 +3310,6 @@ function renderGames() {
   const current = currentIndex();
   const cell = (cls, text) => el('span', { className: cls, textContent: text, title: text });
   const date = (d) => (d ?? '').replace(/\.\?\?/g, '').replace(/^\?+$/, '');
-  const round = (r) => (r && r !== '-' && r !== '?' ? r : '');
   // The result is a small badge; the winner's name stands out.
   const results = { '1-0': ['1–0', 'white'], '0-1': ['0–1', 'black'], '1/2-1/2': ['½–½', 'draw'] };
   const rows = list.games.map((g) => {
@@ -3279,18 +3330,23 @@ function renderGames() {
       el('span', { className: 'c-result', title: g.result || '*' }, [el('b', { className: `res ${resKind}`, textContent: resText })]),
       cell('c-event', g.event === '?' ? '' : g.event),
       cell('c-date', date(g.date)),
-      cell('c-round', round(g.round)),
+      cell('c-analysed', ''),
       cell('c-plies', String(Math.ceil(g.plies / 2))),
       error ? el('span', { className: 'c-error', textContent: error }) : '',
     ]);
     row.dataset.index = g.index;
+    fillAnalysed(row);
     if (g.index === current) row.classList.add('current');
+    if (window.gamesSelected?.(g.index)) { row.classList.add('selected'); row.setAttribute('aria-selected', 'true'); }
     if (error) row.classList.add('broken');
-    row.onclick = () => selectGame(g.index);
+    // ⌘/Ctrl and Shift choose several games (games-select.js); a plain
+    // click shows the one.
+    row.onclick = (e) => { if (!window.gamesRowClick?.(e, g.index)) selectGame(g.index); };
     return row;
   });
   if (rows.length) {
-    rows.unshift(el('div', { className: 'game-row head' }, GAME_COLUMNS.map(([by, cls, text, hint]) => {
+    rows.unshift(el('div', { className: 'game-row head' }, GAME_COLUMNS.map(([by, cls, text, hint, sorts]) => {
+      if (sorts === false) return el('span', { className: cls, textContent: text, title: hint });
       const on = gamesSort.by === by;
       const b = el('button', {
         type: 'button', className: `sort ${cls}` + (on ? ' on' : '') + (on && gamesSort.desc ? ' desc' : ''), textContent: text,
@@ -3307,6 +3363,7 @@ function renderGames() {
   const focused = document.activeElement?.closest?.('#games-list .game-row')?.dataset.index ?? gamesFocus;
   gamesFocus = null;
   $('#games-list').replaceChildren(...rows);
+  window.renderGamesSelection?.();
   if (focused != null) {
     const all = [...$('#games-list').querySelectorAll('.game-row[data-index]')];
     (all.find((r) => r.dataset.index === String(focused)) ?? (all.length && +focused > +all.at(-1).dataset.index ? all.at(-1) : null))?.focus({ preventScroll: true });
@@ -4420,8 +4477,7 @@ const analysis = { on: false, sentFen: null, data: null, paused: false, held: fa
 // Analysis pauses while an engine is playing: it would share the computer
 // with the engine in the game.
 const engineIsPlaying = () => (state?.active && ['white', 'black'].some((s) => state.players?.[s]?.type === 'engine'))
-  || playLive()
-  || Boolean(window.lichessPlaying?.()) || Boolean(window.tournamentRunning?.()) || Boolean(window.reviewRunning?.())
+  || Boolean(window.tournamentRunning?.()) || Boolean(window.reviewRunning?.())
   || Boolean(window.puzzleUnsolved?.());
 
 async function startAnalysis() {

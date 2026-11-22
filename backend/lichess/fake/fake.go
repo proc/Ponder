@@ -49,6 +49,7 @@ type challenge struct {
 	Color       string         `json:"color"`
 	Direction   string         `json:"direction,omitempty"`
 	Decline     string         `json:"declineReason,omitempty"`
+	DeclineKey  string         `json:"declineReasonKey,omitempty"`
 
 	limit, inc int // seconds
 	variant    string
@@ -56,6 +57,7 @@ type challenge struct {
 
 // Game is a game between the bot and a fake opponent.
 type Game struct {
+	gone      bool // ended quietly: its stream 404s
 	ID        string
 	BotWhite  bool
 	Opponent  user
@@ -91,6 +93,7 @@ type Server struct {
 	Others map[string]string
 	Bot    bool          // the account is a Bot account
 	Delay  time.Duration // opponent "thinking" time
+	Still  bool          // opponents in the bot's games do not move
 	// Opponents that never accept outgoing challenges.
 	Decliners map[string]string // username → decline reason
 	MaxPlies  int               // games longer than this are drawn (default 300)
@@ -110,6 +113,8 @@ type Server struct {
 	// FailAnswers makes the next accepts, declines and cancels of challenges
 	// fail with 500 Internal Server Error, the challenge staying as it was.
 	FailAnswers int
+	// failChat: rooms whose messages fail (FailChat).
+	failChat map[string]bool
 	// Like Lichess, the spectator stream (/api/stream/game) starts by
 	// replaying every position of the game; StreamLag sends each position
 	// that many moves late, and positions after plies in Drop are lost.
@@ -126,6 +131,16 @@ type Server struct {
 	DrawOffers int
 	// OAuth: the code challenges of sign-ins in progress, by code.
 	oauth map[string]string
+	// The players the account follows (/api/rel/following); those in
+	// Offline show as offline. NoFollowScope refuses the list with 403, as
+	// for a token without follow:read.
+	Following     []string
+	Offline       map[string]bool
+	NoFollowScope bool
+	// The correspondence seeks in the lobby (/lobby/seeks), and the ones
+	// the account made (POST /api/board/seek with days).
+	Lobby     []map[string]any
+	CorrSeeks []string
 
 	mu        sync.Mutex
 	firstName string // the account's name for Token, when Others are set
@@ -144,6 +159,11 @@ func New(token, username string) *Server {
 		Online: []OnlineBot{{"maia1", 1500}, {"SlowBot", 1900}, {"grumpy", 1700}, {"picky", 1750},
 			{"sleepy", 1650}, {"strongbot", 2600}},
 		AcceptOffers: true, oauth: map[string]string{},
+		Following: []string{"Frank", "maia1", "Bob", "Carol"}, Offline: map[string]bool{"bob": true, "carol": true},
+		Lobby: []map[string]any{
+			{"id": "seek0001", "username": "Dana", "rating": 1610, "variant": map[string]string{"key": "standard"}, "perf": map[string]string{"key": "correspondence"}, "mode": 1, "days": 3},
+			{"id": "seek0002", "username": "Eve", "rating": 1420, "provisional": true, "variant": map[string]string{"key": "standard"}, "perf": map[string]string{"key": "correspondence"}, "mode": 0, "days": 7, "color": "white"},
+		},
 		pending: map[string]*challenge{}, games: map[string]*Game{}, rng: rand.New(rand.NewSource(1))}
 }
 
@@ -232,8 +252,70 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case path == "/api/account":
 		s.mu.Lock()
 		u := s.me()
+		playing := 0
+		for _, g := range s.games {
+			if !g.auto && g.Status == "started" {
+				playing++
+			}
+		}
 		s.mu.Unlock()
-		ok(u)
+		ok(map[string]any{"id": u.ID, "username": u.Name, "title": u.Title, "url": "https://lichess.org/@/" + u.Name,
+			"createdAt": 1600000000000, "seenAt": time.Now().UnixMilli(),
+			"perfs": map[string]any{
+				"bullet":         map[string]any{"rating": 1432, "games": 210, "rd": 60, "prog": -12},
+				"blitz":          map[string]any{"rating": 1588, "games": 1204, "rd": 45, "prog": 23},
+				"rapid":          map[string]any{"rating": 1650, "games": 312, "rd": 50, "prog": 4},
+				"classical":      map[string]any{"rating": 1500, "games": 3, "rd": 230, "prov": true},
+				"correspondence": map[string]any{"rating": 1720, "games": 41, "rd": 80},
+				"puzzle":         map[string]any{"rating": 1904, "games": 2310, "rd": 70},
+			},
+			"count":    map[string]int{"all": 1770, "rated": 1650, "win": 850, "loss": 780, "draw": 140, "playing": playing},
+			"playTime": map[string]int{"total": 1234567},
+			"profile":  map[string]string{"flag": "NO"}})
+	case path == "/api/account/playing":
+		s.mu.Lock()
+		var now []map[string]any
+		for _, g := range s.games {
+			if g.auto || g.Status != "started" {
+				continue
+			}
+			info := s.gameInfoLocked(g)
+			mine := info["isMyTurn"].(bool)
+			w, b := s.clocksLocked(g)
+			left := w
+			if !g.BotWhite {
+				left = b
+			}
+			info["secondsLeft"] = left / 1000
+			info["hasMoved"] = len(g.Moves) >= 2
+			info["source"] = "lobby"
+			if n := len(g.Moves); n > 0 {
+				info["lastMove"] = g.Moves[n-1]
+			}
+			if mine {
+				now = append([]map[string]any{info}, now...)
+			} else {
+				now = append(now, info)
+			}
+		}
+		s.mu.Unlock()
+		if now == nil {
+			now = []map[string]any{}
+		}
+		ok(map[string]any{"nowPlaying": now})
+	case path == "/api/rel/following":
+		s.mu.Lock()
+		names, refuse := append([]string{}, s.Following...), s.NoFollowScope
+		s.mu.Unlock()
+		if refuse {
+			w.WriteHeader(403)
+			fmt.Fprint(w, `{"error":"Missing scope"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		for _, n := range names {
+			fmt.Fprintln(w, line(fakeProfile(n)))
+		}
 	case path == "/api/bot/account/upgrade":
 		s.mu.Lock()
 		s.Bot = true
@@ -277,6 +359,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			bad("Invalid chat message")
 			return
 		}
+		if s.failChat[room] {
+			s.mu.Unlock()
+			w.WriteHeader(429)
+			fmt.Fprint(w, `{"error":"Too many requests. Try again later."}`)
+			return
+		}
 		s.chatLocked(g, s.Username, room, text)
 		// Someone answers, so there is a conversation to see.
 		who := g.Opponent.Name
@@ -287,6 +375,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 		ok(nil)
 	case path == "/api/board/seek" && r.Method == "POST":
+		r.ParseForm()
+		if days := r.Form.Get("days"); days != "" {
+			s.mu.Lock()
+			s.CorrSeeks = append(s.CorrSeeks, days)
+			id := fmt.Sprintf("corr%04d", len(s.CorrSeeks))
+			s.mu.Unlock()
+			ok(map[string]string{"id": id})
+			return
+		}
 		s.seek(w, r)
 	case len(parts) == 5 && (parts[1] == "bot" || parts[1] == "board") && parts[2] == "game" && (parts[4] == "resign" || parts[4] == "abort"):
 		if err := s.botEnd(parts[3], parts[4]); err != nil {
@@ -313,6 +410,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if ch != nil {
 			delete(s.pending, parts[2])
 			ch.Decline = r.Form.Get("reason")
+			ch.DeclineKey = strings.ToLower(ch.Decline)
 			typ, status := "challengeCanceled", "canceled"
 			if parts[3] == "decline" {
 				typ, status = "challengeDeclined", "declined"
@@ -452,10 +550,15 @@ func (s *Server) gameInfoLocked(g *Game) map[string]any {
 	if g.BotWhite {
 		color = "white"
 	}
+	speed := "blitz"
+	if g.limit < 0 {
+		speed = "correspondence"
+	}
 	return map[string]any{
 		"id": g.ID, "gameId": g.ID, "fullId": g.ID + "abcd", "color": color, "fen": g.pos.FEN(),
-		"rated": g.Rated, "speed": "blitz", "variant": map[string]string{"key": "standard", "name": "Standard"},
+		"rated": g.Rated, "speed": speed, "variant": map[string]string{"key": "standard", "name": "Standard"},
 		"isMyTurn": (g.pos.Turn == chess.White) == g.BotWhite,
+		"status":   map[string]any{"name": g.Status},
 		"opponent": map[string]any{"id": g.Opponent.ID, "username": g.Opponent.Name, "rating": g.Opponent.Rating},
 	}
 }
@@ -516,6 +619,17 @@ func (s *Server) chatLocked(g *Game, username, room, text string) {
 	}
 }
 
+// FailChat makes messages posted in a room of the chat (player or
+// spectator) fail, as Lichess does when it rate-limits, until set back.
+func (s *Server) FailChat(room string, fail bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failChat == nil {
+		s.failChat = map[string]bool{}
+	}
+	s.failChat[room] = fail
+}
+
 // Say posts a chat message in a game as username (room: player or
 // spectator). It reports whether there is such a game.
 func (s *Server) Say(id, username, room, text string) bool {
@@ -532,7 +646,7 @@ func (s *Server) Say(id, username, room, text string) bool {
 func (s *Server) streamGame(w http.ResponseWriter, r *http.Request, id string) {
 	s.mu.Lock()
 	g := s.games[id]
-	if g == nil {
+	if g == nil || g.gone {
 		s.mu.Unlock()
 		w.WriteHeader(404)
 		fmt.Fprint(w, `{"error":"Not found"}`)
@@ -588,6 +702,12 @@ func (s *Server) public(w http.ResponseWriter, r *http.Request) bool {
 		fmt.Fprint(w, `{"error":"Not found"}`)
 	}
 	switch {
+	case path == "/lobby/seeks":
+		s.mu.Lock()
+		l := append([]map[string]any{}, s.Lobby...)
+		s.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, line(l))
 	case path == "/tablebase/standard":
 		s.mu.Lock()
 		s.TablebaseAsked++
@@ -668,7 +788,7 @@ func (s *Server) public(w http.ResponseWriter, r *http.Request) bool {
 			if id == "" {
 				continue
 			}
-			st := map[string]any{"id": id, "name": id, "online": true}
+			st := map[string]any{"id": id, "name": id, "online": !s.Offline[id]}
 			for _, b := range s.Online {
 				if strings.ToLower(b.Name) == id {
 					st["name"], st["title"] = b.Name, "BOT"
@@ -921,7 +1041,7 @@ func (s *Server) publishMovesLocked(g *Game) {
 func (s *Server) streamMoves(w http.ResponseWriter, r *http.Request, id string) {
 	s.mu.Lock()
 	g := s.games[id]
-	if g == nil {
+	if g == nil || g.gone {
 		s.mu.Unlock()
 		w.WriteHeader(404)
 		fmt.Fprint(w, `{"error":"Not found"}`)
@@ -1017,7 +1137,7 @@ func (s *Server) AutoGame(white, black string, limit, inc int) string {
 
 // opponentTurnLocked plays the opponent's move after a delay.
 func (s *Server) opponentTurnLocked(g *Game) {
-	if g.Status != "started" || (!g.auto && (g.pos.Turn == chess.White) == g.BotWhite) {
+	if g.Status != "started" || (!g.auto && (g.pos.Turn == chess.White) == g.BotWhite) || (s.Still && !g.auto) {
 		return
 	}
 	ply := len(g.Moves)
@@ -1339,6 +1459,62 @@ func newChallenge(id string, from, to user, rated bool, limit, inc int, color, v
 		Rated:   rated, Speed: "blitz", TimeControl: tc, Color: color, limit: limit, inc: inc, variant: variant}
 }
 
+// StartGame starts a game of the bot against a fake player as if it had
+// begun elsewhere (before Ponder connected, or by another program), with
+// moves (UCI) already played, and returns its id. A negative limit makes a
+// correspondence game. Connected streams get its gameStart.
+func (s *Server) StartGame(opp string, botWhite bool, limit, inc int, moves ...string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := newChallenge(s.id(), user{ID: strings.ToLower(opp), Name: opp, Rating: 1700}, s.me(), false, limit, inc, "random", "standard")
+	g := &Game{ID: c.ID, BotWhite: botWhite, Opponent: c.Challenger, Status: "started",
+		wtime: int64(limit) * 1000, btime: int64(limit) * 1000, inc: int64(inc) * 1000, limit: limit}
+	g.start, _ = chess.ParseFEN(chess.StartFEN)
+	g.pos = g.start
+	for _, u := range moves {
+		mv, err := g.pos.ParseUCIMove(u)
+		if err != nil {
+			break
+		}
+		g.Moves = append(g.Moves, mv.UCI())
+		g.pos = g.pos.Make(mv)
+	}
+	if len(g.Moves) >= 2 {
+		g.turnStart = time.Now()
+	}
+	s.games[g.ID] = g
+	s.broadcastLocked(map[string]any{"type": "gameStart", "game": s.gameInfoLocked(g)})
+	s.opponentTurnLocked(g)
+	return g.ID
+}
+
+// EndGame ends a game the way the opponent or Lichess would: status
+// "aborted" (the opponent aborts) or "noStart" (Lichess aborts a game
+// nobody moved in). How the game's stream tells of it: "" sends the last
+// state; "gone" closes the stream and the game is gone (its stream 404s);
+// "silent" sends nothing. The event stream's gameFinish is sent each time.
+func (s *Server) EndGame(id, status, how string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	g := s.games[id]
+	if g == nil || g.Status != "started" {
+		return
+	}
+	g.Status = status
+	switch how {
+	case "gone":
+		for _, ch := range g.subs {
+			close(ch)
+		}
+		g.subs = nil
+		g.gone = true
+	case "silent":
+	default:
+		s.publishLocked(g)
+	}
+	s.finishLocked(g)
+}
+
 // Challenge sends the bot a challenge from a fake player and returns its id.
 // A negative limit makes a correspondence challenge.
 func (s *Server) Challenge(from string, bot, rated bool, limit, inc int, color, variant string) string {
@@ -1385,7 +1561,7 @@ func (s *Server) outgoing(username string, r *http.Request) (string, error) {
 		}
 		delete(s.pending, c.ID)
 		if declines {
-			c.Status, c.Decline = "declined", reason
+			c.Status, c.Decline, c.DeclineKey = "declined", reason, strings.ToLower(reason)
 			s.broadcastLocked(map[string]any{"type": "challengeDeclined", "challenge": c})
 			return
 		}
@@ -1437,6 +1613,30 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request) {
 		}
 		id := s.Challenge(from, q.Get("bot") == "1", q.Get("rated") == "1", limit, inc, color, q.Get("variant"))
 		fmt.Fprint(w, line(map[string]string{"id": id}))
+	case "/_fake/startgame":
+		// A game already in progress: opp, white=1 for the bot as White,
+		// limit, inc, moves (UCI, space-separated).
+		limit, _ := strconv.Atoi(q.Get("limit"))
+		if q.Get("limit") == "" {
+			limit = 180
+		}
+		inc, _ := strconv.Atoi(q.Get("inc"))
+		opp := q.Get("opp")
+		if opp == "" {
+			opp = "Alice"
+		}
+		id := s.StartGame(opp, q.Get("white") == "1", limit, inc, strings.Fields(q.Get("moves"))...)
+		fmt.Fprint(w, line(map[string]string{"id": id}))
+	case "/_fake/endgame":
+		// The opponent or Lichess ends a game: status aborted or noStart;
+		// how=gone closes its stream without a word, as if it were gone;
+		// how=silent sends nothing on it.
+		st := q.Get("status")
+		if st == "" {
+			st = "aborted"
+		}
+		s.EndGame(q.Get("id"), st, q.Get("how"))
+		fmt.Fprint(w, "{}\n")
 	case "/_fake/forget":
 		s.Forget(q.Get("id"))
 		fmt.Fprint(w, "{}\n")
@@ -1669,4 +1869,11 @@ func (s *Server) OfferDraw(id string) {
 		g.oppDraw = true
 		s.publishLocked(g)
 	}
+}
+
+// CorrSeeksSent is the days a move of each correspondence seek made.
+func (s *Server) CorrSeeksSent() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string{}, s.CorrSeeks...)
 }

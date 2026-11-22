@@ -41,7 +41,13 @@ The Analysis window and a window per playing engine sit beside the move list. An
 
 After a game, or for a PGN game, **Computer analysis** in the Moves tab evaluates every position (Fast 0.2 s, Normal 0.6 s or Deep 1.5 s a move). As on Lichess, you get an advantage chart (click to jump), inaccuracies **?!**, mistakes **?** and blunders **??** with the better move, and each player's counts, average centipawn loss and accuracy.
 
-**Stop** keeps what is done; **Continue** resumes; **Start over** reruns it. **Comment the moves** adds an editable comment and mark to each inaccuracy, mistake and blunder, leaving existing ones alone; **Remove its comments** removes them.
+**Swarm**: the engine menu next to the time menu runs several copies of the engine at once, each taking the next position no other copy has started. The menu offers up to one copy per processor core, up to 32. With 4 copies a game takes about a quarter of the time. Each copy uses the engine's own options, Threads included, so the threads in use are the number of copies times its Threads. With Threads above 1, fewer copies may be faster. Positions then finish in any order, and each move is marked as soon as the positions before and after it are both done. If you stop a swarm, the result keeps the moves up to the first position not yet done. The positions done after that one are remembered, so **Continue** does not search them again.
+
+The moves list fills in while it runs: each move gets its evaluation and mark (and, with **Comment the moves**, its comment) as soon as the position after it is analysed, without moving the list or the move shown. The chart and the summary appear when it finishes or is stopped.
+
+**Stop** keeps what is done; **Continue** carries on from there; **Analyse again…** goes back to the choice of time a move. **Comment the moves** adds an editable comment and mark to each inaccuracy, mistake and blunder, leaving existing ones alone; **Remove its comments** removes them.
+
+A position is never searched twice. Ponder remembers every position it has analysed: the position itself (pieces, side to move, castling, en passant), the engine (its program file, arguments and options) and the time a move. These are kept in `review-cache.json` in its data folder, which holds up to 50,000 positions and drops the least recently used ones first. So continuing after **Stop**, analysing again after moves are added, or after a move is changed searches only the positions that are new. The progress shows how many are left, e.g. "12 of 40 positions (35 already analysed)". A game analysed before finishes at once. A position is reused only with the same engine and at least as much time a move as you chose now. Choosing a longer time, or another engine (or a new version of it), searches again, and the longer search then stands in for shorter ones. Marks are always worked out afresh from the evaluations, so a move whose next position changed is judged again. Evaluations read from a PGN's `[%eval]` comments are not reused, because they do not say which engine made them, how long it searched, or what the best move was.
 
 ## Side variations
 
@@ -49,7 +55,9 @@ Once a game is over (or opened from a file), moves you play become variations un
 
 ## Saved analysis
 
-**Save…** and **Copy** include the computer analysis in Lichess's form (`{ [%eval 0.35] }`, `$6 $2 $4` for ?! ? ??, with the better move) and the side variations.
+The computer analysis is saved into the game's PGN by itself, like any annotation (see below). It is saved when the analysis finishes or is stopped. If another game is on the board by then, it is saved when that game is shown again. It is written in Lichess's form: `{ [%eval 0.35] }`, `$6 $2 $4` for ?! ? ?? with the better move, and an `Annotator` tag. The evaluation saved is the one the moves list shows, so a new analysis replaces the `[%eval]` an earlier one left in the file.
+
+The analysis's own comments and marks carry `[%auto]` and `[%autonag]` in the file, which other PGN readers ignore. A new analysis replaces them on every move it judges, so a move it no longer finds bad loses its old ?? and "Blunder." Comments and marks from files saved before these tags existed are recognised by their form, e.g. "Blunder. Nf3 was best." with ??. Your own marks and comments, and the AI's, are never replaced; editing one of the analysis's makes it yours. **Save…** and **Copy** include the analysis too, with the side variations.
 
 ## Annotating a game
 
@@ -62,7 +70,7 @@ Once a game is over (or opened from a file), moves you play become variations un
 
 The current annotation is shown larger. Annotations are coloured by mark: green good, purple interesting, blue inaccuracies, amber mistakes, red blunders, grey unmarked comments. AI annotations carry an **AI** badge and `[%ai]` in PGN until you edit them; see [AI features](ai.md).
 
-Annotations are **saved by themselves**, as standard PGN, to the source file or the game's [database](database.md) entry. Tried lines are not, until you **Save** or annotate a move in one. The button reads **Saved** or **Save** (tooltip names the file); a game in no open file has **Save as…**. Reopening a game restores everything.
+Annotations are **saved by themselves**, as standard PGN, to the source file or the game's [database](database.md) entry: yours, the AI's, and the computer analysis's evaluations, marks and comments. Tried lines are not, until you **Save** or annotate a move in one. The button reads **Saved** or **Save** (tooltip names the file); a game in no open file has **Save as…**. Reopening a game restores everything.
 
 ## Opening card
 

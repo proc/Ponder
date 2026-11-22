@@ -6,7 +6,7 @@
 // the opening, a player low on time, and how the game started and ended.
 // Each can be turned on or off in Settings → General → Announcer. It speaks
 // with the commentary's voice or one of its own (a voice of this computer,
-// or the speech server of Settings → AI), taking turns with the AI's
+// or the speech service of Settings → AI), taking turns with the AI's
 // comments, and can also show what it says over the board.
 
 const ANNOUNCER_DEFAULTS = {
@@ -348,7 +348,7 @@ function fillAnnouncerVoices() {
   sel.replaceChildren(
     el('option', { value: 'same', textContent: 'The commentary’s voice' }),
     ...(cmCanSpeak ? [el('option', { value: '', textContent: 'The computer’s voice' })] : []),
-    ...(window.ttsIsOn?.() ? [el('option', { value: CM_SERVER, textContent: 'Speech server (Settings → AI)' })] : []),
+    ...(window.ttsIsOn?.() ? [el('option', { value: CM_SERVER, textContent: window.ttsVoiceName?.() ?? 'Speech server (Settings → AI)' })] : []),
     ...sorted.map((v) => el('option', { value: v.name, textContent: `${v.name} (${v.lang})` })),
   );
   sel.value = [...sel.options].some((o) => o.value === ann.voice) ? ann.voice : 'same';

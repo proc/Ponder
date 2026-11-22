@@ -204,3 +204,84 @@ func TestGreetingFollowsEngine(t *testing.T) {
 		t.Fatalf("the game's own engine's new messages did not reach it: %q", g)
 	}
 }
+
+// The engine's own chat message goes to its opponent and to the people
+// watching: the players' room and the spectators' room. A room that fails
+// does not keep it from the other.
+func TestBotRemarkBothRooms(t *testing.T) {
+	h := newHarness(t, Policy{Casual: true, Humans: true, MaxGames: 1})
+	h.connect()
+	if err := h.bot.SetAutoAccept(true); err != nil {
+		t.Fatal(err)
+	}
+	id := h.fake.Challenge("Alice", false, false, 120, 1, "white", "standard")
+	h.waitFor("game start", func(s Status) bool { return len(s.Games) == 1 })
+
+	mine := func(text string) map[string]bool {
+		in := map[string]bool{}
+		v, _ := h.bot.Chat(id)
+		for _, l := range v.Lines {
+			if l.Mine && l.Text == text {
+				in[l.Room] = true
+			}
+		}
+		return in
+	}
+	waitIn := func(text string, rooms ...string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			got := mine(text)
+			all := len(got) == len(rooms)
+			for _, r := range rooms {
+				all = all && got[r]
+			}
+			if all {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%q is in the rooms %v, want %v", text, got, rooms)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
+	if err := h.bot.Remark(id, "Arr, a bold e4! My e5 sails to meet it."); err != nil {
+		t.Fatal(err)
+	}
+	waitIn("Arr, a bold e4! My e5 sails to meet it.", "player", "spectator")
+
+	// The players' room refuses it: the spectators still get it.
+	h.fake.FailChat("player", true)
+	err := h.bot.Remark(id, "The knight jumps in.")
+	if err == nil || !strings.Contains(err.Error(), "players' chat") {
+		t.Errorf("with the players' room failing: %v", err)
+	}
+	waitIn("The knight jumps in.", "spectator")
+	h.fake.FailChat("player", false)
+
+	// The spectators' room refuses it: the opponent still gets it.
+	h.fake.FailChat("spectator", true)
+	err = h.bot.Remark(id, "Castles, safe and sound.")
+	if err == nil || !strings.Contains(err.Error(), "spectators' chat") {
+		t.Errorf("with the spectators' room failing: %v", err)
+	}
+	waitIn("Castles, safe and sound.", "player")
+	h.fake.FailChat("spectator", false)
+
+	// Both fail: said so, nothing posted.
+	h.fake.FailChat("player", true)
+	h.fake.FailChat("spectator", true)
+	if err := h.bot.Remark(id, "Nobody hears this."); err == nil || !strings.HasPrefix(err.Error(), "not posted:") {
+		t.Errorf("with both rooms failing: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := mine("Nobody hears this."); len(got) != 0 {
+		t.Errorf("posted in %v", got)
+	}
+
+	// Longer than Lichess takes: refused before anything is sent.
+	if err := h.bot.Remark(id, strings.Repeat("x", 141)); err == nil {
+		t.Error("a message of 141 characters was taken")
+	}
+}

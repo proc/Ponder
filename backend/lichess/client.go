@@ -179,6 +179,10 @@ type Challenge struct {
 	Direction     string      `json:"direction"`
 	InitialFen    string      `json:"initialFen"`
 	DeclineReason string      `json:"declineReason"`
+	// DeclineReasonKey is the reason as a key (Lichess writes them in lower
+	// case: generic, later, toofast, tooslow, timecontrol, rated, casual,
+	// standard, variant, nobot, onlybot); DeclineReason is its text.
+	DeclineReasonKey string `json:"declineReasonKey"`
 }
 
 // DestName is the challenged player's name, or "the player" when unknown.
@@ -206,7 +210,28 @@ type GameInfo struct {
 		Rating   int    `json:"rating"`
 		AI       int    `json:"ai"`
 	} `json:"opponent"`
-	Winner string `json:"winner"`
+	Winner string     `json:"winner"`
+	Status GameStatus `json:"status"` // in gameFinish: how it ended
+}
+
+// GameStatus is a game's status name ("aborted", "mate", …): Lichess sends
+// {"id":25,"name":"aborted"}, or at times the bare name.
+type GameStatus string
+
+func (s *GameStatus) UnmarshalJSON(data []byte) error {
+	var name string
+	if json.Unmarshal(data, &name) == nil {
+		*s = GameStatus(name)
+		return nil
+	}
+	var obj struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return nil // not something to fail the whole event over
+	}
+	*s = GameStatus(obj.Name)
+	return nil
 }
 
 func (g GameInfo) Key() string {
@@ -555,6 +580,8 @@ type LobbySeek struct {
 	Increment   int    `json:"increment"` // seconds
 	Color       string `json:"color"`     // random, white, black
 	RatingRange string `json:"ratingRange,omitempty"`
+	// Days a move, for a correspondence seek (Limit and Increment unused).
+	Days int `json:"days,omitempty"`
 }
 
 // Seek looks for an opponent in the lobby (Board API). Lichess keeps the
@@ -563,6 +590,18 @@ type LobbySeek struct {
 func (c *Client) Seek(ctx context.Context, p LobbySeek) error {
 	form := url.Values{}
 	form.Set("rated", strconv.FormatBool(p.Rated))
+	if p.Days > 0 {
+		// A correspondence seek is answered at once and stays in the lobby.
+		form.Set("days", strconv.Itoa(p.Days))
+		form.Set("variant", "standard")
+		if p.Color != "" {
+			form.Set("color", p.Color)
+		}
+		if p.RatingRange != "" {
+			form.Set("ratingRange", p.RatingRange)
+		}
+		return c.call(ctx, "POST", "/api/board/seek", form, nil)
+	}
 	form.Set("time", strconv.FormatFloat(float64(p.Limit)/60, 'f', -1, 64))
 	form.Set("increment", strconv.Itoa(p.Increment))
 	form.Set("variant", "standard")

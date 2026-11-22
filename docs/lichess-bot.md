@@ -8,7 +8,7 @@ Your engine can play on [Lichess](https://lichess.org) through the [Bot API](htt
 2. Paste it in **Settings → Lichess**, choose the engine and press **Connect**. The token is encrypted with the system keychain when available and never shown again.
 3. If needed, press **Upgrade to Bot account** and confirm. This cannot be undone.
 
-Connecting only lists challenges and games. Your engine plays only games you start here (**Accept**, or a challenge you send). Games started elsewhere are listed as *Not played* with **Play** to hand them to the engine. Disconnecting mid-game resigns those games, after asking.
+Connecting answers no challenge by itself. Games the bot account is already playing when you connect are taken over: your engine goes on from the position and clock they stand at, moves at once when it is its turn, and the game shows on the board (with several, the one where it is your engine's move). The same happens after a lost connection comes back, for games that started meanwhile; games your engine was playing simply go on. Correspondence and variant games are left alone. Apart from those, your engine plays the games you start here (**Accept**, or a challenge you send). A game started elsewhere while connected (by another program, say) is listed as *Not played* with **Play** to hand it to the engine. Disconnecting mid-game resigns the games your engine plays, after asking.
 
 ### Several accounts
 
@@ -50,7 +50,11 @@ You can challenge any player or online bot (time, increment, colour, rated). One
 - **Rated** – *Casual*, *Rated* or *Random*.
 - **Their rating** – *Between* two values (empty: any), or *Around yours* by that many points, re-read every few minutes.
 - **Skip provisional ratings** and **At least … games** at the speed.
-- **Never challenge** – comma-separated bot names.
+- **Prefer** – *Any rating*, *Higher rated* or *Lower rated* among the bots that fit, like lichess-bot's `rating_preference`: the far end of the range is about twice as likely as the near end.
+- **Skip bots that declined** – like lichess-bot's `challenge_filter`, for a day (until Ponder closes): *Never*; *Always* (`coarse`: a bot that declined is not challenged again); or *Only what it declined* (`fine`: that speed for "too fast", "too slow" or "time control", rated or casual for those, anything for other reasons; still asked when no other bot fits).
+- **Never challenge** – comma-separated bot names (lichess-bot's `block_list`).
+
+With **Random clock** or **Rated: Random**, each challenge picks its settings at random, as lichess-bot's matchmaking does, and the challenges window shows the picked clock and mode with "picked at random". Ponder's engine plays standard chess with a clock only, so there is no `challenge_variant` or `challenge_days` (correspondence) setting.
 
 A bot that declines or does not answer in 30 seconds is replaced by another, at most one challenge a minute, until one accepts; it starts over after a short wait when all have been asked. **Stop** ends it. **Games** keeps it going until that many games have started (0: until **Stop**), holding back only while **Games at once** is full; it can start while your engine plays.
 
@@ -75,7 +79,7 @@ While the random-bot challenger runs, the window stays up with its latest challe
 - "Lichess refused a challenge for too many requests: none until 12:34 (in 9 min)."
 - "Your engine is playing: the next challenge goes out when the game ends."
 
-That line stays when the window is folded, so the window is never blank while the challenger runs. Drag, fold or hide it (✕); a **Challenges** button at the bottom right brings it back. It is hidden in zen mode.
+That line stays when the window is folded, so the window is never blank while the challenger runs. While it waits for your engine's game to end, click the line (**Show the game**) to put that game on the board; with several, each click shows the next. Click an accepted challenge whose game is being played to show that game. Drag, fold or hide it (✕); a **Challenges** button at the bottom right brings it back. It is hidden in zen mode.
 
 ## Watching your engine play
 
@@ -124,3 +128,7 @@ The same rules accept the opponent's offers. Defaults: on, 0, 10 moves, 10 piece
 Your engine greets its opponent and spectators when a game starts and says goodbye when it ends. **Settings → Lichess → Chat messages** sets the four messages (`{me}` and `{opponent}` are replaced); an empty message is not sent, and **Say nothing** turns them all off. There is no hello in a game already under way and no goodbye after an abort.
 
 Each engine can have its own messages: pick it under **Messages of** (it starts on the bot's engine) and change one. An engine without its own says those of **Every engine**; **Use the messages for every engine** takes an engine's own away. A game keeps the messages of the engine playing it, even after you choose another engine for the bot.
+
+### Talking during the game
+
+With **Engine chat** on (in the AI panel's Commentary view, off at first), your engine also answers its opponent's moves in the game chat every few moves, in character. Each message goes to both rooms: the players' room for its opponent, and the spectators' room for the people watching. If Lichess refuses it in one room, it still goes to the other. The AI model writes each message from what the engine thinks of the position. Set how often, and the engine's character, in the same place. The engine plays its move first, and the message follows. Each message fits in 140 characters, with at most one every 15 seconds in a game and four a minute over all games. See [Engine chat](ai.md#engine-chat).

@@ -182,14 +182,19 @@ type Bot struct {
 	holdUntil   time.Time
 	holdFor     string
 	holdBackoff time.Duration
-	hooks       Hooks
-	cfg         Config
-	client      *Client
-	cancel      context.CancelFunc
-	gen         int
-	state       string
-	message     string
-	account     *Account
+	// Bots that declined a challenge from the random-bot challenger, for
+	// its decline filter (SeekParams.Filter): "bot/aspect" -> until when.
+	// Kept across runs (auto challenge starts one on each connect), not
+	// across restarts of the app.
+	seekDeclined map[string]time.Time
+	hooks        Hooks
+	cfg          Config
+	client       *Client
+	cancel       context.CancelFunc
+	gen          int
+	state        string
+	message      string
+	account      *Account
 
 	incoming map[string]*Challenge
 	outgoing map[string]*Challenge
@@ -197,11 +202,17 @@ type Bot struct {
 	games    map[string]*runner
 	order    []string // game ids, oldest first
 	watching string
-	// Connecting plays nothing by itself: the engine plays only games that
-	// start from a challenge accepted or sent here (expect), or accepted
-	// automatically once that is turned on, and games given to it with Play.
+	// The engine plays games that start from a challenge accepted or sent
+	// here (expect), or accepted automatically once that is turned on,
+	// games already going when the event stream opens (adopt: on connect
+	// and on every reconnect), and games given to it with Play. A game
+	// started elsewhere while connected (by another program, say) waits
+	// for Play.
 	autoAccept bool
 	expect     map[string]bool
+	adopt      map[string]bool
+	adoptFirst string    // of those, the one for the board: Lichess lists the bot's move first
+	adoptUntil time.Time // when listing them failed: games the stream sends before this
 	// Answers to challenges sent here: "accepted", or the decline reason.
 	answered map[string]string
 	waiters  map[string]chan string
@@ -354,6 +365,7 @@ func (b *Bot) follow(ctx context.Context, gen int) {
 		b.mu.Unlock()
 		started := time.Now()
 		go b.loadOutgoing(ctx, gen, client)
+		b.loadOngoing(ctx, gen, client)
 		err := client.StreamEvents(ctx, func(e Event) { b.onEvent(ctx, gen, e) })
 		if ctx.Err() != nil {
 			return
@@ -419,6 +431,51 @@ func (b *Bot) loadOutgoing(ctx context.Context, gen int, client *Client) {
 	}
 }
 
+// loadOngoing reads the games the bot is in before the event stream opens,
+// for the engine to take them over: games going when Ponder connects, or
+// that started while the connection was lost. If they cannot be read, the
+// games the stream sends as it opens (Lichess sends the games in progress
+// first) are taken over instead.
+func (b *Bot) loadOngoing(ctx context.Context, gen int, client *Client) {
+	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var out struct {
+		NowPlaying []GameInfo `json:"nowPlaying"`
+	}
+	err := client.call(cctx, "GET", "/api/account/playing?nb=50", nil, &out)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if gen != b.gen {
+		return
+	}
+	b.adopt, b.adoptFirst, b.adoptUntil = map[string]bool{}, "", time.Time{}
+	if err != nil {
+		b.adoptUntil = time.Now().Add(5 * time.Second)
+		return
+	}
+	for _, g := range out.NowPlaying {
+		if !engineCanPlay(&g) {
+			continue
+		}
+		id := g.Key()
+		b.adopt[id] = true
+		if r := b.games[id]; b.adoptFirst == "" && (r == nil || r.finished) {
+			b.adoptFirst = id
+		}
+	}
+}
+
+// engineCanPlay says whether the engine can play a game: standard chess
+// (or from a position) with a clock.
+func engineCanPlay(g *GameInfo) bool {
+	switch g.Variant.Key {
+	case "", "standard", "fromPosition":
+	default:
+		return false
+	}
+	return g.Speed != "correspondence"
+}
+
 func (b *Bot) onEvent(ctx context.Context, gen int, e Event) {
 	b.mu.Lock()
 	if gen != b.gen {
@@ -465,7 +522,11 @@ func (b *Bot) onEvent(ctx context.Context, gen int, e Event) {
 		if ch := e.Challenge; ch != nil {
 			delete(b.incoming, ch.ID)
 			delete(b.accepted, ch.ID)
-			reason := ch.DeclineReason
+			// The key when Lichess gives one (the decline filter needs it).
+			reason := ch.DeclineReasonKey
+			if reason == "" {
+				reason = ch.DeclineReason
+			}
 			if reason == "" {
 				reason = map[string]string{"challengeCanceled": "canceled", "challengeDeclined": "generic"}[e.Type]
 			}
@@ -491,14 +552,26 @@ func (b *Bot) onEvent(ctx context.Context, gen int, e Event) {
 				break // already playing (the stream resends games on reconnect)
 			}
 			r := newRunner(b, id, g)
-			// Games already going when connecting, or started elsewhere,
-			// are listed but not played until Play is pressed.
-			r.play = b.expect[id]
+			// Games already going when the stream opened are taken over;
+			// games started elsewhere meanwhile are listed but not played
+			// until Play is pressed.
+			adopted := !b.expect[id] && (b.adopt[id] || (time.Now().Before(b.adoptUntil) && engineCanPlay(g)))
+			r.play = b.expect[id] || adopted
 			delete(b.expect, id)
+			delete(b.adopt, id)
+			if adopted {
+				r.message = "Your engine took over this game, which was already in progress."
+			}
 			b.games[id] = r
 			b.order = append(b.order, id)
 			b.trimFinished()
-			watch := r.play && (b.watching == "" || b.games[b.watching] == nil || b.games[b.watching].finished)
+			free := b.watching == "" || b.games[b.watching] == nil || b.games[b.watching].finished
+			watch := r.play && free
+			if adopted && b.adoptFirst != "" {
+				// Of several games in progress, the board shows the one
+				// where it is the engine's move (Lichess lists it first).
+				watch = id == b.adoptFirst && (free || !b.games[b.watching].play)
+			}
 			b.mu.Unlock()
 			if watch && b.hooks.AutoWatch != nil && b.hooks.AutoWatch() {
 				b.Watch(id)
@@ -508,7 +581,16 @@ func (b *Bot) onEvent(ctx context.Context, gen int, e Event) {
 			return
 		}
 	case "gameFinish":
-		// The game's own stream reports how it ended.
+		// The game's own stream reports how it ended. When it does not (an
+		// aborted game's stream can close without a last word, and the game
+		// is then gone), the game is ended from this event, so it no longer
+		// holds back challenges.
+		if g := e.Game; g != nil {
+			if r := b.games[g.Key()]; r != nil && !r.finished {
+				info := *g
+				time.AfterFunc(finishGrace, func() { r.endFromLichess(string(info.Status), info.Winner) })
+			}
+		}
 	}
 	b.mu.Unlock()
 	b.emit()
@@ -601,21 +683,27 @@ func (b *Bot) declineReason(ch *Challenge, policy bool) string {
 }
 
 func reasonText(r string) string {
-	switch r {
+	switch strings.ToLower(r) {
 	case "", "generic":
 		return ""
-	case "tooFast":
+	case "toofast":
 		return ": too fast"
-	case "tooSlow":
+	case "tooslow":
 		return ": too slow"
-	case "timeControl":
+	case "timecontrol":
 		return ": time control"
 	case "rated":
 		return ": wants a rated game"
 	case "casual":
 		return ": wants a casual game"
-	case "noBot":
+	case "nobot":
 		return ": does not play bots"
+	case "onlybot":
+		return ": plays bots only"
+	case "standard":
+		return ": standard chess only"
+	case "variant":
+		return ": not this variant"
 	case "later":
 		return ": later"
 	}
@@ -1158,6 +1246,32 @@ func (r *runner) stop() {
 	}
 }
 
+// finishGrace is how long a game's own stream has, after the event stream
+// says the game is over, to say how it ended.
+var finishGrace = 3 * time.Second
+
+// endFromLichess ends a game its stream has not ended: Lichess said it is
+// over (status, "" if not said), or its stream says it is gone.
+func (r *runner) endFromLichess(status, winner string) {
+	b := r.b
+	b.mu.Lock()
+	if r.finished {
+		b.mu.Unlock()
+		return
+	}
+	st := r.state
+	cancel := r.cancel
+	b.mu.Unlock()
+	if status == "" || status == "started" || status == "created" {
+		status = "aborted"
+	}
+	st.Status, st.Winner = status, winner
+	r.onState(st)
+	if cancel != nil {
+		cancel() // stop following its stream
+	}
+}
+
 func (r *runner) run(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	b := r.b
@@ -1186,6 +1300,12 @@ func (r *runner) run(parent context.Context) {
 		done := r.finished
 		b.mu.Unlock()
 		if done || ctx.Err() != nil {
+			break
+		}
+		if ChallengeGone(err) {
+			// Lichess no longer has the game (an aborted game can go at
+			// once): it is over.
+			r.endFromLichess("", "")
 			break
 		}
 		wait := backoff
@@ -1587,6 +1707,8 @@ func (r *runner) onBestMove(move string) {
 	ctx := r.ctx
 	client := b.client
 	var chosen game.EngineInfo
+	var said BotMove
+	saidOK := false
 	show := false
 	playable := !stale && move != "" && move != "(none)" && move != "0000"
 	draw := false
@@ -1594,7 +1716,11 @@ func (r *runner) onBestMove(move string) {
 		if draw = r.offerDrawLocked(); draw {
 			r.drawOffers++
 		}
-		if chosen, show = r.chosenLocked(move); show {
+		chosen, show = r.chosenLocked(move)
+		if r.play {
+			said, saidOK = r.botMoveLocked(move, chosen)
+		}
+		if show {
 			if r.chosen == nil {
 				r.chosen = map[int]game.EngineInfo{}
 			}
@@ -1632,6 +1758,10 @@ func (r *runner) onBestMove(move string) {
 	}
 	if err != nil && ctx.Err() == nil {
 		r.setMessage(fmt.Sprintf("Could not play %s: %v", move, err))
+	}
+	// Played: what the engine made of it, for its chat remarks.
+	if err == nil && saidOK && b.hooks.Emit != nil {
+		b.hooks.Emit("lichessBotMove", said)
 	}
 }
 
