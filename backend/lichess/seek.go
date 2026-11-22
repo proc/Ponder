@@ -120,6 +120,33 @@ func (b *Bot) declinedFor(filter, bot, speed string, rated bool) bool {
 	return false
 }
 
+// restBot passes a bot over for the challenger until wait is up: it has
+// played its bot games for the day, or it declined or did not answer.
+// It is kept on the bot, so a search started again leaves it be too.
+func (b *Bot) restBot(id string, wait time.Duration) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.seekResting == nil {
+		b.seekResting = map[string]time.Time{}
+	}
+	b.seekResting[strings.ToLower(id)] = time.Now().Add(wait)
+}
+
+// restingUntil is when a bot may be challenged again; zero when it may now.
+func (b *Bot) restingUntil(id string) time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	until, ok := b.seekResting[id]
+	if !ok {
+		return time.Time{}
+	}
+	if !time.Now().Before(until) {
+		delete(b.seekResting, id)
+		return time.Time{}
+	}
+	return until
+}
+
 func modeName(rated bool) string {
 	if rated {
 		return "rated"
@@ -397,9 +424,6 @@ type seeker struct {
 	cancel  context.CancelFunc
 	status  SeekStatus
 	current string // challenge id waiting for an answer
-	// Bots that have played their bot games for the day (Lichess said so
-	// when challenged): passed over until then. Only runSeek uses it.
-	resting map[string]time.Time
 }
 
 // holdChallenges keeps the challenger from sending another challenge for
@@ -459,8 +483,14 @@ var (
 	seekPause         = 3 * time.Second  // after a failed request
 	seekGap           = time.Minute      // at least this long from one challenge to the next
 	seekRetry         = 30 * time.Second // when no bot is left to try
-	seekPoll          = time.Second      // how often a game in progress is looked at
-	seekHoldFirst     = time.Minute      // first wait after a bare "too many requests"
+	// A bot challenged once and not playing (it declined, did not answer,
+	// or the challenge failed) is not challenged again for this long, at
+	// any clock: the challenger moves on to someone else. Asking again
+	// would only earn another decline, and Lichess limits how many
+	// challenges a bot may send.
+	seekRest      = time.Hour
+	seekPoll      = time.Second // how often a game in progress is looked at
+	seekHoldFirst = time.Minute // first wait after a bare "too many requests"
 )
 
 // fullLocked reports whether the engine is in as many games as it may play
@@ -756,7 +786,9 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			// Rated or casual is picked first, so the decline filter can
 			// pass over the bots that declined that.
 			rated    = params.rated()
-			filtered int // bots passed over for the decline filter
+			filtered int                 // bots passed over for the decline filter
+			rested   = map[string]bool{} // bots passed over for a while: challenged already, or played enough today
+			soonest  time.Time           // when the first of them may be asked again
 		)
 		for _, c := range params.clocks() {
 			l, h, ok := rangeAt(c.speed)
@@ -770,7 +802,11 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 				if id == "" || id == me || !params.fits(u, c.speed, l, h, exclude) {
 					continue
 				}
-				if until, ok := sk.resting[id]; ok && time.Now().Before(until) {
+				if until := b.restingUntil(id); !until.IsZero() {
+					if until.Before(soonest) || soonest.IsZero() {
+						soonest = until
+					}
+					rested[id] = true
 					continue
 				}
 				// The decline filter: coarse passes these bots over; fine
@@ -798,7 +834,17 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 		if len(pool) == 0 {
 			speeds := params.speeds()
 			msg := fmt.Sprintf("No bot online fits your settings at %s right now (%d online).", speeds, len(bots))
+			wait := seekRetry
 			switch {
+			case len(rested) > 0 && filtered == 0 && !asked:
+				// Every bot that fits was challenged already or has played enough
+				// today. The bots online are still looked at every so often,
+				// for a new one, until the first of these may be asked again.
+				left := time.Until(soonest)
+				if left < wait {
+					wait = left
+				}
+				msg = fmt.Sprintf("Every bot online that fits your settings has been challenged already and did not play, or has played enough today (%d). None is challenged twice: the first can be challenged again in %s, and until then a bot that comes online is challenged.", len(rested), waitText(left))
 			case filtered > 0 && !asked:
 				msg = fmt.Sprintf("Every bot online that fits your settings declined a challenge today (%d), so they are passed over (Skip bots that declined).", filtered)
 			case asked:
@@ -809,10 +855,10 @@ func (b *Bot) runSeek(ctx context.Context, sk *seeker) {
 			case len(unrated) > 0:
 				msg = fmt.Sprintf("No bot online fits your settings right now (%d online); your bot has no rating yet at %s, so those clocks are skipped.", len(bots), strings.Join(unrated, ", "))
 			}
-			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Current, st.Rating = "", 0; st.set("nobots", msg, seekRetry) }) {
+			if !b.seekUpdate(sk, func(st *SeekStatus) { st.Current, st.Rating = "", 0; st.set("nobots", msg, wait) }) {
 				return
 			}
-			if !sleepCtx(ctx, seekRetry) {
+			if !sleepCtx(ctx, wait) {
 				return
 			}
 			continue
@@ -930,6 +976,11 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 	}
 	ch, err := b.challenge(p)
 	sent := time.Now().UnixMilli()
+	// Asked once: whatever comes of it, this bot is not asked again (see
+	// seekRest), unless it accepts. Even a request that failed may have
+	// reached Lichess (one that timed out). Only Lichess refusing your bot
+	// for too many requests leaves it be: that challenge never reached it.
+	b.restBot(u.ID, seekRest)
 	current := func(st *SeekStatus, id, state, reason string) {
 		st.Challenge = &SeekChallenge{ID: id, At: sent, User: name, Title: u.Title, Rating: rating,
 			Limit: p.Limit, Increment: p.Increment, Rated: p.Rated, Speed: speed, State: state, Reason: reason, Random: random}
@@ -944,6 +995,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		// the time is up (the hold outlives this search, so a new one
 		// started meanwhile waits too).
 		b.holdChallenges(wait)
+		b.restBot(u.ID, 0) // it was never challenged
 		b.seekUpdate(sk, func(st *SeekStatus) {
 			st.set("pause", fmt.Sprintf("Lichess refused the challenge to %s: too many requests.", name), 0)
 			failed(st, "Lichess refused it: too many requests")
@@ -955,10 +1007,9 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		if wait <= 0 {
 			wait = time.Hour
 		}
-		if sk.resting == nil {
-			sk.resting = map[string]time.Time{}
+		if wait > seekRest {
+			b.restBot(u.ID, wait)
 		}
-		sk.resting[strings.ToLower(u.ID)] = time.Now().Add(wait)
 		b.seekUpdate(sk, func(st *SeekStatus) {
 			st.set("pause", fmt.Sprintf("%s has played as many bot games as Lichess allows today: passed over for %s.", name, waitText(wait)), seekPause)
 			failed(st, fmt.Sprintf("It has played as many bot games as Lichess allows today; passed over for %s", waitText(wait)))
@@ -1005,6 +1056,7 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		got = "stopped"
 	}
 	if got == "accepted" {
+		b.restBot(u.ID, 0) // it plays: it may be asked again for another game
 		b.seekUpdate(sk, func(st *SeekStatus) {
 			current(st, ch.ID, "accepted", "")
 			st.set("pause", fmt.Sprintf("%s accepted.", name), 0)
@@ -1034,8 +1086,11 @@ func (b *Bot) seekOne(ctx context.Context, sk *seeker, client *Client, u User, s
 		b.mu.Unlock()
 		b.noteDecline(filter, u.ID, got, speed, p.Rated)
 	}
+	// Not asked again for a while, whatever the decline filter: at once
+	// it would only decline again, and be one more challenge towards
+	// Lichess's limit.
 	b.seekUpdate(sk, func(st *SeekStatus) {
-		st.set("pause", fmt.Sprintf("%s %s.", name, why), seekPause)
+		st.set("pause", fmt.Sprintf("%s %s; it is not challenged again for %s.", name, why, waitText(seekRest)), seekPause)
 		current(st, ch.ID, state, reason)
 	})
 	return false, "", seekPause

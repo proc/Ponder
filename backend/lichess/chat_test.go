@@ -1,6 +1,7 @@
 package lichess
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -283,5 +284,30 @@ func TestBotRemarkBothRooms(t *testing.T) {
 	// Longer than Lichess takes: refused before anything is sent.
 	if err := h.bot.Remark(id, strings.Repeat("x", 141)); err == nil {
 		t.Error("a message of 141 characters was taken")
+	}
+}
+
+func TestBotCrosstable(t *testing.T) {
+	h := newHarness(t, Policy{Casual: true, Humans: true, MaxGames: 1})
+	if _, err := h.bot.Crosstable("Alice"); err == nil {
+		t.Fatal("asked while not connected")
+	}
+	h.connect()
+	raw, err := h.bot.Crosstable("Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ct struct {
+		Users   map[string]float64 `json:"users"`
+		NbGames int                `json:"nbGames"`
+	}
+	if err := json.Unmarshal(raw, &ct); err != nil || ct.NbGames == 0 || len(ct.Users) != 2 {
+		t.Fatalf("crosstable %s (%v)", raw, err)
+	}
+	if _, ok := ct.Users["alice"]; !ok {
+		t.Fatalf("not against Alice: %s", raw)
+	}
+	if _, err := h.bot.Crosstable(" "); err == nil {
+		t.Fatal("no opponent, yet asked")
 	}
 }

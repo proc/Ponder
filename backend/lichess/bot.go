@@ -187,6 +187,7 @@ type Bot struct {
 	// Kept across runs (auto challenge starts one on each connect), not
 	// across restarts of the app.
 	seekDeclined map[string]time.Time
+	seekResting  map[string]time.Time // bots the challenger leaves be until then (restBot)
 	hooks        Hooks
 	cfg          Config
 	client       *Client

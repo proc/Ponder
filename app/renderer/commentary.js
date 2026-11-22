@@ -8,7 +8,7 @@
 
 const cm = {
   on: false,
-  every: 2,        // a comment every so many moves (a move: White's and Black's)
+  every: 2,        // a comment every so many moves (a move: one side's, White's or Black's)
   feed: [],        // { ply, label, text, kind: 'comment' | 'summary', live, error }
   game: null,      // the game the feed is about
   lastPly: 0,      // the ply of the last comment asked for
@@ -548,7 +548,7 @@ function syncCommentary() {
     cm.wasLive = true;
     // Not while a comment is waiting to be read aloud: the next one then
     // covers all the moves since, when it is its turn.
-    if (!cm.busy && !cm.pendingSpeech && n - cm.lastPly >= cm.every * 2) askCommentary('comment');
+    if (!cm.busy && !cm.pendingSpeech && n - cm.lastPly >= cm.every) askCommentary('comment');
   } else if (cm.wasLive && !cm.summed && n > 0 && state.result && state.result !== '*') {
     // The game has just ended: the summary takes over from any comment in the air.
     cm.summed = true;
@@ -568,7 +568,7 @@ function setCommentary(on) {
   if (cm.on && state) {
     // From here on: the first comment comes after the next few moves.
     cm.wasLive = cmLive();
-    if (!cm.feed.length) cm.lastPly = Math.max(0, (state.moves?.length ?? 0) - Math.max(0, cm.every * 2 - 2));
+    if (!cm.feed.length) cm.lastPly = Math.max(0, (state.moves?.length ?? 0) - Math.max(0, cm.every - 1));
     syncCommentary();
   }
   renderCommentary();

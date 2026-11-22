@@ -3,6 +3,7 @@ package lichess
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -456,6 +457,8 @@ func TestSeekDeclineAspects(t *testing.T) {
 // another fits; with coarse, not at all; with none, it is asked again.
 func TestSeekDeclineFilter(t *testing.T) {
 	seekAnswerTimeout, seekPause, seekRetry, seekGap = 150*time.Millisecond, 20*time.Millisecond, 100*time.Millisecond, 20*time.Millisecond
+	defer func(d time.Duration) { seekRest = d }(seekRest)
+	seekRest = 0 // the filter alone; TestSeekLeavesADecliningBotBe has the rest
 	asks := func(filter string, online ...fake.OnlineBot) (picky, total int, s Status) {
 		h := newHarness(t, Policy{})
 		h.fake.Online = online
@@ -483,5 +486,61 @@ func TestSeekDeclineFilter(t *testing.T) {
 	p, _, s := asks("coarse", fake.OnlineBot{Name: "picky", Rating: 1750})
 	if p != 1 || s.Seek == nil || !strings.Contains(s.Seek.Message, "declined a challenge today") {
 		t.Fatalf("coarse: picky asked %d times; seek %+v", p, s.Seek)
+	}
+}
+
+// A bot that declines is not challenged again at once, at any clock and
+// whatever the decline filter, nor when the search is started again: it
+// rests for seekRest, and the search says so and waits.
+func TestSeekLeavesADecliningBotBe(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 150*time.Millisecond, 20*time.Millisecond, 100*time.Millisecond, 20*time.Millisecond
+	h := newHarness(t, Policy{})
+	h.fake.Online = []fake.OnlineBot{{Name: "picky", Rating: 1750}}
+	h.connect()
+	start := func() {
+		err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Color: "random"}, Times: []int{60, 180, 600}, Increments: []int{0, 2}, Games: -1, Filter: "none"})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	start()
+	s := h.waitFor("waits for picky", func(s Status) bool {
+		return s.Seek != nil && strings.Contains(s.Seek.Message, "None is challenged twice")
+	})
+	if !strings.Contains(s.Seek.Message, "(1)") || !regexp.MustCompile(`again in (1 h|60 min)`).MatchString(s.Seek.Message) {
+		t.Errorf("message %q", s.Seek.Message)
+	}
+	time.Sleep(500 * time.Millisecond)
+	h.bot.StopSeek()
+	start()
+	time.Sleep(500 * time.Millisecond)
+	h.bot.StopSeek()
+	if n := strings.Count(strings.Join(h.fake.Calls(), "\n"), "POST /api/challenge/picky"); n != 1 {
+		t.Fatalf("picky challenged %d times, want 1", n)
+	}
+}
+
+// Each bot is challenged once: one that declines, or does not answer, is
+// not asked again at another clock, nor once all have been asked, nor
+// with the fine filter when no other bot fits.
+func TestSeekNeverChallengesTheSameBotTwice(t *testing.T) {
+	seekAnswerTimeout, seekPause, seekRetry, seekGap = 150*time.Millisecond, 20*time.Millisecond, 100*time.Millisecond, 20*time.Millisecond
+	h := newHarness(t, Policy{})
+	// grumpy declines, sleepy never answers, picky declines; then none is left.
+	h.fake.Online = []fake.OnlineBot{{Name: "grumpy", Rating: 1700}, {Name: "picky", Rating: 1750}, {Name: "sleepy", Rating: 1650}}
+	h.connect()
+	if err := h.bot.StartSeek(SeekParams{ChallengeParams: ChallengeParams{Color: "random"}, Times: []int{60, 180, 600}, Increments: []int{0, 2}, Games: -1, Filter: "fine"}); err != nil {
+		t.Fatal(err)
+	}
+	h.waitFor("all asked once", func(s Status) bool {
+		return s.Seek != nil && strings.Contains(s.Seek.Message, "None is challenged twice")
+	})
+	time.Sleep(400 * time.Millisecond)
+	h.bot.StopSeek()
+	calls := strings.Join(h.fake.Calls(), "\n")
+	for _, bot := range []string{"grumpy", "picky", "sleepy"} {
+		if n := strings.Count(calls, "POST /api/challenge/"+bot); n != 1 {
+			t.Errorf("%s challenged %d times, want 1", bot, n)
+		}
 	}
 }

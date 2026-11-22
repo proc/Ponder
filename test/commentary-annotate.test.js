@@ -49,7 +49,7 @@ function load({ savable = false, chat } = {}) {
   };
   ctx.window = ctx;
   vm.createContext(ctx);
-  vm.runInContext(`${SRC}\n;globalThis.__cm = { cm, annotateFromComment, askCommentary };`, ctx);
+  vm.runInContext(`${SRC}\n;globalThis.__cm = { cm, annotateFromComment, askCommentary, syncCommentary };`, ctx);
   const { cm } = ctx.__cm;
   cm.game = ctx.state.game;
   return { ctx, calls, ...ctx.__cm };
@@ -130,4 +130,21 @@ test('a comment from the AI (made up here) lands on its move when it arrives', a
   assert.equal(a.comment, 'Black mirrors White.');
   assert.equal(a.ai, true);
   assert.equal(ctx.notes.aiModel, 'fake-model');
+});
+
+test('"Comment every move" asks after each side\'s move, not after both', async () => {
+  let asked = 0;
+  const { ctx, cm, syncCommentary } = load({ chat: async () => { asked++; return { text: 'A move.', model: 'm' }; } });
+  Object.assign(cm, { on: true, every: 1, lastPly: 2, wasLive: true });
+  ctx.state.moves = ctx.state.moves.slice(0, 3); // 1. e4 e5 2. Nf3
+  syncCommentary();
+  assert.equal(cm.busy, true); // asked about Nf3 at once
+  assert.equal(cm.lastPly, 3);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(cm.busy, false);
+  ctx.state.moves = load().ctx.state.moves; // ... Nc6: Black's move, one ply later
+  syncCommentary();
+  assert.equal(cm.lastPly, 4);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(asked, 2);
 });

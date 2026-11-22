@@ -537,3 +537,26 @@ func TestReplaceEngine(t *testing.T) {
 		t.Fatalf("moves %d, active %v, %q", len(s.Moves), s.Active, s.Reason)
 	}
 }
+
+func TestFreeForAGameElsewhere(t *testing.T) {
+	m := NewManager(func(string, any) {})
+	if !m.FreeFor("bot") {
+		t.Fatal("an empty board is not free")
+	}
+	start := "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+	if err := m.ShowExternal(ExternalView{ID: "g1", Kind: "bot", StartFEN: start}); err != nil {
+		t.Fatal(err)
+	}
+	if !m.FreeFor("bot") {
+		t.Fatal("a game of the same kind keeps the board")
+	}
+	if m.FreeFor("spectate") {
+		t.Fatal("a game of another kind is free")
+	}
+	if err := m.NewGame(Config{White: human(TimeControl{Kind: "none"}), Black: human(TimeControl{Kind: "none"})}); err != nil {
+		t.Fatal(err)
+	}
+	if m.FreeFor("bot") {
+		t.Fatal("a game played here is free")
+	}
+}

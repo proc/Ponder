@@ -1360,6 +1360,17 @@ func (m *Manager) ExternalKind() (id, kind string, live bool) {
 	return m.g.external.ID, m.g.external.Kind, m.g.external.Live
 }
 
+// FreeFor reports whether a game played elsewhere, of kind (as
+// ExternalView.Kind), may take the board by itself without putting away
+// anything of the user's: the board shows nothing yet, or a game of that
+// kind. A game played or set up here, a game opened from a file, or any
+// other game followed keeps the board.
+func (m *Manager) FreeFor(kind string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.g == nil || (m.g.external != nil && m.g.external.Kind == kind)
+}
+
 // Busy reports whether a local game is being played.
 func (m *Manager) Busy() bool {
 	m.mu.Lock()

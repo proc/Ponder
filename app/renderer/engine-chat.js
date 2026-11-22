@@ -11,8 +11,8 @@
 //   on the board or not.
 //   When its opponent writes to it in either room, it answers there, in
 //   character (at most ECD.MAX_REPLIES answers a game).
-// - A game on this computer between you and an engine: the message shows in
-//   the game's chat card beside the board. Nothing is posted anywhere.
+// Only games engines play on Lichess: a game you play yourself against an
+// engine on this computer has no engine chat.
 //
 // Nothing here holds up the engine: a message is asked for only once its
 // move has been played. A message may be up to 400 characters: Lichess takes
@@ -28,8 +28,6 @@ const ec = {
   games: new Map(), // game id -> { count, at, busy }
   recent: [],       // when the last messages were made, all games together
   note: '',
-  // The chat of the game on this computer: { game, lines, me }.
-  local: null,
 };
 try {
   const saved = JSON.parse(localStorage.getItem('engineChat') ?? '{}') ?? {};
@@ -73,9 +71,24 @@ async function postParts(text, post) {
 async function engineRemark(id, m, say) {
   if (!ec.on || !api.ai?.chat || !m?.last) return; // the first move answers nothing
   const g = ecGame(id);
-  if (g.stopped) return;
+  if (g.stopped || g.ended) return;
+  if (!ECD.due(g, ec.every)) return;
+  // Due: made now, or as soon as the limits allow. Held back, it is about
+  // the latest move when it goes out: a move played meanwhile takes its place.
+  g.pending = { m, say };
+  flushRemark(id, g);
+}
+
+// The remark waiting in a game, made if the limits allow it now; else it
+// waits for them (and, while one is being written, for that one).
+async function flushRemark(id, g) {
+  clearTimeout(g.remarkTimer);
+  if (!g.pending || !ec.on || g.stopped || g.ended) { g.pending = null; return; }
   const now = Date.now();
-  if (!ECD.due(g, ec.every, now, ec.recent)) return;
+  const wait = ECD.replyDue({ ...g, replies: 0 }, now, ec.recent);
+  if (wait !== true) { g.remarkTimer = setTimeout(() => flushRemark(id, g), wait); return; }
+  const { m, say } = g.pending;
+  g.pending = null;
   g.count = 0;
   g.at = now;
   g.busy = true;
@@ -87,7 +100,7 @@ async function engineRemark(id, m, say) {
     // with a cap on the answer; asked again once if it does not, cut to fit
     // at a sentence or word as a last resort.
     const ask = (messages) => api.ai.chat(`ec:${id}:${m.ply}`, messages, `engine-chat:${id}`, { maxTokens: ECD.MAX_TOKENS });
-    const { text } = await ECD.compose(ask, ECD.messages(m, ec.persona));
+    const { text } = await ECD.compose(ask, ECD.messages({ ...m, h2h: ecOpening(g) }, ec.persona));
     if (text) {
       // Posting it may fail (Lichess limits how often one may post): said,
       // and the engine goes on talking at its next message.
@@ -112,13 +125,35 @@ async function engineRemark(id, m, say) {
     }
   } finally {
     g.busy = false;
+    if (g.pending) flushRemark(id, g); // a move played while it was written
   }
 }
 
 // --- Your engine on Lichess -------------------------------------------------
+// Its record against the opponent, as the player card shows it (Lichess's
+// crosstable): read once a game, at its start, so that the engine greets
+// the bots and people it has played before as such. Not known (not read yet, or Lichess did
+// not answer), the messages just say nothing of it.
+// The record goes with one message only, at the start of the game (the
+// first or second message, as it may not be read yet for the first): said
+// once, it is not brought up again.
+function ecOpening(g) {
+  g.messages = (g.messages ?? 0) + 1;
+  if (g.h2hUsed || g.messages > 2 || !g.h2h) return null;
+  g.h2hUsed = true;
+  return g.h2h;
+}
+function ecRecord(g, opponent, me) {
+  if (!ec.on || g.h2h !== undefined || !opponent) return;
+  g.h2h = null;
+  Promise.resolve(api.backend('lichessBotCrosstable', { opponent }))
+    .then((ct) => { g.h2h = ECD.crosstableOf(ct, me || (typeof lx !== 'undefined' ? lx.status?.account?.username : '')); }, () => {});
+}
+
 // After each of its moves the backend says what the engine made of it.
 window.engineChatBotMove = (m) => {
   if (!m?.gameId) return;
+  ecRecord(ecGame(`bot:${m.gameId}`), m.opponent, m.me);
   ecGame(`bot:${m.gameId}`).last = { ...m, lichess: true }; // for answers to its opponent's chat
   engineRemark(`bot:${m.gameId}`, { ...m, lichess: true }, (text) => api.backend('lichessBotRemark', { id: m.gameId, text }));
 };
@@ -131,6 +166,7 @@ window.engineChatHeard = (ev) => {
   const game = (lx.status.games ?? []).find((x) => x.id === ev.gameId && x.playing && !x.finished);
   if (!game || String(line.user ?? '').toLowerCase() !== String(game.opponent ?? '').toLowerCase()) return;
   const g = ecGame(`bot:${game.id}`);
+  ecRecord(g, game.opponent, lx.status.account?.username);
   if (g.stopped) return;
   // Said again before the answer went out: the answer is to the latest.
   g.heard = { text: line.text, room: line.room === 'spectator' ? 'spectator' : 'player' };
@@ -164,7 +200,7 @@ async function engineReply(id, g) {
     const lines = (view?.lines ?? []).filter((l) => !l.system);
     if (lines.length && lines.at(-1).text === heard.text) lines.pop();
     const ask = (messages) => api.ai.chat(`ecr:${id}:${g.replies}`, messages, `engine-reply:${id}`, { maxTokens: ECD.MAX_TOKENS });
-    const { text } = await ECD.compose(ask, ECD.replyMessages(m, ec.persona, heard, lines));
+    const { text } = await ECD.compose(ask, ECD.replyMessages({ ...m, h2h: ecOpening(g) }, ec.persona, heard, lines));
     if (text) {
       try {
         await postParts(text, (part) => api.backend('lichessChatSend', { id, room: heard.room, text: part }));
@@ -197,6 +233,9 @@ async function engineGameEnd(key, e, say) {
   const g = ecGame(key);
   if (g.stopped || g.ended) return;
   clearTimeout(g.endTimer);
+  // A remark on a move still waiting: the last message takes its place.
+  clearTimeout(g.remarkTimer);
+  g.pending = null;
   const now = Date.now();
   const due = ECD.replyDue({ ...g, replies: 0 }, now, ec.recent);
   if (due !== true) { g.endTimer = setTimeout(() => engineGameEnd(key, e, say), due); return; }
@@ -235,97 +274,6 @@ window.engineChatGameEnd = (e) => {
   engineGameEnd(`bot:${e.gameId}`, { ...e, lichess: true }, (text) => api.backend('lichessBotRemark', { id: e.gameId, text }));
 };
 
-// --- A game on this computer ------------------------------------------------
-// You against an engine, being played: the engine is the one side that is
-// an engine.
-function localEngineGame(over = false) {
-  if ((!over && !state?.active) || !state || state.external || puzzleView) return null;
-  const w = state.players?.white;
-  const b = state.players?.black;
-  const we = w?.type === 'engine';
-  const be = b?.type === 'engine';
-  if (we === be) return null;
-  return { side: we ? 'white' : 'black', engine: we ? w : b, opponent: we ? b : w };
-}
-
-// Called whenever the game changes: the engine's move just played, if it
-// answered one of yours.
-function syncEngineChat() {
-  // Just over: the engine's last message (the game it was chatting in).
-  const ended = localEngineGame(true);
-  if (ended && ec.on && ec.local?.game === state.game && !state.active && state.result && state.result !== '*') {
-    localGameEnd(ended);
-    return;
-  }
-  const local = localEngineGame();
-  if (!local || !ec.on) {
-    // Its chat stays while the game is on the board, and goes with it.
-    if (ec.local && ec.local.game !== state?.game) { ec.local = null; window.syncChat?.(); }
-    return;
-  }
-  if (ec.local?.game !== state.game) {
-    ec.local = { game: state.game, lines: [], me: '', handled: state.moves.length, evals: [], ended: false };
-    window.syncChat?.();
-  }
-  const n = state.moves.length;
-  if (n <= ec.local.handled) { ec.local.handled = n; return; } // a takeback
-  ec.local.handled = n;
-  // The move just played is the engine's: White's when n is odd from the
-  // usual start, else as the position says.
-  const after = state.moves[n - 1];
-  const moverWhite = (after.fen ?? '').split(' ')[1] === 'b';
-  if ((local.side === 'white') !== moverWhite || n < 2) return;
-  const before = state.moves[n - 2];
-  // What the engine made of it: its last line in that position.
-  const info = engineInfo[local.side];
-  const fresh = info && info.ply === n - 1;
-  const name = local.engine.name || 'Engine';
-  const m = {
-    gameId: String(state.game), engine: name, me: name, opponent: local.opponent.name || 'You',
-    side: local.side, rated: false, ply: n - 1, fen: before.fen,
-    moves: state.moves.slice(0, n - 1).map((x) => x.san), last: before.san, move: after.san,
-    hasEval: Boolean(fresh && info.hasEval), cp: fresh ? info.cp : 0, isMate: Boolean(fresh && info.isMate), mate: fresh ? info.mate : 0,
-    depth: fresh ? info.depth : 0, pv: fresh ? info.pv ?? [] : [],
-  };
-  if (m.pv.length && m.pv[0] !== m.move) m.pv = [m.move]; // a line for another move says nothing of this one
-  // For the recap at the end: what the engine thought at each of its moves.
-  if (m.hasEval) ec.local.evals.push({ ply: n - 1, move: after.san, cp: m.cp, isMate: m.isMate, mate: m.mate });
-  const game = state.game;
-  engineRemark(`local:${game}`, m, (text) => {
-    if (ec.local?.game !== game) return;
-    ec.local.lines.push({ room: 'player', user: ECD.personaOf(m, ec.persona), text, at: Date.now(), engine: true });
-    window.engineChatLocalLine?.();
-  });
-}
-
-// The game on this computer is over (decided, not abandoned): the engine's
-// last message, in the game's chat card.
-function localGameEnd(local) {
-  const result = state?.result;
-  if (!ec.local || ec.local.ended || !result || result === '*' || state.active) return;
-  ec.local.ended = true;
-  const n = state.moves.length;
-  if (n < 2) return;
-  const won = result === '1-0' ? 'white' : result === '0-1' ? 'black' : '';
-  const name = local.engine.name || 'Engine';
-  const last = state.moves[n - 1];
-  const e = {
-    gameId: String(state.game), engine: name, me: name, opponent: local.opponent.name || 'You', side: local.side, rated: false,
-    result, reason: state.reason ?? '', outcome: !won ? 'drawn' : won === local.side ? 'won' : 'lost',
-    moves: state.moves.map((x) => x.san), fen: last.fen, opening: last.opening ?? '', evals: ec.local.evals,
-  };
-  const game = state.game;
-  engineGameEnd(`local:${game}`, e, (text) => {
-    if (ec.local?.game !== game) return;
-    ec.local.lines.push({ room: 'player', user: ECD.personaOf(e, ec.persona), text, at: Date.now(), engine: true });
-    window.engineChatLocalLine?.();
-  });
-}
-
-// The chat card asks for the game on this computer's chat: null when it
-// has none (engine chat off, or not a game against an engine).
-window.engineChatLocal = () => (ec.on && ec.local && ec.local.game === state?.game ? ec.local : null);
-
 // --- Settings (the AI panel's Commentary view) ------------------------------
 function renderEngineChat() {
   $('#ec-on').checked = ec.on;
@@ -349,12 +297,10 @@ $('#ec-on').onchange = (e) => {
   for (const g of ec.games.values()) { g.count = 0; g.stopped = false; }
   saveEngineChat();
   renderEngineChat();
-  syncEngineChat();
-  window.syncChat?.();
 };
 $('#ec-every').onchange = (e) => { ec.every = +e.target.value || 2; saveEngineChat(); };
-// The personalities to choose from, then the user's own.
-for (const [key, s] of [...Object.entries(ECD.STYLES), ['custom', { label: 'Your own…' }]]) {
+// The personalities to choose from, then a random one each message, then the user's own.
+for (const [key, s] of [...Object.entries(ECD.STYLES), ['random', { label: 'Random, a new one each message' }], ['custom', { label: 'Your own…' }]]) {
   const o = document.createElement('option');
   o.value = key;
   o.textContent = s.label;
@@ -373,6 +319,4 @@ for (const id of ['#ec-name', '#ec-custom']) {
   $(id).addEventListener('keydown', (e) => { if (e.key === 'Escape') e.target.blur(); e.stopPropagation(); });
 }
 
-window.syncEngineChat = syncEngineChat;
 renderEngineChat();
-if (state) syncEngineChat();

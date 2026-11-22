@@ -2804,7 +2804,6 @@ function applyState(next) {
   if (newGame && typeof renderWatchStrip === 'function') renderWatchStrip();
   if (newGame) window.maybeVersus?.(prev);
   window.renderPositionBar?.();
-  window.syncEngineChat?.(); // before the chat: a game against an engine may have one
   window.syncChat?.();
   window.syncMatchHistory?.();
   window.syncCommentary?.();

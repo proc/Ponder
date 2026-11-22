@@ -169,8 +169,10 @@ tried again.
 
 ## Engine chat
 
-With **Engine chat** on (Commentary view, off at first), an engine playing a
-game answers its opponent's moves in the game chat, in character. The AI
+With **Engine chat** on (Commentary view, off at first), your engine playing
+on Lichess answers its opponent's moves in the game chat, in character. It is
+only for games your engine plays: a game you play yourself against an engine
+on this computer has no engine chat. The AI
 model set in Settings → AI writes each message. It is told what the engine
 itself thinks: the opponent's last move, the position (FEN), the engine's
 evaluation and search depth, the move it is playing, and the line it expects.
@@ -181,7 +183,10 @@ It is asked not to give that line away, and not to give advice.
 - **Name** is the name the engine goes by in the chat. Left empty, it uses
   its own name.
 - **Personality** is how it talks: Friendly (at first), Cocky, Gentleman,
-  Grumpy, Coach, Pirate, Robot, Zen or Bard. **Your own…** opens a box to
+  Grumpy, Coach, Pirate, Robot, Zen, Bard, Sportscaster, Detective, Wizard,
+  Cowboy, Knight, Mad scientist, Villain, Butler, Surfer, Philosopher, Cat,
+  Haiku poet, Streamer or Shy. **Random** picks one of these again for
+  each message, so the engine's mood changes as the game goes. **Your own…** opens a box to
   describe it yourself, up to 400 characters ("a sleepy cat who naps between
   moves and hates trading queens"). Whatever the personality, the engine is
   told to stay kind to its opponent: no insults, and no remarks about them as
@@ -195,8 +200,15 @@ It is asked not to give that line away, and not to give advice.
   still posted in the other, and the setting says which room missed it.
   This works for every game the engine plays, whether it is on the board or
   not.
-- **A game against an engine on this computer:** the message shows in the
-  game's chat card. Nothing is posted anywhere.
+- **It remembers its opponents.** When a game starts, the app reads your
+  bot's record against that opponent from Lichess: the same head-to-head
+  score the player card shows under "Against this opponent" (games played,
+  and points for each side), and the current run of games between them when
+  there is one. Only its first message of the game (or its second, if the
+  record wasn't read in time for the first) gives the AI that record, so the
+  engine brings up a rematch or a score to settle once, at the start, and
+  not again. Against someone it has never played, the AI is told it is
+  their first game. If Lichess doesn't answer, nothing is said about it.
 - **When its opponent writes to it on Lichess**, in the players' room or the
   spectators' room, the engine answers in that same room, in character. The
   AI is given what the opponent wrote, the last few lines of the chat, the
@@ -208,10 +220,14 @@ It is asked not to give that line away, and not to give advice.
   out answering the latest thing said.
 
 The engine never waits for a message: one is asked for only after its move
-has been played. Messages are limited to one every 15 seconds in a game,
-and four a minute over all games. On Lichess each message is two posts, one
-in each room, so that is at most eight posts a minute. Its first move answers nothing, so it says
-nothing then.
+has been played. Messages are limited to one every 10 seconds in a game,
+and six a minute over all games. On Lichess each message is two posts, one
+in each room, so that is at most twelve posts a minute. A message that is
+due sooner, or while the last one is still being written, is not dropped:
+it waits, and goes out about the engine's latest move. So with **Answer
+every** set to every move, a fast game gets a message about every 10
+seconds rather than one at each move. Its first move answers nothing, so it
+says nothing then.
 
 **When the game is over**, the engine sends one last message, in
 character. It says the game is over and how it ended: the result and the
@@ -219,10 +235,9 @@ way it ended (checkmate, resignation, time, stalemate, a draw, …). It speaks
 as the winner or the loser: if it lost, it congratulates its opponent; if it
 won, it thanks them; if it was a draw, it says so. Then it gives a quick
 recap of the game: how it began, where it turned and how it finished. The AI
-is given the result and how it ended, all the moves (and the opening, in a
-game on this computer), and the engine's evaluation at each of its moves,
-with the moves where it swung most. On Lichess this message goes to both
-rooms; in a game on this computer it shows in the chat card. An aborted game
+is given the result and how it ended, all the moves, and the engine's evaluation at each of its moves,
+with the moves where it swung most. This message goes to both rooms of the
+game's chat. An aborted game
 gets none. It waits for the limits below if it must, rather than being left
 out, and it is sent once a game.
 
@@ -231,7 +246,7 @@ few sentences when there is more to say. Lichess takes chat messages of up
 to 140 characters, so a longer message is posted in parts, at most three,
 one after another a moment apart. It is split between sentences where they
 fit, else between words. Each part after the first counts as one more
-message under the limit of four a minute. The model's answer is capped at a
+message under the limit of six a minute. The model's answer is capped at a
 small number of tokens.
 
 - If a message comes back too long, the model is shown its own message and

@@ -78,21 +78,18 @@ test('the last resort for a message too long: cut at a sentence, else a word, ne
   assert.equal(d.fit('Nice move.'), 'Nice move.');
 });
 
-test('every so many moves, and rate-limited per game and over all games', () => {
+test('every so many moves; the limits are replyDue\'s, and wait rather than drop', () => {
   const g = {};
-  assert.equal(d.due(g, 2, 100000), false); // the first of two
-  assert.equal(d.due(g, 2, 101000), true);
-  // Made: the caller starts again.
-  Object.assign(g, { count: 0, at: 101000 });
-  d.due(g, 2, 102000);
-  assert.equal(d.due(g, 2, 103000), false, 'too soon after the last');
-  assert.equal(d.due(g, 2, 101000 + d.GAP_MS), true, 'held back, then made at the next move');
-  // Busy with one already: not another.
-  assert.equal(d.due({ count: 5, busy: true }, 1, 1e6), false);
+  assert.equal(d.due(g, 2), false); // the first of two
+  assert.equal(d.due(g, 2), true);
+  assert.equal(d.due({}, 1), true, 'every move');
+  // Too soon after the last: the time left to wait, not a refusal.
+  assert.equal(d.replyDue({ at: 100000, replies: 0 }, 103000), d.GAP_MS - 3000);
+  assert.equal(d.replyDue({ at: 100000, replies: 0 }, 100000 + d.GAP_MS), true);
   // Over all games: at most PER_MINUTE a minute.
   const recent = Array.from({ length: d.PER_MINUTE }, (_, i) => 1e6 - i * 1000);
-  assert.equal(d.due({}, 1, 1e6 + 1, recent), false);
-  assert.equal(d.due({}, 1, 1e6 + 61000, recent), true);
+  assert.ok(d.replyDue({}, 1e6 + 1, recent) > 0);
+  assert.equal(d.replyDue({}, 1e6 + 61000, recent), true);
 });
 
 // --- engine-chat.js, with the page stood in for ---------------------------
@@ -103,10 +100,11 @@ const anything = () => new Proxy(function () {}, {
   set: (t, k, v) => { t[k] = v; return true; },
 });
 // reply: the AI's answer, or a list of them in turn (an Error is thrown).
-function load({ on = true, every = 1, persona = '', saved = null, reply = 'A bold knight, Alice. My bishop says hello.', postError = null } = {}) {
+function load({ on = true, every = 1, persona = '', saved = null, reply = 'A bold knight, Alice. My bishop says hello.', postError = null, crosstable = null } = {}) {
   const replies = Array.isArray(reply) ? [...reply] : null;
   const asked = [];
   const posted = [];
+  const looked = [];
   const store = { engineChat: JSON.stringify(saved ? { on, every, ...saved } : { on, every, persona }) };
   const ctx = {
     console, Date, Promise, JSON, Math, Map,
@@ -124,14 +122,17 @@ function load({ on = true, every = 1, persona = '', saved = null, reply = 'A bol
           return typeof r === 'string' ? { text: r } : r;
         },
       },
-      backend: async (cmd, args) => { posted.push({ cmd, args }); if (postError) throw postError; },
+      backend: async (cmd, args) => {
+        if (cmd === 'lichessBotCrosstable') { looked.push(args); if (!crosstable) throw new Error('not connected'); return crosstable; }
+        posted.push({ cmd, args }); if (postError) throw postError;
+      },
     },
   };
   ctx.window = ctx;
   ctx.engineChatData = d;
   vm.createContext(ctx);
   vm.runInContext(`${SRC}\n;globalThis.ec = ec;`, ctx);
-  return { ctx, asked, posted };
+  return { ctx, asked, posted, looked };
 }
 const settle = () => new Promise((r) => setImmediate(r));
 
@@ -230,7 +231,7 @@ test('a message Lichess would not take in a room: said, and the engine still tal
   await settle();
   assert.equal(posted.length, 1);
   assert.equal(ctx.ec.note, "The engine’s last message was not posted in the spectators' chat: Lichess answered 429");
-  ctx.ec.games.get('bot:abcd1234').at = 0; // past the 15 s between messages
+  ctx.ec.games.get('bot:abcd1234').at = 0; // past the gap between messages
   ctx.engineChatBotMove({ ...MOVE, ply: 8 });
   await settle();
   assert.equal(asked.length, 2, 'not stopped by a post that failed');
@@ -287,6 +288,54 @@ test('a personality of your own: given as written, in the answers and the last m
   assert.match(d.personalityOf({ style: 'nonsense' }), /good-natured/);
 });
 
+test('a random personality: one of the others, drawn again for each message', () => {
+  const p = { name: 'Rando', style: 'random', custom: '' };
+  assert.equal(d.characterOf(p).style, 'random');
+  const all = Object.values(d.STYLES);
+  assert.equal(d.personalityOf(p, () => 0), all[0].text);
+  assert.equal(d.personalityOf(p, () => 0.9999), all.at(-1).text);
+  const m = { engine: 'Stockfish', side: 'white', opponent: 'Alice', fen: 'startpos', moves: [] };
+  const seen = new Set();
+  for (let i = 0; i < 60; i++) seen.add(d.messages(m, p)[0].content.match(/Your personality: (.*?)\. Stay/)[1]);
+  assert.ok(seen.size > 3, 'not the same one each message');
+  for (const t of seen) assert.ok(all.some((s) => s.text === t));
+});
+
+test('the record against the opponent, from the player card\'s crosstable, as the prompts give it', () => {
+  const h = d.crosstableOf({ users: { ponderbot: 7.5, alice: 4.5 }, nbGames: 12, matchup: { users: { ponderbot: 2, alice: 1 }, nbGames: 3 } }, 'PonderBot');
+  assert.deepEqual({ ...h, run: { ...h.run } }, { games: 12, me: 7.5, them: 4.5, run: { games: 3, me: 2, them: 1 } });
+  const m = { engine: 'Stockfish', side: 'white', opponent: 'Alice', fen: 'startpos', moves: [], h2h: h };
+  for (const msgs of [d.messages(m, ''), d.replyMessages(m, '', { text: 'hi', room: 'player' }), d.endMessages({ ...m, outcome: 'won', reason: 'White wins by checkmate' }, '')]) {
+    assert.match(msgs[1].content, /Your record against Alice on Lichess, before this game: 12 games, 7½ points for you and 4½ for them \(you lead/);
+    assert.match(msgs[1].content, /3 are in your current run of games against them: 2 – 1/);
+  }
+  // Never met: said so. Not known: nothing.
+  assert.match(d.h2hLines(d.crosstableOf({ users: {}, nbGames: 0 }, 'PonderBot'), 'Bob').join(' '), /first game against Bob/);
+  assert.deepEqual(d.h2hLines(d.crosstableOf(null, 'PonderBot'), 'Bob'), []);
+  assert.doesNotMatch(d.messages({ ...m, h2h: null }, '')[1].content, /record against/);
+});
+
+test('Lichess: the crosstable is read once a game and goes with the message', async () => {
+  const { ctx, asked, looked } = load({ crosstable: { users: { ponderbot: 1, alice: 3 }, nbGames: 4 } });
+  ctx.engineChatBotMove({ ...MOVE, ply: 0, last: '', moves: [] }); // its first move: nothing said, but the record is read
+  await settle();
+  ctx.engineChatBotMove(MOVE);
+  await settle();
+  assert.equal(JSON.stringify(looked), JSON.stringify([{ opponent: MOVE.opponent }]));
+  assert.match(asked[0].messages[1].content, /4 games, 1 points for you and 3 for them \(they lead/);
+  // Said at the start; not again in that game, nor in its last message.
+  ctx.ec.games.get('bot:abcd1234').at = 0;
+  ctx.engineChatBotMove({ ...MOVE, ply: 6 });
+  await settled();
+  assert.equal(asked.length, 2);
+  assert.doesNotMatch(asked[1].messages[1].content, /record against/);
+  ctx.ec.games.get('bot:abcd1234').at = 0;
+  ctx.engineChatGameEnd(END);
+  await settled();
+  assert.equal(asked.length, 3);
+  assert.doesNotMatch(asked[2].messages[1].content, /record against/);
+});
+
 test('the old Character setting: a name stays a name, a description becomes its own personality', () => {
   assert.deepEqual({ ...d.characterOf('Sir Blunderalot') }, { name: 'Sir Blunderalot', style: 'friendly', custom: '' });
   assert.deepEqual({ ...d.characterOf('Captain Gambit, a cheerful pirate') }, { name: 'Captain Gambit', style: 'custom', custom: 'Captain Gambit, a cheerful pirate' });
@@ -308,38 +357,6 @@ test('an AI that fails: not asked again in that game, and nothing posted', async
   ctx.engineChatBotMove({ ...MOVE, gameId: 'other123' });
   await settle();
   assert.equal(asked.length, 2);
-});
-
-test('a game on this computer: the engine\'s message shows in the game\'s chat, its own view of its move', async () => {
-  const { ctx, asked, posted } = load();
-  const fens = [
-    'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1',
-    'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2',
-  ];
-  ctx.state = { game: 3, active: true, players: { white: { type: 'human', name: 'You' }, black: { type: 'engine', name: 'Basic' } }, moves: [] };
-  ctx.syncEngineChat();
-  ctx.state = { ...ctx.state, moves: [{ uci: 'e2e4', san: 'e4', fen: fens[0] }] };
-  ctx.syncEngineChat();
-  ctx.engineInfo.black = { side: 'black', ply: 1, hasEval: true, cp: 20, depth: 9, pv: ['e5', 'Nf3'] };
-  ctx.state = { ...ctx.state, moves: [...ctx.state.moves, { uci: 'e7e5', san: 'e5', fen: fens[1] }] };
-  ctx.syncEngineChat();
-  await settle();
-  assert.equal(asked.length, 1);
-  const user = asked[0].messages[1].content;
-  assert.match(user, /Their last move: 1\. e4/);
-  assert.match(user, /Your evaluation, from your side: −0\.20 pawns/);
-  assert.match(user, /The move you are playing now: e5/);
-  assert.match(asked[0].messages[0].content, /You are Basic, a chess engine playing Black against You\./);
-  assert.equal(posted.length, 0, 'nothing is sent anywhere');
-  const local = ctx.engineChatLocal();
-  assert.equal(local.lines.length, 1);
-  assert.equal(local.lines[0].user, 'Basic');
-  assert.equal(local.lines[0].text, 'A bold knight, Alice. My bishop says hello.');
-  // Your own move does not call for a message.
-  ctx.state = { ...ctx.state, moves: [...ctx.state.moves, { uci: 'g1f3', san: 'Nf3', fen: 'rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2' }] };
-  ctx.syncEngineChat();
-  await settle();
-  assert.equal(asked.length, 1);
 });
 
 test('an answer to the opponent: what they said, the chat before it, in character', () => {
@@ -366,7 +383,7 @@ test('answers keep to the limits: a gap in each game, a few a minute, a cap a ga
   assert.equal(d.replyDue({}, now), true);
   assert.equal(d.replyDue({ at: now - 5000 }, now), d.GAP_MS - 5000);
   assert.equal(d.replyDue({ busy: true }, now), 1000);
-  const recent = [now - 50000, now - 40000, now - 30000, now - 20000];
+  const recent = Array.from({ length: d.PER_MINUTE }, (_, i) => now - 50000 + i * 5000);
   assert.equal(d.replyDue({}, now, recent), 10000); // the oldest of the minute drops out in 10 s
   assert.equal(d.replyDue({ replies: d.MAX_REPLIES }, now), false);
 });
@@ -456,6 +473,27 @@ test('Lichess: when the game is over, the last message goes to both rooms, in pa
   assert.equal(asked.length, 1);
 });
 
+test('every move: a move too soon after the last remark waits for the gap, and the remark is about the latest move', async () => {
+  const { ctx, asked, posted } = load({ every: 1 });
+  const timers = [];
+  ctx.setTimeout = (f, ms) => { timers.push({ f, ms }); return timers.length; };
+  ctx.engineChatBotMove(MOVE);
+  await settled();
+  assert.equal(asked.length, 1);
+  ctx.engineChatBotMove({ ...MOVE, ply: 8 });
+  ctx.engineChatBotMove({ ...MOVE, ply: 10 }); // another meanwhile: takes its place
+  await settled();
+  assert.equal(asked.length, 1, 'not yet: the gap');
+  const wait = timers.at(-1);
+  assert.ok(wait.ms > 0 && wait.ms <= d.GAP_MS);
+  ctx.ec.games.get('bot:abcd1234').at = 0;
+  wait.f();
+  await settled();
+  assert.equal(asked.length, 2, 'not dropped');
+  assert.equal(asked[1].id, 'ec:bot:abcd1234:10');
+  assert.equal(posted.length, 2);
+});
+
 test('the last message waits for the gap after a remark, rather than being dropped', async () => {
   const { ctx, asked, posted } = load();
   const timers = [];
@@ -474,33 +512,12 @@ test('the last message waits for the gap after a remark, rather than being dropp
   assert.match(asked[1].messages[0].content, /one last chat message/);
 });
 
-test('a game on this computer: when it is over, the engine\'s last message in the chat card', async () => {
-  const { ctx, asked, posted } = load({ reply: 'A draw by stalemate! Well held, my friend.' });
-  const fens = [
-    'rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1',
-    'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2',
-  ];
-  ctx.state = { game: 4, active: true, result: '*', players: { white: { type: 'human', name: 'You' }, black: { type: 'engine', name: 'Basic' } }, moves: [] };
-  ctx.syncEngineChat();
-  ctx.state = { ...ctx.state, moves: [{ uci: 'e2e4', san: 'e4', fen: fens[0] }] };
-  ctx.syncEngineChat();
-  ctx.engineInfo.black = { side: 'black', ply: 1, hasEval: true, cp: 20, depth: 9, pv: ['e5'] };
-  ctx.state = { ...ctx.state, moves: [...ctx.state.moves, { uci: 'e7e5', san: 'e5', fen: fens[1], opening: "C20 King's Pawn Game" }] };
-  ctx.syncEngineChat();
-  await settled();
-  ctx.ec.games.get('local:4').at = 0; // past the gap after its remark
-  ctx.ec.recent = [];
-  ctx.state = { ...ctx.state, active: false, result: '1/2-1/2', reason: 'Draw by agreement' };
-  ctx.syncEngineChat();
-  await settled();
-  const end = asked.at(-1).messages;
-  assert.match(end[0].content, /It was a draw/);
-  assert.match(end[1].content, /How it ended: Draw by agreement/);
-  assert.match(end[1].content, /The opening: C20 King's Pawn Game/);
-  assert.match(end[1].content, /1\.\.\. e5 −0\.2/);
-  assert.equal(posted.length, 0, 'nothing sent anywhere');
-  assert.equal(ctx.engineChatLocal().lines.at(-1).text, 'A draw by stalemate! Well held, my friend.');
-  ctx.syncEngineChat(); // once only
-  await settled();
-  assert.equal(asked.filter((a) => a.channel.startsWith('engine-end')).length, 1);
+test('a game you play against an engine on this computer: no engine chat', async () => {
+  const { ctx, asked } = load();
+  ctx.state = { game: 3, active: true, players: { white: { type: 'human', name: 'You' }, black: { type: 'engine', name: 'Basic' } }, moves: [] };
+  // Nothing hooks into the game on the board: the chat card gets no engine lines.
+  assert.equal(ctx.syncEngineChat, undefined);
+  assert.equal(ctx.engineChatLocal, undefined);
+  await settle();
+  assert.equal(asked.length, 0);
 });

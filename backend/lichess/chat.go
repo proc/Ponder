@@ -2,6 +2,7 @@ package lichess
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -254,6 +255,33 @@ func (b *Bot) Remark(id, text string) error {
 }
 
 var roomName = map[string]string{"player": "players", "spectator": "spectators"}
+
+// Crosstable is your bot's record against one opponent on Lichess, as the
+// player card shows it: Lichess's crosstable (the points each has scored
+// over their games, and the number of games), with the current run of games
+// between them ("matchup") when they are playing now. Engine chat gives it
+// to the AI, so the engine remembers who it has played.
+func (b *Bot) Crosstable(opponent string) (json.RawMessage, error) {
+	opponent = strings.TrimSpace(opponent)
+	c, err := b.connected()
+	if err != nil {
+		return nil, err
+	}
+	b.mu.Lock()
+	me := ""
+	if b.account != nil {
+		me = b.account.ID
+	}
+	b.mu.Unlock()
+	if me == "" || opponent == "" {
+		return nil, errors.New("no opponent")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	var raw json.RawMessage
+	err = c.getJSON(ctx, "/api/crosstable/"+url.PathEscape(me)+"/"+url.PathEscape(opponent)+"?matchup=true", &raw)
+	return raw, err
+}
 
 // post sends a message. The game's stream brings it back, until the game
 // is over: then it is added to the chat here.

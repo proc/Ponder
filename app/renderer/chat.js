@@ -2,8 +2,6 @@
 // spectators' room, where the people watching talk. Lichess gives the chat
 // only to the accounts in the game, so it works for your own games and your
 // engine's; a game you only watch has its chat on Lichess itself.
-// A game on this computer against an engine has a chat too while engine
-// chat is on (engine-chat.js): the engine's messages, nothing sent anywhere.
 
 const CHAT_MAX = 140;
 
@@ -35,14 +33,13 @@ const chatFloat = floatWindow($('#chat'), {
       ...(unread ? [el('span', { className: 'chat-unread', textContent: String(unread) })] : [])];
   },
 });
-const chatFloats = () => chat.kind === 'bot' || chat.kind === 'play' || chat.kind === 'local';
+const chatFloats = () => chat.kind === 'bot' || chat.kind === 'play';
 
 // Called whenever the game on the board changes.
 function syncChat() {
   const ext = state?.external;
-  const local = !ext ? window.engineChatLocal?.() : null;
-  const id = ext && chatKinds.has(ext.kind) ? ext.id : local ? `local:${local.game}` : null;
-  const kind = local ? 'local' : ext?.kind ?? null;
+  const id = ext && chatKinds.has(ext.kind) ? ext.id : null;
+  const kind = ext?.kind ?? null;
   if (id !== chat.gameId || kind !== chat.kind) {
     Object.assign(chat, {
       gameId: id, kind, view: null, lines: [], error: '', sending: false,
@@ -53,8 +50,7 @@ function syncChat() {
     });
     $('#chat-text').value = '';
     chat.drawn = '';
-    if (local) Object.assign(chat, { view: { local: true, me: '' }, lines: local.lines, room: 'player' });
-    else if (id) loadChat(id);
+    if (id) loadChat(id);
     // A new game brings the window back, open.
     if (id && chatFloats()) chatFloat.reopen();
   }
@@ -123,7 +119,7 @@ function renderChat() {
 
   // With only a note to show, the card is as tall as the note.
   if (card.classList.contains('collapsed') === usable) card.classList.toggle('collapsed', !usable);
-  $('#chat-rooms').hidden = !usable || chat.kind === 'local';
+  $('#chat-rooms').hidden = !usable;
   for (const b of $('#chat-rooms').querySelectorAll('button')) {
     const on = b.dataset.room === chat.room;
     b.classList.toggle('on', on);
@@ -149,11 +145,9 @@ function renderChat() {
   } else {
     const lines = chat.lines.filter((l) => l.room === chat.room);
     if (lines.length === 0) {
-      box.replaceChildren(chatEmpty(chat.kind === 'local'
-        ? 'The engine says what it thinks of your moves here, every few moves (engine chat, in the AI panel’s Commentary view).'
-        : chat.room === 'spectator'
-          ? 'Nobody watching has said anything yet.'
-          : 'Nothing said between the players yet.'));
+      box.replaceChildren(chatEmpty(chat.room === 'spectator'
+        ? 'Nobody watching has said anything yet.'
+        : 'Nothing said between the players yet.'));
     } else {
       box.replaceChildren(...lines.map(chatLineNode));
     }
@@ -161,8 +155,7 @@ function renderChat() {
   }
   chat.drawn = drawn;
 
-  // The engine of a game on this computer is not listening: no box to write in.
-  $('#chat-form').hidden = !usable || chat.kind === 'local';
+  $('#chat-form').hidden = !usable;
   if (usable) {
     const input = $('#chat-text');
     const me = chat.view.me || 'you';
@@ -229,7 +222,3 @@ $('#chat-form').onsubmit = async (e) => {
 window.syncChat = syncChat;
 if (state) syncChat();
 window.lichessChatEvent = lichessChatEvent;
-// A new message from the engine, in a game on this computer.
-window.engineChatLocalLine = () => {
-  if (chat.kind === 'local') renderChat();
-};

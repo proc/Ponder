@@ -15,9 +15,9 @@
   // Rate limits: one remark a game at most this often, and at most so many
   // in a minute over all the engine's games together. On Lichess each
   // remark is two posts (the players' room and the spectators'), so at
-  // most 8 posts a minute.
-  const GAP_MS = 15000;
-  const PER_MINUTE = 4;
+  // most 12 posts a minute. A remark due sooner waits, and goes out then.
+  const GAP_MS = 10000;
+  const PER_MINUTE = 6;
 
   // The moves as text: "1. e4 e5 2. Nf3", from a position with White or
   // Black to move first.
@@ -82,6 +82,20 @@
     robot: { label: 'Robot', text: 'a precise, literal robot that speaks in clipped, logical sentences, with deadpan humour about its circuits' },
     zen: { label: 'Zen', text: 'a calm Zen master who speaks in short, serene, thoughtful lines about balance and patience' },
     bard: { label: 'Bard', text: 'a dramatic Shakespearean bard who speaks in grand, old-fashioned verse-like English' },
+    sportscaster: { label: 'Sportscaster', text: 'an excitable sports commentator calling its own game play by play, with big build-ups and roaring over every capture' },
+    detective: { label: 'Detective', text: 'a hard-boiled noir detective narrating the game like a case, in moody first-person lines about clues, suspects and rain' },
+    wizard: { label: 'Wizard', text: 'an ancient, slightly absent-minded wizard who treats its moves as spells and the board as an enchanted realm' },
+    cowboy: { label: 'Cowboy', text: 'a laid-back cowboy from the Old West who talks in a slow drawl, with plain-spoken sayings about the range and showdowns at high noon' },
+    knight: { label: 'Knight', text: 'a noble medieval knight, chivalrous and earnest, sworn to honour, who speaks of quests, banners and its liege' },
+    scientist: { label: 'Mad scientist', text: 'a gleeful mad scientist who treats the game as an experiment, cackling over hypotheses and results' },
+    villain: { label: 'Villain', text: 'a theatrical cartoon supervillain announcing its grand plans with a flourish, menacing in a silly, harmless way' },
+    butler: { label: 'Butler', text: 'an impeccably polite English butler, serving its moves as if they were tea, never ruffled' },
+    surfer: { label: 'Surfer', text: 'a chilled-out surfer who talks like one, dude, and sees the game as catching waves' },
+    philosopher: { label: 'Philosopher', text: 'a thoughtful philosopher who muses on what each move means, asking big questions in a light way' },
+    cat: { label: 'Cat', text: 'a cat playing chess: aloof, easily distracted, proud, occasionally knocking a piece about, and thinking of naps and treats' },
+    haiku: { label: 'Haiku poet', text: 'a poet who answers only in haiku, three short lines of five, seven and five syllables' },
+    hype: { label: 'Streamer', text: 'a high-energy chess streamer hyping up the game for its chat, with lots of excitement and the odd catchphrase' },
+    shy: { label: 'Shy', text: 'a shy, gentle player who is a little nervous, apologetic and sweet, and quietly delighted when things go well' },
   };
   const NAME_MAX = 40; // the longest name
   const CUSTOM_MAX = 400; // the longest personality written by the user
@@ -91,7 +105,7 @@
   // what comes before its first comma, the whole of it its personality.
   function characterOf(persona) {
     if (persona && typeof persona === 'object') {
-      const style = (STYLES[persona.style] || persona.style === 'custom') ? persona.style : 'friendly';
+      const style = (STYLES[persona.style] || persona.style === 'custom' || persona.style === 'random') ? persona.style : 'friendly';
       return { name: String(persona.name ?? '').trim().slice(0, NAME_MAX), style, custom: String(persona.custom ?? '').trim().slice(0, CUSTOM_MAX) };
     }
     const s = String(persona ?? '').trim();
@@ -106,9 +120,15 @@
 
   // How the engine talks, for the prompts: the personality chosen, or the
   // one the user wrote (the friendly one when that is empty).
-  function personalityOf(persona) {
+  // Random: one of the personalities above, drawn again for each message
+  // (rand: a number in [0, 1), Math.random by default).
+  function personalityOf(persona, rand = Math.random) {
     const c = characterOf(persona);
     if (c.style === 'custom' && c.custom) return c.custom;
+    if (c.style === 'random') {
+      const all = Object.values(STYLES);
+      return all[Math.min(all.length - 1, Math.floor(rand() * all.length))].text;
+    }
     return (STYLES[c.style] ?? STYLES.friendly).text;
   }
   const characterLines = (who, persona) => [
@@ -136,6 +156,7 @@
     const parts = [];
     const game = [m.rated ? 'Rated' : 'Casual', m.speed, 'game'].filter(Boolean).join(' ');
     parts.push(`${game}${m.lichess ? ' on Lichess' : ''}. You are ${who}, playing ${side}. Your opponent: ${opponent}${m.opponentTitle ? ` (${m.opponentTitle})` : ''}${m.opponentRating ? `, rated ${m.opponentRating}` : ''}.`);
+    parts.push(...h2hLines(m.h2h, opponent));
     const start = startOf(m.fen, m.moves?.length ?? 0);
     if (m.moves?.length) parts.push(`The moves so far: ${movesText(m.moves, start)}`);
     if (m.last) {
@@ -200,17 +221,13 @@
   }
 
   // Is a remark due, now that the engine has answered one more of its
-  // opponent's moves? g: the game's own record ({ count, at, busy }); recent:
-  // when the remarks of all games were made. A remark held back by the
-  // limits is made at the next move instead; the caller starts the count
-  // again once one is made.
-  function due(g, every, now, recent = []) {
+  // opponent's moves? g: the game's own record ({ count }). Counts the move;
+  // the caller starts the count again once the remark is made. When it may
+  // go out is replyDue's to say: a remark held back by the limits waits for
+  // them, it is not dropped.
+  function due(g, every) {
     g.count = (g.count ?? 0) + 1;
-    if (g.count < every) return false;
-    if (g.busy) return false;
-    if (g.at && now - g.at < GAP_MS) return false;
-    if (recent.filter((t) => now - t < 60000).length >= PER_MINUTE) return false;
-    return true;
+    return g.count >= every;
   }
 
   // Answers to what the opponent says in the chat: at most this many in a
@@ -220,6 +237,34 @@
   // What was said before, given to the model so the answer follows the
   // conversation: the last few lines of both rooms.
   const HISTORY = 8;
+
+  // The engine's record against its opponent on Lichess, as the player
+  // card shows it: Lichess's crosstable for the two of them, read when the
+  // game starts (so it is the games before this one). ct: its JSON ({ users:
+  // { id: points }, nbGames, matchup? }); me: the engine's account. Lines for
+  // the prompts, none when it is not known.
+  function crosstableOf(ct, me) {
+    if (!ct || typeof ct !== 'object' || !(ct.nbGames >= 0)) return null;
+    const side = (x) => {
+      const users = Object.entries(x?.users ?? {});
+      const mine = users.find(([u]) => u.toLowerCase() === String(me ?? '').toLowerCase());
+      const theirs = users.find(([u]) => u.toLowerCase() !== String(me ?? '').toLowerCase());
+      return { games: +x?.nbGames || 0, me: mine ? +mine[1] || 0 : 0, them: theirs ? +theirs[1] || 0 : 0 };
+    };
+    const out = side(ct);
+    if (ct.matchup?.nbGames > 0) out.run = side(ct.matchup);
+    return out;
+  }
+  function h2hLines(h, opponent) {
+    if (!h) return [];
+    const pts = (v) => (v % 1 ? `${Math.floor(v) || ''}½` : String(v));
+    const verdict = (x) => (x.me > x.them ? 'you lead' : x.me < x.them ? 'they lead' : 'level');
+    if (!h.games) return [`This is your first game against ${opponent} on Lichess: you have not played each other before. You may greet them as someone new, in this message only.`];
+    const out = [`Your record against ${opponent} on Lichess, before this game: ${h.games} game${h.games === 1 ? '' : 's'}, ${pts(h.me)} points for you and ${pts(h.them)} for them (${verdict(h)}; a win is a point, a draw half).`];
+    if (h.run?.games) out.push(`Of those, ${h.run.games} ${h.run.games === 1 ? 'is' : 'are'} in your current run of games against them: ${pts(h.run.me)} – ${pts(h.run.them)} (${verdict(h.run)}).`);
+    out.push('You remember them: say something about your history together in this message, briefly and in character (a rematch, a score to settle, a long rivalry). This is the only time you are told of it: do not bring it up again later in the game.');
+    return out;
+  }
 
   // What the AI is asked to answer the opponent's chat message. m: what the
   // engine last made of the game (as for messages(), the move fields may be
@@ -243,6 +288,7 @@
     const parts = [];
     const game = [m.rated ? 'Rated' : 'Casual', m.speed, 'game'].filter(Boolean).join(' ');
     parts.push(`${game}${m.lichess ? ' on Lichess' : ''}. You are ${who}, playing ${side}. Your opponent: ${opponent}${m.opponentTitle ? ` (${m.opponentTitle})` : ''}${m.opponentRating ? `, rated ${m.opponentRating}` : ''}.`);
+    parts.push(...h2hLines(m.h2h, opponent));
     if (m.moves?.length) parts.push(`The moves so far: ${movesText(m.moves, startOf(m.fen, m.moves.length))}${m.move ? ` ${m.move} (your last move)` : ''}`);
     else if (m.move) parts.push(`Your last move: ${m.move}`);
     else parts.push('No moves have been played yet.');
@@ -331,6 +377,7 @@
     const parts = [];
     const game = [e.rated ? 'Rated' : 'Casual', e.speed, 'game'].filter(Boolean).join(' ');
     parts.push(`${game}${e.lichess ? ' on Lichess' : ''}. You are ${who}, playing ${side}. Your opponent: ${opponent}${e.opponentTitle ? ` (${e.opponentTitle})` : ''}${e.opponentRating ? `, rated ${e.opponentRating}` : ''}.`);
+    parts.push(...h2hLines(e.h2h, opponent));
     parts.push(`The result: ${outcome}. ${e.reason ? `How it ended: ${e.reason}${e.result ? ` (${e.result.replace('1/2-1/2', '½–½')})` : ''}.` : ''}`.trim());
     const start = startOf(e.fen, e.moves?.length ?? 0);
     if (e.opening) parts.push(`The opening: ${e.opening}`);
@@ -382,7 +429,7 @@
     return pack(pieces.flatMap((piece) => piece.split(' ')), ' ');
   }
 
-  const api = { STYLES, NAME_MAX, CUSTOM_MAX, characterOf, personalityOf, MAX, LONG, PARTS, split, endMessages, evalStory, MAX_TOKENS, EVERY, GAP_MS, PER_MINUTE, MAX_REPLIES, HISTORY, movesText, startOf, evalText, personaOf, messages, replyMessages, replyDue, cleanText, shorter, fit, compose, due };
+  const api = { crosstableOf, h2hLines, STYLES, NAME_MAX, CUSTOM_MAX, characterOf, personalityOf, MAX, LONG, PARTS, split, endMessages, evalStory, MAX_TOKENS, EVERY, GAP_MS, PER_MINUTE, MAX_REPLIES, HISTORY, movesText, startOf, evalText, personaOf, messages, replyMessages, replyDue, cleanText, shorter, fit, compose, due };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.engineChatData = api;
 }(typeof window !== 'undefined' ? window : globalThis));

@@ -75,9 +75,11 @@ func main() {
 				mgr.ShowExternal(v)
 			}
 		},
+		// A new game of your engine's takes the board only when the board
+		// shows nothing of yours (nothing yet, or another of its games);
+		// otherwise it joins the row of small boards, like a game watched.
 		AutoWatch: func() bool {
-			_, kind, live := mgr.ExternalKind()
-			return !mgr.Busy() && !spectator.Active() && !tourney.Watching() && !(kind == "play" && live)
+			return mgr.FreeFor("bot") && !spectator.Active() && !tourney.Watching()
 		},
 		Save: func(text string) { saveToDatabase("lichess", text) },
 	})
@@ -1452,6 +1454,13 @@ func handle(mgr *game.Manager, req request) (any, error) {
 			return nil, player.Say(a.ID, a.Room, a.Text)
 		}
 		return nil, bot.Say(a.ID, a.Room, a.Text)
+	case "lichessBotCrosstable":
+		// Your bot's record against an opponent, for its chat messages.
+		var a struct{ Opponent string }
+		if err := decode(&a); err != nil {
+			return nil, err
+		}
+		return bot.Crosstable(a.Opponent)
 	case "lichessBotRemark":
 		// The engine's chat message in one of its games, to its opponent
 		// and to the spectators.

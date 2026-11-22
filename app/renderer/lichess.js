@@ -724,12 +724,21 @@ function botStripGames(keep = null) {
   });
 }
 
+// Your engine has a game going while the board shows something else (a
+// game played or opened here): its games get the row of small boards even
+// when there is only one, like games being watched beside the board's.
+function botGamesBeside(games) {
+  return !lx.watch?.active && state?.external?.kind !== 'bot' && games.some((g) => g.live);
+}
+window.botGamesBeside = botGamesBeside;
+
 function renderWatchStrip() {
   const w = lx.watch;
   // A player being watched comes first; else your engine's own games.
   const games = w?.active ? w.games ?? [] : botStripGames();
   const strip = $('#watch-strip');
-  strip.hidden = games.length < 2;
+  const beside = botGamesBeside(games);
+  strip.hidden = games.length < 2 && !beside;
   window.renderWatchTiles?.();
   if (strip.hidden) { strip.replaceChildren(); return; }
   const left = strip.scrollLeft;
@@ -737,7 +746,8 @@ function renderWatchStrip() {
   const tiles = el('button', { type: 'button', className: 'ws-tiles', title: 'Watch all the games at once, each on a board of its own' });
   tiles.innerHTML = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></g></svg><span>Tiles</span>';
   tiles.onclick = () => window.setWatchTiles?.(true);
-  strip.replaceChildren(tiles, ...games.map((g) => {
+  // With one game only (beside a game of yours), there is nothing to tile.
+  strip.replaceChildren(...(games.length >= 2 ? [tiles] : []), ...games.map((g) => {
     const other = g.side === 'black' ? 'white' : 'black';
     const rating = g[other + 'Rating'];
     const result = { '1-0': '1–0', '0-1': '0–1', '1/2-1/2': '½–½' }[g.result] ?? 'Ended';
@@ -754,7 +764,7 @@ function renderWatchStrip() {
         g.shown ? el('span', { className: 'ws-tag', textContent: 'On the board' }) : null,
       ].filter(Boolean)),
     ]);
-    card.title = `${g.white} – ${g.black} · ${g.label}` + (g.shown ? ' (on the board)' : ': click to put it on the board');
+    card.title = `${g.white} – ${g.black} · ${g.label}` + (g.shown ? ' (on the board)' : beside ? ': click to put it on the board, in place of the game there' : ': click to put it on the board');
     if (g.shown) card.setAttribute('aria-current', 'true');
     if (!g.shown) card.onclick = () => watchPick(g.id, g.bot);
     return card;

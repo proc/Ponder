@@ -498,6 +498,8 @@ func TestReconnectTakesOverGameStartedMeanwhile(t *testing.T) {
 
 func TestSeekChallengesRandomBotsUntilOneAccepts(t *testing.T) {
 	seekAnswerTimeout, seekPause, seekRetry, seekGap = 300*time.Millisecond, 20*time.Millisecond, 200*time.Millisecond, 20*time.Millisecond
+	defer func(d time.Duration) { seekRest = d }(seekRest)
+	seekRest = 0 // asked again at once: TestSeekLeavesADecliningBotBe has the rest
 	h := newHarness(t, Policy{})
 	// Only the bots that will not play are in range at first.
 	h.fake.Online = []fake.OnlineBot{{Name: "grumpy", Rating: 1700}, {Name: "picky", Rating: 1750}, {Name: "sleepy", Rating: 1650},
