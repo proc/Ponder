@@ -25,6 +25,18 @@ const aic = {
 aic.chat = aicNewChat();
 aic.chats.push(aic.chat);
 
+// The model and the thinking level, picked under the box (or with /model and
+// /think): the model is the one in Settings → AI, the thinking level is the
+// AI chat's own, kept for each provider. Both apply from the next message.
+const aiPick = {
+  settings: null,  // as api.ai.settings() gives them
+  models: [],      // the provider's models, once asked for
+  modelsOf: '',    // which provider (and address) they are of
+  flash: '',       // a short message in the note under the box
+  flashBad: false,
+  flashTimer: null,
+};
+
 // The panel floats over the right of the window and collapses to a handle
 // on the edge. Open or not, and its width, are remembered.
 const aiPanel = (() => {
@@ -496,10 +508,10 @@ function renderAiChat() {
     send.replaceChildren(aicIcon(send.dataset.icon));
   }
   send.disabled = elsewhere || (!here && !$('#aic-text').value.trim());
-  const model = aic.model ? `${aic.model} · ` : '';
   $('#aic-note').textContent = here
     ? `Waiting for the model… ${aicTime(Date.now() - aic.since)}. It waits until it answers or you stop it.`
-    : `${model}Sent with the game on the board and the position shown. A model can be wrong about tactics.`;
+    : aiPick.flash || 'Sent with the game on the board and the position shown. A model can be wrong about tactics.';
+  $('#aic-note').classList.toggle('error', !here && Boolean(aiPick.flashBad && aiPick.flash));
   $('#aic-note').title = aic.model ? `Answered by ${aic.model} (Settings → AI)` : '';
 }
 
@@ -568,6 +580,7 @@ async function sendAiChat(text) {
     answer.model = reply.model;
     answer.stopped = Boolean(reply.stopped);
     aic.model = reply.model ?? aic.model;
+    if (reply.levelIgnored) aiPickFlash(`${reply.model ?? 'The model'} did not take the thinking level, so it answered at its default.`, true);
     aiNoteUsage(chat, reply);
   } catch (err) {
     const msg = errorText(err);
@@ -607,6 +620,9 @@ $('#aic-form').onsubmit = (e) => {
   if (!text.trim()) return;
   box.value = '';
   aicGrow();
+  // /model and /think set the model and the thinking level, as the pickers
+  // under the box do; nothing is sent.
+  if (aiPickCommand(text)) return;
   sendAiChat(text);
 };
 // The box grows with what is typed, up to a few lines.
@@ -641,10 +657,134 @@ window.analyseGameWithAi = () => {
   sendAiChat(AI_ANALYSE_PROMPT);
 };
 
+// --- Model and thinking level --------------------------------------------------
+const AI_LEVEL_NAMES = {
+  default: 'default thinking', off: 'no thinking', on: 'thinking', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'extra high', max: 'max',
+};
+const AI_LEVEL_TITLES = {
+  default: 'As the model does when nothing is chosen',
+  off: 'Answers straight away, without thinking first',
+  on: 'Thinks before it answers (the server\'s own way of thinking)',
+  minimal: 'Thinks very briefly', low: 'Thinks a little: quick answers', medium: 'Thinks a fair amount', high: 'Thinks hard', xhigh: 'Thinks very hard', max: 'Thinks as hard as it can: slowest, and uses the most tokens',
+};
+function aiPickFlash(text, bad = false) {
+  clearTimeout(aiPick.flashTimer);
+  Object.assign(aiPick, { flash: text, flashBad: bad });
+  aiPick.flashTimer = setTimeout(() => { aiPick.flash = ''; renderAiChat(); }, 6000);
+  renderAiChat();
+}
+// The settings as they are now; the provider's models asked for once.
+async function aiPickLoad({ models = true } = {}) {
+  try { aiPickSettings(await api.ai.settings()); } catch { return; }
+  const s = aiPick.settings;
+  const of = `${s.provider}|${s.baseUrl ?? ''}`;
+  if (!models || !s.enabled || aiPick.modelsOf === of) return;
+  aiPick.modelsOf = of;
+  try { aiPick.models = await api.ai.models(); } catch { aiPick.models = []; aiPick.modelsOf = ''; }
+  renderAiPick();
+}
+function aiPickSettings(s) {
+  if (!s) return;
+  const of = `${s.provider}|${s.baseUrl ?? ''}`;
+  if (aiPick.modelsOf && aiPick.modelsOf !== of) { aiPick.models = []; aiPick.modelsOf = ''; }
+  aiPick.settings = s;
+  if (s.model) aic.model = s.model;
+  renderAiPick();
+}
+window.aiPickSettings = aiPickSettings;
+// The model's name for the picker: the one set, else the provider's choice.
+const aiPickModel = (s) => s.model || s.providers?.find((p) => p.id === s.provider)?.defaultModel || '';
+function renderAiPick() {
+  const s = aiPick.settings;
+  const bar = $('#aic-bar');
+  bar.hidden = !s?.enabled;
+  if (!s?.enabled) return;
+  const model = aiPickModel(s);
+  const sel = $('#aic-model');
+  const names = [...new Set([model, ...aiPick.models].filter(Boolean))];
+  const opts = names.map((n) => el('option', { value: n, textContent: n }));
+  if (!model) opts.unshift(el('option', { value: '', textContent: 'the server’s first model' }));
+  if (!aiPick.models.length) opts.push(el('option', { value: '\u0000list', textContent: 'List the models…' }));
+  opts.push(el('option', { value: '\u0000settings', textContent: 'Settings → AI…' }));
+  sel.replaceChildren(...opts);
+  sel.value = model;
+  const think = $('#aic-think');
+  const levels = s.thinkingLevels ?? ['default'];
+  think.replaceChildren(...levels.map((l) => el('option', { value: l, textContent: AI_LEVEL_NAMES[l] ?? l, title: AI_LEVEL_TITLES[l] ?? '' })));
+  think.value = levels.includes(s.thinking) ? s.thinking : s.thinking === 'on' && levels.includes('medium') ? 'medium' : levels[0];
+  think.disabled = levels.length < 2;
+  think.title = levels.length < 2
+    ? `${model || 'This model'}: its thinking cannot be set from here, so it thinks as it does by default`
+    : 'How hard the model thinks before it answers, from the next message. /think in the box does the same';
+}
+async function aiPickSave(patch, said) {
+  try {
+    const s = await api.ai.save(patch);
+    aiPickSettings(s);
+    if (said) aiPickFlash(said(s));
+    return s;
+  } catch (err) { aiPickFlash(errorText(err), true); renderAiPick(); return null; }
+}
+const AI_LEVEL_SAY = { default: 'thinks as it does by default', off: 'answers without thinking', on: 'thinks before it answers', xhigh: 'thinks at extra high effort' };
+const aiLevelSay = (l) => AI_LEVEL_SAY[l] ?? `thinks at ${l} effort`;
+const aiLevelSaid = (s) => `From the next message, the model ${aiLevelSay(s.thinking)}.`;
+$('#aic-model').addEventListener('change', async (e) => {
+  const v = e.target.value;
+  if (v === '\u0000settings') { renderAiPick(); openSettings('ai'); return; }
+  if (v === '\u0000list') {
+    renderAiPick();
+    aiPick.modelsOf = '';
+    await aiPickLoad();
+    aiPickFlash(aiPick.models.length ? `${aiPick.models.length} models: pick one above.` : 'The provider listed no models: set one in Settings → AI.', !aiPick.models.length);
+    return;
+  }
+  const s = await aiPickSave({ model: v }, (x) => `${aiPickModel(x)} answers from the next message.`);
+  // The thinking level saved may not suit this model: said so.
+  if (s && s.thinking === 'default' && (s.thinkingLevels ?? []).length < 2) aiPickFlash(`${aiPickModel(s)} answers from the next message. Its thinking cannot be set from here.`);
+});
+$('#aic-think').addEventListener('change', (e) => aiPickSave({ thinking: e.target.value }, aiLevelSaid));
+for (const id of ['#aic-model', '#aic-think']) $(id).addEventListener('keydown', (e) => e.stopPropagation());
+
+// "/model", "/model <name>", "/think", "/think <level>": true when handled.
+const AI_LEVEL_WORDS = { none: 'off', no: 'off', false: 'off', yes: 'on', true: 'on', 'extra high': 'xhigh', 'extra-high': 'xhigh', extra: 'xhigh', maximum: 'max', med: 'medium', mid: 'medium' };
+function aiPickCommand(text) {
+  const m = /^\/(model|think|thinking|effort)\b\s*(.*)$/i.exec(text.trim());
+  if (!m) return false;
+  const s = aiPick.settings;
+  if (!s?.enabled) { aiPickFlash('AI is off: turn it on in Settings → AI.', true); return true; }
+  const arg = m[2].trim();
+  if (m[1].toLowerCase() === 'model') {
+    if (!arg) {
+      aiPickLoad().then(() => {
+        const list = aiPick.models.slice(0, 12).join(', ');
+        aiPickFlash(`Model: ${aiPickModel(aiPick.settings) || 'the server’s first'}.${list ? ` Others: ${list}${aiPick.models.length > 12 ? '…' : ''}.` : ''} Type /model and a name to switch.`);
+      });
+      return true;
+    }
+    aiPickSave({ model: arg }, (x) => `${aiPickModel(x)} answers from the next message.`);
+    return true;
+  }
+  const levels = s.thinkingLevels ?? ['default'];
+  if (!arg) {
+    aiPickFlash(`The model ${aiLevelSay(s.thinking)}. ${levels.length > 1 ? `Type /think and one of: ${levels.join(', ')}.` : 'This model’s thinking cannot be set from here.'}`);
+    return true;
+  }
+  const word = arg.toLowerCase();
+  let level = AI_LEVEL_WORDS[word] ?? word;
+  if (level === 'on' && !levels.includes('on') && levels.includes('medium')) level = 'medium';
+  if (!levels.includes(level)) {
+    aiPickFlash(levels.length > 1 ? `${aiPickModel(s) || 'This model'} takes: ${levels.join(', ')}.` : `${aiPickModel(s) || 'This model'}: its thinking cannot be set from here.`, true);
+    return true;
+  }
+  aiPickSave({ thinking: level }, aiLevelSaid);
+  return true;
+}
+
 window.openAiChat = async (focus = true) => {
   if (!aic.model) {
     try { const s = await api.ai.settings(); aic.model = s.model || ''; } catch { /* no AI in this build */ }
   }
+  aiPickLoad();
   renderAiChat();
   if (focus) $('#aic-text').focus();
 };
@@ -729,3 +869,4 @@ $('#aic-font').onchange = (e) => { aicLook.font = e.target.value; saveAiChatFont
 $('#aic-font-name').oninput = (e) => { aicLook.name = e.target.value; saveAiChatFont(); };
 $('#aic-font-size').oninput = (e) => { aicLook.size = +e.target.value; saveAiChatFont(); };
 applyAiChatFont();
+aiPickLoad({ models: false }); // the bar under the box, from the start

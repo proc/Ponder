@@ -400,6 +400,7 @@ window.aiIsOn = () => aiOn;
 api.ai.settings().then((s) => applyAiOn(s.enabled), () => applyAiOn(false));
 function showAiSettings(s) {
   applyAiOn(s.enabled);
+  window.aiPickSettings?.(s); // the AI chat's model and thinking level
   const sel = $('#ai-provider');
   if (sel.options.length !== (s.providers ?? []).length) {
     sel.replaceChildren(...(s.providers ?? []).map((p) => el('option', { value: p.id, textContent: p.name })));
@@ -435,6 +436,7 @@ const aiSay = (text, bad = false) => { $('#ai-note').textContent = text; $('#ai-
 async function saveAiSetting(patch) {
   try {
     const s = await api.ai.save(patch);
+    window.aiPickSettings?.(s); // the AI chat shows the model
     if ('provider' in patch) showAiSettings(s);
     if ('baseUrl' in patch) $('#ai-url').value = s.baseUrl;
     if ('key' in patch) { $('#ai-key').value = ''; $('#ai-key').placeholder = s.hasKey ? 'A key is saved (type a new one to replace it)' : 'Not needed for most local servers'; }

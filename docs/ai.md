@@ -32,6 +32,13 @@ and its summarized reasoning shows like a local model's thinking. On models
 that offer it, a request Claude declines on safety grounds is answered by
 another Claude model in the same call.
 
+**Thinking on local servers.** Requests to a local or other server carry
+`chat_template_kwargs: {"enable_thinking": false, "reasoning_effort": "none"}`,
+so servers that render the model's chat template (vLLM, llama.cpp, SGLang)
+turn the model's thinking off and it answers straight away. The one
+exception is the AI chat with a thinking effort chosen (below). Servers that don't know the field
+ignore it. OpenAI and Google aren't sent it.
+
 **What is sent.** AI annotate, the chat and live commentary send the game's
 full PGN: tags (players' names and ratings, event, date, time control,
 opening), moves, annotations and engine evaluations. With a hosted
@@ -100,6 +107,37 @@ about tactics; it is told to trust the engine's evaluations.
   with ✕ or quit.
 - Hover a message: on yours, **copy** and **go back** (edit and resend); on
   an answer, **copy** and **ask again**.
+
+**Model and thinking.** Under the message box, the chat shows the model and
+how hard it thinks, such as `claude-opus-5-5 · high`. Click either to change
+it. The change applies from your next message, and the conversation stays.
+You can also type the commands below in the box; they set the choice and
+send nothing.
+
+- `/model` lists the provider's models; `/model gpt-5.1` switches to one.
+- `/think` shows the levels the model takes; `/think high` picks one.
+
+The model is the one in **Settings → AI**, so commentary and the other AI
+features use it too. **List the models…** asks the provider for its models,
+and **Settings → AI…** opens the settings.
+
+The thinking level is for the chat only, and it is kept for each provider.
+Commentary, AI annotate and engine chat ask without thinking where the
+provider allows it, as before, so their short answers come quickly. A model
+shows only the levels it takes:
+
+| Provider | Levels | What is sent |
+|---|---|---|
+| Claude | default, off, low, medium, high, extra high, max | `thinking: {type: "adaptive"}` with `output_config.effort`. "Off" is sent as each model takes it: `disabled` (Opus 5, Haiku 5.5, Opus 4.8/4.7, Sonnet 5), `between_tools` (Sonnet 5.5), or no thinking settings (Opus 4.6, Sonnet 4.6). Fable and Opus 5.5 always think, so they have no "off". Opus 4.6 and Sonnet 4.6 have no "extra high". Haiku 4.5 and older models have only their default. |
+| OpenAI | default, off, low, medium, high | `reasoning_effort`, on reasoning models (GPT-5 and later, the o-series). "Off" is `none`, or `minimal` on GPT-5. The o-series cannot turn thinking off. Other models have only their default. |
+| Google AI | default, off, low, medium, high | `reasoning_effort` through Google's OpenAI-compatible API, on Gemini 2.5 and later. "Off" is `none`. Pro models cannot turn thinking off. |
+| Your own server | off, minimal, low, medium, high, xhigh, max | `chat_template_kwargs`: off sends `enable_thinking: false` and `reasoning_effort: "none"`; an effort sends `enable_thinking: true` and that `reasoning_effort`, which a template that uses it writes into the system prompt. The default is off, as for the short requests. |
+
+"Default" asks as the app did before there was a choice. Claude thinks
+adaptively at its own default effort, a server of your own is told not to
+think, and OpenAI and Google models think as they do when not told. If a
+server refuses the level chosen, the chat asks again without it, and the
+note under the box says so.
 
 **Context meter.** The top bar shows how much context the last request used,
 such as `13k / 200k`: what was sent plus the answer. It turns amber at 75% and red at 95%. If the provider

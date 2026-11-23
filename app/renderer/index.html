@@ -986,6 +986,11 @@
         <textarea id="aic-text" rows="1" placeholder="Ask about this game or position…" aria-label="Message to the AI"></textarea>
         <button type="submit" id="aic-send" aria-label="Send"></button>
       </form>
+      <div class="aic-bar" id="aic-bar" hidden>
+        <span class="aic-pick"><select id="aic-model" aria-label="Model" title="The model that answers (also the one set in Settings → AI). /model in the box does the same"></select></span>
+        <span class="aic-pick-sep" aria-hidden="true">·</span>
+        <span class="aic-pick"><select id="aic-think" aria-label="Thinking level" title="How hard the model thinks before it answers, from the next message. /think in the box does the same"></select></span>
+      </div>
       <p class="hint aic-note" id="aic-note">Each message goes to the AI endpoint with the game on the board and the position shown.</p>
       <div class="cm-view" id="cm-view">
         <div class="cm-settings">

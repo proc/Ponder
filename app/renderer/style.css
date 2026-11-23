@@ -1424,6 +1424,22 @@ body.zen #ai-panel, body.zen #ai-handle { display: none; }
 #aic-send:hover:not(:disabled) { transform: scale(1.06); }
 #aic-send.stop { background: var(--text); color: var(--panel); }
 .aic-note { margin: 0; font-size: 0.74rem; flex: none; text-align: center; }
+/* The model and the thinking level, under the box: "claude-opus-5-5 · high". */
+.aic-bar { display: flex; align-items: center; justify-content: center; gap: 0.15rem; flex: none; width: min(100%, var(--aic-col)); margin: -0.15rem auto 0; min-width: 0; font-size: 0.76rem; color: var(--muted); }
+.aic-bar[hidden] { display: none; }
+#pane-ai[data-view="commentary"] > .aic-bar { display: none; }
+.aic-pick { position: relative; display: inline-flex; min-width: 0; }
+.aic-pick::after { content: '▾'; position: absolute; right: 0.3rem; top: 50%; transform: translateY(-50%); font-size: 0.6rem; pointer-events: none; opacity: 0.7; }
+.aic-bar select, .aic-bar select:hover:not(:disabled), .aic-bar select:focus {
+  appearance: none; -webkit-appearance: none; field-sizing: content; width: auto; min-width: 0; max-width: 16rem; height: auto; min-height: 0;
+  padding: 0.15rem 1rem 0.15rem 0.45rem; border: 0; border-radius: 0.55rem; background: none; box-shadow: none;
+  font: inherit; font-size: 0.76rem; color: var(--muted); text-overflow: ellipsis; cursor: pointer;
+}
+.aic-bar select:hover:not(:disabled) { background: var(--hover, rgba(127, 127, 127, 0.12)); color: var(--text); }
+.aic-bar select:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.aic-bar select:disabled { cursor: default; opacity: 0.75; }
+.aic-pick:has(select:disabled)::after { display: none; }
+.aic-pick-sep { opacity: 0.6; }
 @media (prefers-reduced-motion: reduce) {
   .aic-think.working .aic-spark svg, .aic-hero svg, .aic-body.live > *:last-child::after { animation: none; }
   .aic-think.working .aic-think-label { animation: none; color: var(--muted); background: none; }

@@ -225,6 +225,79 @@ const uncapped = new Set();
 // Settings for the request: OpenAI's newer models take no temperature but
 // their own; other servers are given one.
 const temperatureFor = (settings, t) => (providerOf(settings) === 'openai' ? {} : { temperature: t });
+// Local servers (vLLM, llama.cpp, SGLang…) render the model's chat template
+// with these: thinking is turned off, so answers come straight away. OpenAI
+// and Google don't take the field.
+const TEMPLATE_NO_THINKING = { enable_thinking: false, reasoning_effort: 'none' };
+const templateFor = (settings) => (providerOf(settings) === 'local' ? { chat_template_kwargs: { ...TEMPLATE_NO_THINKING } } : {});
+
+// --- Thinking level ----------------------------------------------------------
+// How hard the model thinks before it answers, chosen in the AI chat:
+// 'default' (as the app asks when nothing is chosen), 'off', or an effort
+// from 'low' to 'max'; a server of your own has 'off' and 'minimal' to 'max'
+// (its chat template's enable_thinking and reasoning_effort, which the
+// template writes into the system prompt as the thinking effort). Each
+// provider takes it its own way, and each model only some of the levels.
+const THINKING_LEVELS = ['default', 'off', 'on', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const EFFORTS = ['low', 'medium', 'high'];
+const EFFORTS_ALL = ['low', 'medium', 'high', 'xhigh', 'max'];
+
+// Claude, by model (Anthropic's rules for each): how thinking is turned off
+// ('' when it cannot be), and the efforts it takes. null: a model whose
+// thinking cannot be set here (Haiku 4.5 and older; unknown names).
+function claudeThinking(model) {
+  const m = String(model ?? '');
+  // Always thinking: effort is the only control.
+  if (/^claude-(fable|mythos)-5|^claude-opus-5-5/.test(m)) return { off: '', efforts: EFFORTS_ALL };
+  if (/^claude-sonnet-5-5/.test(m)) return { off: 'between_tools', efforts: EFFORTS_ALL };
+  if (/^claude-(opus-5|haiku-5|opus-4-[78]|sonnet-5)(?!\d)/.test(m)) return { off: 'disabled', efforts: EFFORTS_ALL };
+  if (/^claude-(opus|sonnet)-4-6/.test(m)) return { off: 'omit', efforts: ['low', 'medium', 'high', 'max'] };
+  return null;
+}
+// OpenAI's reasoning models take reasoning_effort: GPT-5 turns it down to
+// "minimal", GPT-5.1 and later off with "none"; the o-series cannot.
+const openaiReasoning = (m) => /^o\d/.test(m) ? { off: '', efforts: EFFORTS }
+  : /^gpt-5(\.\d+)?(?!-chat)/.test(m) && !/^gpt-5(\.\d+)?-chat/.test(m) ? { off: /^gpt-5\.\d/.test(m) ? 'none' : 'minimal', efforts: EFFORTS }
+    : null;
+// Gemini 2.5 and later think, and take reasoning_effort through Google's
+// OpenAI-compatible API; the Pro models cannot stop thinking.
+const geminiReasoning = (m) => (/gemini-(2\.5|[3-9])/.test(m) ? { off: /pro/.test(m) ? '' : 'none', efforts: EFFORTS } : null);
+
+// The levels a model can be given, 'default' first.
+function thinkingLevels(provider, model) {
+  if (provider === 'local') return ['off', 'minimal', ...EFFORTS_ALL];
+  const t = provider === 'anthropic' ? claudeThinking(model) : provider === 'openai' ? openaiReasoning(String(model ?? '')) : provider === 'google' ? geminiReasoning(String(model ?? '')) : null;
+  if (!t) return ['default'];
+  return ['default', ...(t.off ? ['off'] : []), ...t.efforts];
+}
+// A level the model takes, else 'default'.
+// A server of your own: 'on' (as saved before efforts) is medium, and
+// anything else it doesn't take is off.
+function thinkingLevelFor(provider, model, level) {
+  const levels = thinkingLevels(provider, model);
+  if (provider === 'local' && level === 'on') return 'medium';
+  return levels.includes(level) ? level : levels[0];
+}
+
+// What a request to an OpenAI-compatible server carries for the level.
+function openaiThinking(settings, model, level) {
+  const p = providerOf(settings);
+  level = thinkingLevelFor(p, model, level);
+  // Off: enable_thinking false and reasoning_effort "none"; an effort: both
+  // on, at that effort.
+  if (p === 'local') return { chat_template_kwargs: level === 'off' ? { ...TEMPLATE_NO_THINKING } : { enable_thinking: true, reasoning_effort: level } };
+  if (level === 'default') return {};
+  const t = p === 'openai' ? openaiReasoning(model) : geminiReasoning(model);
+  return { reasoning_effort: level === 'off' ? t.off : level };
+}
+// What a request to Claude carries: thinking and output_config.
+function anthropicThinking(model, level) {
+  level = thinkingLevelFor('anthropic', model, level);
+  if (level === 'default') return anthropicAdaptive(model) ? { thinking: { type: 'adaptive', display: 'summarized' } } : {};
+  const t = claudeThinking(model);
+  if (level === 'off') return t.off === 'omit' ? {} : { thinking: { type: t.off } };
+  return { thinking: { type: 'adaptive', display: 'summarized' }, output_config: { effort: level } };
+}
 
 // --- Claude (Anthropic) -------------------------------------------------------
 // Through Anthropic's official SDK (@anthropic-ai/sdk), loaded when Claude is
@@ -293,7 +366,7 @@ async function anthropicChat(settings, messages, opts = {}) {
   const cap = opts.maxTokens > 0 && !uncapped.has(capKey) ? Math.round(opts.maxTokens) : 0;
   const params = { model, max_tokens: cap || 64000, messages: conv.messages };
   if (conv.system) params.system = conv.system;
-  if (anthropicAdaptive(model) && !cap) params.thinking = { type: 'adaptive', display: 'summarized' };
+  if (!cap) Object.assign(params, anthropicThinking(model, opts.thinking));
   let stopReason = '';
   let text = '';
   let thinking = '';
@@ -344,7 +417,7 @@ async function annotate(settings, game, opts = {}) {
   const model = await pickModel(settings, opts);
   const data = await call(`${baseOf(settings)}/chat/completions`, {
     method: 'POST', key: settings.key, name: who(settings), ...opts,
-    body: { model, messages: buildMessages(game), ...temperatureFor(settings, 0.4), stream: false },
+    body: { model, messages: buildMessages(game), ...temperatureFor(settings, 0.4), ...templateFor(settings), stream: false },
   });
   const msg = data.choices?.[0]?.message;
   const text = typeof msg?.content === 'string' ? msg.content : Array.isArray(msg?.content) ? msg.content.map((p) => p.text ?? '').join('') : '';
@@ -376,8 +449,11 @@ async function chat(settings, messages, opts = {}) {
   let cap = opts.maxTokens > 0 && !uncapped.has(capKey) ? Math.round(opts.maxTokens) : 0;
   const capParam = providerOf(settings) === 'openai' ? 'max_completion_tokens' : 'max_tokens';
   let finish = '';
+  // A model that refuses the thinking level chosen is asked again without
+  // it; the answer says so (levelIgnored).
+  let effortRefused = false;
   const request = (withUsage) => {
-    const payload = JSON.stringify({ model, messages, ...temperatureFor(settings, 0.5), ...(cap ? { [capParam]: cap } : {}), stream: true, ...(withUsage ? { stream_options: { include_usage: true } } : {}) });
+    const payload = JSON.stringify({ model, messages, ...temperatureFor(settings, 0.5), ...(effortRefused ? templateFor(settings) : openaiThinking(settings, model, opts.thinking)), ...(cap ? { [capParam]: cap } : {}), stream: true, ...(withUsage ? { stream_options: { include_usage: true } } : {}) });
     const headers = { Accept: 'text/event-stream, application/json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) };
     if (settings.key) headers.Authorization = `Bearer ${settings.key}`;
     return sendImpl(`${base}/chat/completions`, { method: 'POST', headers, body: payload, signal, onData });
@@ -441,6 +517,11 @@ async function chat(settings, messages, opts = {}) {
       cap = 0;
       res = await request(askUsage && !noUsageOption.has(base));
     }
+    const levelSent = Object.keys(openaiThinking(settings, model, opts.thinking)).length > 0 && thinkingLevelFor(providerOf(settings), model, opts.thinking) !== 'default';
+    if (levelSent && (res.status === 400 || res.status === 422) && /reasoning|enable_thinking|chat_template_kwargs/i.test(res.text)) {
+      effortRefused = true;
+      res = await request(askUsage && !noUsageOption.has(base));
+    }
   } catch (err) {
     if (signal?.aborted) {
       // Stopped part way: what came so far is the answer.
@@ -480,7 +561,7 @@ async function chat(settings, messages, opts = {}) {
   }
   if (!shown.trim()) throw new Error(thought.trim() ? 'The model only thought aloud and gave no answer' : 'The model gave an empty answer');
   // truncated: the cap ended the answer before the model did.
-  return { text: shown.trim(), thinking: thought.trim(), model, usage, truncated: finish === 'length' };
+  return { text: shown.trim(), thinking: thought.trim(), model, usage, truncated: finish === 'length', ...(effortRefused ? { levelIgnored: true } : {}) };
 }
 
 // --- The model's context window --------------------------------------------
@@ -756,4 +837,4 @@ async function speechVoices({ provider, baseUrl, key, model }, { signal, sendImp
   return [];
 }
 
-module.exports = { speechVoices, speechModels, speech, speechBase, TTS_DEFAULTS, TTS_PROVIDERS, ttsProviderOf, wavOf, chat, DEFAULTS, PROVIDERS, normalizeBase, buildMessages, parseReply, salvage, listModels, annotate, anthropicMessages, contextWindow, usageOf };
+module.exports = { THINKING_LEVELS, thinkingLevels, thinkingLevelFor, speechVoices, speechModels, speech, speechBase, TTS_DEFAULTS, TTS_PROVIDERS, ttsProviderOf, wavOf, chat, DEFAULTS, PROVIDERS, normalizeBase, buildMessages, parseReply, salvage, listModels, annotate, anthropicMessages, contextWindow, usageOf };

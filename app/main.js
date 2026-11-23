@@ -928,6 +928,10 @@ const publicAi = (s) => {
   const slot = aiSlot(s, provider);
   return {
     enabled: aiEnabled(s), provider, baseUrl: s.baseUrl, model: slot.model ?? '', hasKey: Boolean(slot.key || slot.plainKey), defaultUrl: ai.DEFAULTS.baseUrl,
+    // The AI chat's thinking level for this provider, and the levels the
+    // model takes ('default' when the one chosen is not among them).
+    thinkingLevels: ai.thinkingLevels(provider, slot.model || ai.PROVIDERS[provider].defaultModel || ''),
+    thinking: ai.thinkingLevelFor(provider, slot.model || ai.PROVIDERS[provider].defaultModel || '', slot.thinking ?? 'default'),
     contextWindow: slot.contextWindow ?? null,
     providers: Object.entries(ai.PROVIDERS).map(([id, p]) => ({
       id, name: p.name, needsKey: p.needsKey, modelHint: p.modelHint ?? '', defaultModel: p.defaultModel ?? '',
@@ -945,6 +949,9 @@ ipcMain.handle('ai:save', async (_e, patch) => {
   // The model and key are the chosen provider's.
   const slot = aiSlot(s, aiProvider(s));
   if (typeof patch?.model === 'string') slot.model = patch.model.trim();
+  // The AI chat's thinking level, kept for the provider (a model that does
+  // not take it is asked at its default).
+  if (typeof patch?.thinking === 'string' && ai.THINKING_LEVELS.includes(patch.thinking)) slot.thinking = patch.thinking;
   // The context window given by hand ('' or 0: found from the provider).
   if ('contextWindow' in (patch ?? {})) {
     const n = Math.round(Number(patch.contextWindow));
@@ -1016,8 +1023,11 @@ ipcMain.handle('ai:chat', async (_e, id, messages, channel = 'chat', options = {
   try {
     // maxTokens: a cap on the answer, for short ones (the engine's chat).
     const maxTokens = Number.isFinite(+options?.maxTokens) ? Math.min(4000, Math.max(0, Math.round(+options.maxTokens))) : 0;
+    // The thinking level chosen in the AI chat is for its own messages: the
+    // commentary and the engine's chat ask as they always have.
+    const thinking = channel === 'chat' ? aiSlot(s, aiProvider(s)).thinking ?? 'default' : 'default';
     return await ai.chat(await aiRequestWithKey(s), list, {
-      signal: run.signal, maxTokens,
+      signal: run.signal, maxTokens, thinking,
       onDelta: (delta) => { if (win && !win.isDestroyed()) win.webContents.send('backend-event', 'aiChat', { id, delta }); },
       onThinking: (thinking) => { if (win && !win.isDestroyed()) win.webContents.send('backend-event', 'aiChat', { id, thinking }); },
     });

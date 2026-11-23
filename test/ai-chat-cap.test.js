@@ -119,3 +119,11 @@ test('a model that never gets past its thinking, even uncapped: said plainly', a
     ai.chat({ provider: 'local', baseUrl: 'http://127.0.0.1:9/v1', model: 'stuck-thinker' }, [{ role: 'user', content: 'hi' }], { sendImpl: s.sendImpl }),
     /only thought aloud and gave no answer/);
 });
+
+test('a local server is asked to render the chat template without thinking; OpenAI is not', async () => {
+  const s = server(said('Bold knight!'));
+  await ai.chat({ provider: 'local', baseUrl: 'http://127.0.0.1:9/v1', model: 'model-t' }, [{ role: 'user', content: 'hi' }], { sendImpl: s.sendImpl });
+  assert.deepEqual(s.seen[0].body.chat_template_kwargs, { enable_thinking: false, reasoning_effort: 'none' });
+  await ai.chat({ provider: 'openai', key: FAKE_KEY, model: 'model-t' }, [{ role: 'user', content: 'hi' }], { sendImpl: s.sendImpl });
+  assert.equal(s.seen[1].body.chat_template_kwargs, undefined);
+});
